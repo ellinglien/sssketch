@@ -11,6 +11,7 @@ import { emptyLibraryNote } from '@shared/emptyLibraryNote'
 import { BracketToggle } from './BracketToggle'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { warmEngineBuffer } from '../audio/warmEngineBuffer'
+import { PreviewHaltBarrier } from '../state/useCrossPreview'
 import { getPeaks, peekPeaks } from '../audio/peakCache'
 import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
 import {
@@ -1568,11 +1569,6 @@ export function DiscoverPanel({
   // paused/seeked/played on this preview's behalf; every later rebuild of
   // an already-loaded preview just keeps playing through it.
   const previewLoadedRef = useRef(false)
-  // A normal renderer PLAY is still the source of truth for UI state. When
-  // Discover itself starts that playback, this ref follows it with the
-  // native engine's optional 3 ms start ramp so a mid-waveform restart does
-  // not click. Kept local: Sketch's click response remains unchanged.
-  const fadeNextPlayAtRef = useRef<number | null>(null)
   // The CURRENTLY live preview project's own groupId, and which 1-indexed
   // slot number each Discover slot id currently occupies within it -- a
   // fresh groupId is minted on every syncPreviewToEngine call (assembleDiscoverRifff),
@@ -1592,22 +1588,13 @@ export function DiscoverPanel({
   // real async round trip to the native engine instead of a synchronous Web
   // Audio call.
   const previewSyncGenerationRef = useRef(0)
+  const previewHaltBarrierRef = useRef(new PreviewHaltBarrier())
   // The ownership token from the claim the LAST ordinary push made. A
   // staged swap does not claim -- a claim bumps the generation and would
   // invalidate an ordinary push that is mid-await -- so it asks this
   // instead: is the claim this panel already holds still the current one.
   const engineClaimTokenRef = useRef(-1)
 
-  useEffect(() => {
-    if (!playing || fadeNextPlayAtRef.current === null) return
-    const fromBar = fadeNextPlayAtRef.current
-    fadeNextPlayAtRef.current = null
-    queueMicrotask(() => {
-      if (!previewLoadedRef.current) return
-      if (!stillOwnEngine(engineClaimTokenRef.current)) return
-      void window.rifffApi.enginePlay(fromBar, true)
-    })
-  }, [playing, stillOwnEngine])
   // How many ordinary pushes are between their first line and their
   // socket write. A staged swap must not overtake one: a load-project
   // makes the engine drop whatever is staged (IpcServer.cpp's
@@ -1818,6 +1805,7 @@ export function DiscoverPanel({
     // no-op when nothing is currently held, so calling it unconditionally
     // here covers every caller of this function uniformly.
     const releaseToken = releaseEngine()
+    previewHaltBarrierRef.current.cancelResume()
     if (!previewLoadedRef.current) return
     previewLoadedRef.current = false
     currentPreviewMappingRef.current = null
@@ -1843,8 +1831,8 @@ export function DiscoverPanel({
     // stops, instead of silently handing off to a different project's
     // audio.
     dispatch({ type: 'PAUSE' })
-    void window.rifffApi
-      .engineStop()
+    void previewHaltBarrierRef.current
+      .reachSilence(() => window.rifffApi.engineStop(), false)
       .then(() => flushEngineSyncNow(undefined, () => !stillOwnEngine(releaseToken)))
       .catch((err) => {
         if (stillOwnEngine(releaseToken))
@@ -2849,9 +2837,19 @@ export function DiscoverPanel({
       const smoothResumeAt =
         smoothSwap && previewLoadedRef.current && playingRef.current ? positionRef.current : null
       if (smoothResumeAt !== null) {
-        await window.rifffApi.engineStop()
+        await previewHaltBarrierRef.current.reachSilence(() => window.rifffApi.engineStop())
         if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
         if (!stillOwnEngine(engineToken)) return
+      } else {
+        // A newer rebuild can supersede the Solo request that started this
+        // fade. It still has to wait for the shared halt before replacing
+        // the project, and later resume native playback explicitly.
+        const pendingHalt = previewHaltBarrierRef.current.pendingSilence()
+        if (pendingHalt) {
+          await pendingHalt
+          if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+          if (!stillOwnEngine(engineToken)) return
+        }
       }
 
       radioTraceMarkPush() // TEMP -- numbers this push for the engine's own line
@@ -2908,8 +2906,8 @@ export function DiscoverPanel({
         )
       }
 
-      if (smoothResumeAt !== null && playingRef.current) {
-        void window.rifffApi.enginePlay(smoothResumeAt, true)
+      if (previewHaltBarrierRef.current.consumeResume() && playingRef.current) {
+        void window.rifffApi.enginePlay(smoothResumeAt ?? positionRef.current, true)
       }
 
       // Only on the empty-to-non-empty transition -- a later rebuild of an
@@ -2918,12 +2916,25 @@ export function DiscoverPanel({
       // a preview stops).
       if (!previewLoadedRef.current) {
         previewLoadedRef.current = true
-        if (playing) dispatch({ type: 'PAUSE' })
-        void window.rifffApi.engineSetPosition(0)
-        dispatch({ type: 'PLAY' })
+        dispatch({ type: 'PLAY', nativeStart: { fromPos: 0, fadeIn: true } })
       }
     } catch (err) {
       console.error('DiscoverPanel: syncPreviewToEngine failed:', err)
+      // If this request had already halted a previously healthy preview,
+      // keep Redux/native transport truthful even though the replacement
+      // failed to build or load.
+      const requestStillCurrent =
+        !unmountedRef.current &&
+        previewSyncGenerationRef.current === myGeneration &&
+        stillOwnEngine(engineToken)
+      if (
+        requestStillCurrent &&
+        previewLoadedRef.current &&
+        playingRef.current &&
+        previewHaltBarrierRef.current.consumeResumeIf(requestStillCurrent)
+      ) {
+        void window.rifffApi.enginePlay(positionRef.current, true)
+      }
       // A failed build/send must not leave this claim dangling forever --
       // but UNLIKE useStemPreviewPlayback.ts's own equivalent fix, whether
       // it's safe to release here depends on `previewLoadedRef.current`:
@@ -2975,12 +2986,13 @@ export function DiscoverPanel({
 
   function togglePreviewPlayback(): void {
     if (playing) {
-      fadeNextPlayAtRef.current = null
       dispatch({ type: 'PAUSE' })
       return
     }
-    fadeNextPlayAtRef.current = positionRef.current
-    dispatch({ type: 'PLAY' })
+    dispatch({
+      type: 'PLAY',
+      nativeStart: { fromPos: positionRef.current, fadeIn: true }
+    })
   }
 
   // Called by each DiscoverSlotRow whenever its OWN resolved stem changes

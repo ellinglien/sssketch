@@ -11,6 +11,7 @@ import {
   useDispatch,
   useEngineOwnership,
   useFlushEngineSyncNow,
+  usePlaying,
   usePluginCatalog
 } from './StoreContext'
 
@@ -48,6 +49,48 @@ export async function continueCrossPreviewAfterSilence(
   return !isCancelled()
 }
 
+/** Keeps a native halt alive across preview generations. A newer preview may
+ * supersede the request that started the fade, but it must still wait for that
+ * fade and explicitly resume native playback after loading its own project. */
+export class PreviewHaltBarrier {
+  private pending: Promise<void> | null = null
+  private resumeRequired = false
+
+  reachSilence(halt: () => Promise<void>, resumeAfter = true): Promise<void> {
+    if (resumeAfter) this.resumeRequired = true
+    if (this.pending) return this.pending
+    const pending = halt()
+    this.pending = pending
+    void pending.then(
+      () => {
+        if (this.pending === pending) this.pending = null
+      },
+      () => {
+        if (this.pending === pending) this.pending = null
+      }
+    )
+    return pending
+  }
+
+  pendingSilence(): Promise<void> | null {
+    return this.pending
+  }
+
+  consumeResume(): boolean {
+    const required = this.resumeRequired
+    this.resumeRequired = false
+    return required
+  }
+
+  consumeResumeIf(requestIsCurrent: boolean): boolean {
+    return requestIsCurrent ? this.consumeResume() : false
+  }
+
+  cancelResume(): void {
+    this.resumeRequired = false
+  }
+}
+
 /** A narrow throwaway-project controller for Cross. One ownership token
  * covers source audition and the child mix, so switching modes can never
  * leave an older source playing underneath a newer one. */
@@ -59,8 +102,8 @@ export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cros
     loopBars: number,
     fromPos?: number,
     smoothSwap?: boolean
-  ) => Promise<void>
-  stop: () => void
+  ) => Promise<boolean>
+  stop: () => Promise<void>
   owns: () => boolean
 } {
   const dispatch = useDispatch()
@@ -69,6 +112,7 @@ export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cros
   const sound = useAppSelector((state) => state.sound)
   const pluginCatalog = usePluginCatalog()
   const flushEngineSyncNow = useFlushEngineSyncNow()
+  const playing = usePlaying()
   const {
     claim: claimEngine,
     stillOwn: stillOwnEngine,
@@ -83,29 +127,33 @@ export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cros
   // "load acknowledgement returned".
   const needsRestoreRef = useRef(false)
   const modeRef = useRef<CrossPreviewMode | null>(null)
+  const haltBarrierRef = useRef(new PreviewHaltBarrier())
 
-  const stop = useCallback(() => {
+  const stop = useCallback((): Promise<void> => {
     const generation = ++generationRef.current
     const token = tokenRef.current
     tokenRef.current = null
     modeRef.current = null
     const needsRestore = needsRestoreRef.current
     needsRestoreRef.current = false
-    if (token === null || !stillOwnEngine(token)) return
+    haltBarrierRef.current.cancelResume()
+    if (token === null || !stillOwnEngine(token)) return Promise.resolve()
     const released = releaseEngine()
-    if (!needsRestore) return
+    if (!needsRestore) return Promise.resolve()
     dispatch({ type: 'PAUSE' })
-    void continueCrossPreviewAfterSilence(
-      () => window.rifffApi.engineStop(),
+    return continueCrossPreviewAfterSilence(
+      () => haltBarrierRef.current.reachSilence(() => window.rifffApi.engineStop(), false),
       () => flushEngineSyncNow(undefined, () => !stillOwnEngine(released)),
       () => generationRef.current !== generation || !stillOwnEngine(released)
-    ).catch((err) => {
-      // A fresh Play deliberately cancels an in-flight halt. Its new owner
-      // also bumps one of the guards above, so that expected case needs no
-      // stale restore; log only genuinely current failures.
-      if (generationRef.current === generation && stillOwnEngine(released))
-        console.error('useCrossPreview: failed to reach silence before restore:', err)
-    })
+    )
+      .then(() => undefined)
+      .catch((err) => {
+        // A fresh Play deliberately cancels an in-flight halt. Its new owner
+        // also bumps one of the guards above, so that expected case needs no
+        // stale restore; log only genuinely current failures.
+        if (generationRef.current === generation && stillOwnEngine(released))
+          console.error('useCrossPreview: failed to reach silence before restore:', err)
+      })
   }, [dispatch, flushEngineSyncNow, releaseEngine, stillOwnEngine])
 
   useEffect(() => {
@@ -124,10 +172,10 @@ export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cros
       loopBars: number,
       fromPos = 0,
       smoothSwap = false
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       if (members.length === 0) {
-        stop()
-        return
+        await stop()
+        return false
       }
       const assembly = assembleDiscoverRifff(
         'cross preview',
@@ -136,7 +184,7 @@ export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cros
         members.length,
         loopBars
       )
-      if (!assembly) return
+      if (!assembly) return false
 
       const changingMode = !needsRestoreRef.current || modeRef.current !== mode
       const shouldSmoothSwap = smoothSwap && !changingMode
@@ -166,16 +214,33 @@ export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cros
           undefined,
           { pumpRelease: false }
         )
-        if (unmountedRef.current || generationRef.current !== generation) return
-        if (!stillOwnEngine(token)) return
+        if (unmountedRef.current || generationRef.current !== generation) return false
+        if (!stillOwnEngine(token)) return false
         if (shouldSmoothSwap) {
+          // Do not tie this halt to this request's generation: a newer
+          // preview that overtakes the fade still has to wait for silence.
+          const halt = haltBarrierRef.current.reachSilence(() => window.rifffApi.engineStop())
           const reachedSilence = await continueCrossPreviewAfterSilence(
-            () => window.rifffApi.engineStop(),
+            () => halt,
             () => undefined,
             () =>
               unmountedRef.current || generationRef.current !== generation || !stillOwnEngine(token)
           )
-          if (!reachedSilence) return
+          if (!reachedSilence) return false
+        } else {
+          // A smooth handoff from an older generation may already have
+          // stopped the native transport. Waiting here prevents loading a
+          // newer preview underneath that still-running fade.
+          const pendingHalt = haltBarrierRef.current.pendingSilence()
+          if (pendingHalt) {
+            await pendingHalt
+            if (
+              unmountedRef.current ||
+              generationRef.current !== generation ||
+              !stillOwnEngine(token)
+            )
+              return false
+          }
         }
         const loadIsCurrent = await issueCrossPreviewLoad(
           () => window.rifffApi.engineLoadProject(project),
@@ -185,24 +250,29 @@ export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cros
           () =>
             unmountedRef.current || generationRef.current !== generation || !stillOwnEngine(token)
         )
-        if (!loadIsCurrent) return
+        if (!loadIsCurrent) return false
         modeRef.current = mode
-        if (shouldSmoothSwap) {
+        if (haltBarrierRef.current.consumeResume()) {
           // Redux intentionally remains in its playing state throughout a
-          // solo handoff, so resume the native transport directly. This is
-          // the narrow use for the optional start fade: a new solo stem can
-          // begin at an arbitrary waveform phase without clicking.
-          void window.rifffApi.enginePlay(fromPos, true)
-          return
+          // solo handoff. This may also be a newer request that superseded
+          // the request which initiated the halt, so native playback must be
+          // resumed directly even when Redux already says it is playing.
+          dispatch({ type: 'PLAY', nativeStart: { fromPos, fadeIn: true } })
+          return true
         }
-        if (changingMode) void window.rifffApi.engineSetPosition(fromPos)
-        dispatch({ type: 'PLAY' })
+        dispatch(
+          !playing || changingMode
+            ? { type: 'PLAY', nativeStart: { fromPos, fadeIn: true } }
+            : { type: 'PLAY' }
+        )
+        return true
       } catch (err) {
         console.error('useCrossPreview: failed to load preview:', err)
         if (stillOwnEngine(token)) {
           if (needsRestoreRef.current) stop()
           else releaseEngine()
         }
+        return false
       }
     },
     [
@@ -211,6 +281,7 @@ export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cros
       dispatch,
       masterChain,
       owner,
+      playing,
       pluginCatalog,
       releaseEngine,
       sound,

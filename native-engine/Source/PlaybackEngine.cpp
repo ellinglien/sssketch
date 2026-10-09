@@ -132,7 +132,12 @@ namespace sssketch
                 // renderBlock's own tiling math actually wraps at, below.
                 // Failure is fine either way — renderBlock skips missing
                 // buffers.
-                bufferCache.load(stem.resolvedPath, stem.durationSec);
+                if (bufferCache.load(stem.resolvedPath, stem.durationSec))
+                {
+                    const auto entry = bufferCache.getEntry(stem.resolvedPath);
+                    if (entry.owner != nullptr)
+                        next->stemBuffers.emplace(stem.resolvedPath.toStdString(), entry.owner);
+                }
 
         for (const auto& rifff : next->project.rifffs)
             next->channelGroups[rifff.channelId].push_back(&rifff);
@@ -369,6 +374,7 @@ namespace sssketch
         // test (PlaybackEngineTests.cpp) proved that heuristic false under
         // sustained load, reliably reproducing a real use-after-free.
         std::atomic_store_explicit(&published, std::shared_ptr<const ProjectSnapshot>(std::move(next)), std::memory_order_release);
+        bufferCache.pruneUnusedShapePreviews();
     }
 
     void PlaybackEngine::stageProject(const EngineProject& project)
@@ -382,6 +388,7 @@ namespace sssketch
         auto next = buildSnapshot(project);
         std::atomic_store_explicit(
             &staged, std::shared_ptr<const ProjectSnapshot>(std::move(next)), std::memory_order_release);
+        bufferCache.pruneUnusedShapePreviews();
     }
 
     bool PlaybackEngine::cancelStagedProject()
@@ -847,14 +854,15 @@ namespace sssketch
                            : stem.volume);
                 if (stem.muted || effectiveVolume <= 0.0)
                     continue;
-                // Single combined lookup — get() + sampleRateFor() separately
-                // would hash the same path twice (and allocate a std::string
-                // for it twice) every block; the sample rate doesn't vary
-                // per-tile, so it's fetched once here rather than inside the
-                // tile loop below.
-                const auto entry = bufferCache.getEntry(stem.resolvedPath);
-                if (entry.buffer == nullptr)
+                // The immutable snapshot pins this buffer. Never consult the
+                // mutable message-thread cache from the audio callback.
+                const auto bufferIt = snap->stemBuffers.find(stem.resolvedPath.toStdString());
+                if (bufferIt == snap->stemBuffers.end() || bufferIt->second == nullptr)
                     continue;
+                const auto& pinnedBuffer = *bufferIt->second;
+                const StemBufferEntry entry {
+                    &pinnedBuffer.buffer, pinnedBuffer.sampleRate, {}
+                };
 
                 // A clip with a toolkit renders into its OWN buffer first, so
                 // its filter/volume/send apply to just that clip before it

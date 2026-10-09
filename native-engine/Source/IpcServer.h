@@ -115,6 +115,7 @@ namespace sssketch
         juce::String audioThreadApplyVia() const;
 
         void sendStageResult(int token, const juce::String& status, const juce::String& reason);
+        void sendLoadResult(int token, bool success, const juce::String& error);
 
         /** Settles whatever is currently staged, for every reason one gets
          * settled other than landing on its own: a newer stage superseding

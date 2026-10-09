@@ -28,12 +28,22 @@ namespace sssketch
      * with IpcServer.cpp's own `[radio-engine]` log line. */
     int stemDecodeCount();
 
+    struct SharedStemBuffer
+    {
+        juce::AudioBuffer<float> buffer;
+        double sampleRate = 44100.0;
+    };
+
+    using StemBufferHandle = std::shared_ptr<const SharedStemBuffer>;
+
     /** buffer is nullptr (sampleRate the unused default) if the path was never
-     * successfully loaded. */
+     * successfully loaded. `owner` pins the storage for callers that retain
+     * the entry beyond the immediate message-thread lookup. */
     struct StemBufferEntry
     {
         const juce::AudioBuffer<float>* buffer = nullptr;
         double sampleRate = 44100.0;
+        StemBufferHandle owner;
     };
 
     /** Decodes whole audio files into memory and caches them by absolute path,
@@ -73,12 +83,16 @@ namespace sssketch
          * the same path. */
         StemBufferEntry getEntry(const juce::String& path) const;
 
+        /** Drops throwaway Shape preview buffers only when no published or
+         * staged project snapshot still owns them. Must run on the message
+         * thread, like load(); shared ownership makes this safe even while
+         * the audio thread holds an older immutable snapshot. */
+        void pruneUnusedShapePreviews();
+
+        /** Test/diagnostic visibility for verifying bounded preview storage. */
+        size_t entryCount() const { return cache.size(); }
+
     private:
-        struct Entry
-        {
-            juce::AudioBuffer<float> buffer;
-            double sampleRate = 44100.0;
-        };
-        std::unordered_map<std::string, Entry> cache;
+        std::unordered_map<std::string, std::shared_ptr<SharedStemBuffer>> cache;
     };
 }

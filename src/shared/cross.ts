@@ -439,14 +439,21 @@ export function assembleCrossRifff(
   if (members.length === 0) return null
   const left = crossParentOnSide(draft, 'left')
   const right = crossParentOnSide(draft, 'right')
+  const childLoopBars = Math.max(...members.map(({ stem }) => stem.barLength))
   const rifff: Rifff = {
     groupId,
     phaseLinkId: groupId,
     name: `cross: ${left.label} × ${right.label}`,
     bpm: draft.targetBpm,
-    barLength: Math.max(...members.map(({ stem }) => stem.barLength)),
+    barLength: childLoopBars,
     folderPath: '',
-    stems: members.map(({ stem }, index) => ({ ...stem, slot: index + 1 }))
+    stems: members.map(({ stem }, index) => {
+      const compatibleShape =
+        stem.shape?.version === 1 && Math.abs(stem.shape.loopBars - childLoopBars) <= 1e-9
+          ? stem.shape
+          : undefined
+      return { ...stem, slot: index + 1, shape: compatibleShape }
+    })
   }
   const vol: Record<string, number> = {}
   members.forEach(({ row }, index) => {

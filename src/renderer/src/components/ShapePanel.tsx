@@ -25,6 +25,7 @@ import {
   replaceShapeLaneSource,
   resetShapeLane,
   resetShapeRiff,
+  shapeRenderFingerprint,
   shapeRenderSegments,
   shapeWaveformLayout,
   splitShapeFragment,
@@ -956,34 +957,69 @@ export function ShapePanel({
   const [laneKinds, setLaneKinds] = useState<Record<string, DiscoverSlotKind[]>>({})
   const [discoverError, setDiscoverError] = useState<string | null>(null)
   const renderedRef = useRef<ShapeMaterializedStem[]>([])
+  const retiredPreviewPathsRef = useRef(new Set<string>())
+  const renderedVersionRef = useRef(0)
   const jobRef = useRef<string | null>(null)
-  const currentRef = useRef({ id: draft.id, revision: draft.revision })
+  const renderFingerprint = useMemo(() => shapeRenderFingerprint(draft), [draft])
+  const renderRequest = useMemo(
+    () => ({
+      draftId: draft.id,
+      targetBpm: draft.targetBpm,
+      loopBars: draft.loopBars,
+      lanes: draft.lanes.map((lane) => ({
+        source: lane.source,
+        segments: shapeRenderSegments(lane)
+      })),
+      fingerprint: renderFingerprint
+    }),
+    // renderFingerprint deliberately stands in for draft.lanes: gain-only
+    // lane changes must not create another set of preview WAVs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [draft.id, draft.loopBars, draft.targetBpm, renderFingerprint]
+  )
+  const currentRef = useRef({ id: draft.id, fingerprint: renderFingerprint })
   const draftRef = useRef(draft)
   const positionRef = useRef(pos)
   const playbackIntentRef = useRef(false)
   const smoothNextPreviewRef = useRef(false)
-  const fadeNextPlayAtRef = useRef<number | null>(null)
+  const laneRequestRef = useRef(new Map<string, string>())
+  const asyncRequestEpochRef = useRef(0)
   useEffect(() => {
-    currentRef.current = { id: draft.id, revision: draft.revision }
+    currentRef.current = { id: draft.id, fingerprint: renderFingerprint }
     draftRef.current = draft
-  }, [draft.id, draft.revision])
+  }, [draft, renderFingerprint])
   useEffect(() => {
     positionRef.current = pos
   }, [pos])
+  useEffect(() => {
+    if (active) return
+    asyncRequestEpochRef.current += 1
+    laneRequestRef.current.clear()
+    queueMicrotask(() => {
+      setDiscoverBusy(null)
+      setRollingLanes(new Set())
+    })
+  }, [active])
 
   const members = useMemo(
     () => laneMembers(draft, rendered, mode, muted, soloed),
     [draft, rendered, mode, muted, soloed]
   )
 
+  const cleanupRetiredPreviews = useCallback((): void => {
+    const paths = [...retiredPreviewPathsRef.current]
+    retiredPreviewPathsRef.current.clear()
+    if (paths.length > 0) void window.rifffApi.cleanupShapePreview(paths)
+  }, [])
+
   const beginPreview = useCallback(
     (fromBar = cursorBar) => {
       if (!active) return
       if (mode === 'shaped' && rendered.length !== draft.lanes.length) return
-      if (!playing) fadeNextPlayAtRef.current = fromBar
       playbackIntentRef.current = true
       setPlaybackIntent(true)
       const smoothSwap = smoothNextPreviewRef.current
+      const renderedVersion = renderedVersionRef.current
       smoothNextPreviewRef.current = false
       void preview(
         `riff:${draft.id}:${mode}`,
@@ -992,7 +1028,9 @@ export function ShapePanel({
         draft.loopBars,
         fromBar,
         smoothSwap
-      )
+      ).then((loaded) => {
+        if (loaded && renderedVersionRef.current === renderedVersion) cleanupRetiredPreviews()
+      })
     },
     [
       active,
@@ -1003,33 +1041,17 @@ export function ShapePanel({
       draft.targetBpm,
       members,
       mode,
-      playing,
       preview,
+      cleanupRetiredPreviews,
       rendered.length
     ]
   )
 
-  useEffect(() => {
-    if (!playing || fadeNextPlayAtRef.current === null) return
-    const fromBar = fadeNextPlayAtRef.current
-    fadeNextPlayAtRef.current = null
-    // StoreContext's normal PLAY side effect runs during this same passive-
-    // effect flush. Queueing the Shape-specific command puts it immediately
-    // after that generic command, before the next native audio callback in
-    // normal operation, so the optional 3 ms fade is the command Transport
-    // actually applies. No timer or UI latency is added.
-    queueMicrotask(() => {
-      if (!playbackIntentRef.current || !owns()) return
-      void window.rifffApi.enginePlay(fromBar, true)
-    })
-  }, [owns, playing])
-
-  const stopPreview = useCallback(() => {
+  const stopPreview = useCallback((): Promise<void> => {
     setCursorBar(((positionRef.current % draft.loopBars) + draft.loopBars) % draft.loopBars)
-    fadeNextPlayAtRef.current = null
     playbackIntentRef.current = false
     setPlaybackIntent(false)
-    stop()
+    return stop()
   }, [draft.loopBars, stop])
 
   const handoffPreview = useCallback(() => {
@@ -1048,8 +1070,8 @@ export function ShapePanel({
   useEffect(() => {
     if (!active) return
     const id = window.setTimeout(() => {
-      const jobId = `${draft.id}:${draft.revision}:${crypto.randomUUID()}`
-      const expected = { id: draft.id, revision: draft.revision }
+      const jobId = `${renderRequest.draftId}:${crypto.randomUUID()}`
+      const expected = { id: renderRequest.draftId, fingerprint: renderRequest.fingerprint }
       const previousJob = jobRef.current
       if (previousJob) void window.rifffApi.cancelShapeMaterialization(previousJob)
       jobRef.current = jobId
@@ -1058,27 +1080,25 @@ export function ShapePanel({
         .materializeShape({
           jobId,
           mode: 'preview',
-          targetBpm: draft.targetBpm,
-          loopBars: draft.loopBars,
-          lanes: draft.lanes.map((lane) => ({
-            source: lane.source,
-            segments: shapeRenderSegments(lane)
-          }))
+          targetBpm: renderRequest.targetBpm,
+          loopBars: renderRequest.loopBars,
+          lanes: renderRequest.lanes
         })
         .then((result) => {
           if (
             jobRef.current !== jobId ||
             currentRef.current.id !== expected.id ||
-            currentRef.current.revision !== expected.revision
+            currentRef.current.fingerprint !== expected.fingerprint
           ) {
             void window.rifffApi.cleanupShapePreview(result.stems.map((stem) => stem.path))
             return
           }
           const old = renderedRef.current
+          renderedVersionRef.current += 1
           renderedRef.current = result.stems
           setRendered(result.stems)
           setRenderState('ready')
-          if (old.length > 0) void window.rifffApi.cleanupShapePreview(old.map((stem) => stem.path))
+          for (const stem of old) retiredPreviewPathsRef.current.add(stem.path)
         })
         .catch((error) => {
           if (jobRef.current !== jobId) return
@@ -1088,16 +1108,7 @@ export function ShapePanel({
         })
     }, 140)
     return () => window.clearTimeout(id)
-  }, [
-    active,
-    draft.id,
-    draft.lanes,
-    draft.loopBars,
-    draft.revision,
-    draft.targetBpm,
-    renderEpoch,
-    stopPreview
-  ])
+  }, [active, renderRequest, renderEpoch, stopPreview])
 
   useEffect(() => {
     if (!playing || renderState !== 'ready' || !playbackIntentRef.current || !owns()) return
@@ -1105,13 +1116,17 @@ export function ShapePanel({
   }, [beginPreview, draft.loopBars, owns, playing, renderState])
 
   useEffect(() => {
+    const retiredPaths = retiredPreviewPathsRef.current
     return () => {
       const job = jobRef.current
       jobRef.current = null
       if (job) void window.rifffApi.cancelShapeMaterialization(job)
       const paths = renderedRef.current.map((stem) => stem.path)
-      if (paths.length > 0) void window.rifffApi.cleanupShapePreview(paths)
-      stopPreview()
+      for (const path of retiredPaths) paths.push(path)
+      retiredPaths.clear()
+      void stopPreview().finally(() => {
+        if (paths.length > 0) void window.rifffApi.cleanupShapePreview(paths)
+      })
     }
   }, [stopPreview])
 
@@ -1224,6 +1239,7 @@ export function ShapePanel({
     async (
       kinds: DiscoverSlotKind[],
       random: boolean,
+      targetBpm: number,
       replacing?: ShapeSourceStem
     ): Promise<ShapeSourceStem | null> => {
       const sourceDraw = drawSoundSource(sourceLean, cryptoFraction)
@@ -1253,7 +1269,7 @@ export function ShapePanel({
         let pool = rankCandidates(
           await window.rifffApi.getDiscoverCandidates(kinds, false, undefined, source),
           {
-            targetBpm: draftRef.current.targetBpm,
+            targetBpm,
             targetTraits: kinds.filter(isTraitSlotKind)
           }
         )
@@ -1274,10 +1290,20 @@ export function ShapePanel({
     async (lane: ShapeLane, kinds: DiscoverSlotKind[]): Promise<void> => {
       const draftId = draftRef.current.id
       const projectKey = draftRef.current.projectKey
+      const targetBpm = draftRef.current.targetBpm
+      const requestEpoch = asyncRequestEpochRef.current
+      const requestId = crypto.randomUUID()
+      laneRequestRef.current.set(lane.id, requestId)
+      const isCurrent = (): boolean =>
+        draftRef.current.id === draftId &&
+        draftRef.current.projectKey === projectKey &&
+        asyncRequestEpochRef.current === requestEpoch &&
+        laneRequestRef.current.get(lane.id) === requestId
       setDiscoverError(null)
       setRollingLanes((current) => new Set(current).add(lane.id))
       try {
-        const replacement = await findDiscoveredStem(kinds, false, lane.source)
+        const replacement = await findDiscoveredStem(kinds, false, targetBpm, lane.source)
+        if (!isCurrent()) return
         if (!replacement) {
           setDiscoverError('no similar replacement found')
           return
@@ -1288,14 +1314,18 @@ export function ShapePanel({
             : current
         )
       } catch (error) {
+        if (!isCurrent()) return
         console.error('ShapePanel: failed to skip a stem:', error)
         setDiscoverError('could not replace that stem')
       } finally {
-        setRollingLanes((current) => {
-          const next = new Set(current)
-          next.delete(lane.id)
-          return next
-        })
+        if (isCurrent()) {
+          laneRequestRef.current.delete(lane.id)
+          setRollingLanes((current) => {
+            const next = new Set(current)
+            next.delete(lane.id)
+            return next
+          })
+        }
       }
     },
     [findDiscoveredStem, setDraft]
@@ -1304,23 +1334,40 @@ export function ShapePanel({
   const addDiscoveredLane = useCallback(
     async (kind: DiscoverSlotKind | 'random'): Promise<void> => {
       if (draftRef.current.lanes.length >= MAX_RIFFF_STEM_SLOTS || discoverBusy) return
+      const draftId = draftRef.current.id
+      const projectKey = draftRef.current.projectKey
+      const targetBpm = draftRef.current.targetBpm
+      const requestEpoch = asyncRequestEpochRef.current
+      const isCurrent = (): boolean =>
+        draftRef.current.id === draftId &&
+        draftRef.current.projectKey === projectKey &&
+        asyncRequestEpochRef.current === requestEpoch
       setDiscoverBusy(kind)
       setDiscoverError(null)
       try {
         const stem = await findDiscoveredStem(
           [kind === 'random' ? randomShapeSlotKind() : kind],
-          kind === 'random'
+          kind === 'random',
+          targetBpm
         )
+        if (!isCurrent()) return
         if (!stem) {
           setDiscoverError('no matching stem found')
           return
         }
-        setDraft((current) => (current ? addShapeLane(current, stem) : current))
+        setDraft((current) =>
+          current?.id === draftId &&
+          current.projectKey === projectKey &&
+          current.lanes.length < MAX_RIFFF_STEM_SLOTS
+            ? addShapeLane(current, stem)
+            : current
+        )
       } catch (error) {
+        if (!isCurrent()) return
         console.error('ShapePanel: failed to add a discovered stem:', error)
         setDiscoverError('could not add that stem')
       } finally {
-        setDiscoverBusy(null)
+        if (isCurrent()) setDiscoverBusy(null)
       }
     },
     [discoverBusy, findDiscoveredStem, setDraft]
@@ -1328,25 +1375,34 @@ export function ShapePanel({
 
   const addSampleLane = useCallback(async (): Promise<void> => {
     if (draftRef.current.lanes.length >= MAX_RIFFF_STEM_SLOTS || discoverBusy) return
+    const draftId = draftRef.current.id
+    const projectKey = draftRef.current.projectKey
+    const targetBpm = draftRef.current.targetBpm
+    const requestEpoch = asyncRequestEpochRef.current
+    const isCurrent = (): boolean =>
+      draftRef.current.id === draftId &&
+      draftRef.current.projectKey === projectKey &&
+      asyncRequestEpochRef.current === requestEpoch
     setDiscoverBusy('sample')
     setDiscoverError(null)
     try {
       const paths = await window.rifffApi.pickDiscoverLoopSeedPaths()
       for (const path of paths) {
-        const imported = await window.rifffApi.importDiscoverLoopSeed(
-          path,
-          draftRef.current.targetBpm
-        )
+        if (!isCurrent()) break
+        const imported = await window.rifffApi.importDiscoverLoopSeed(path, targetBpm)
+        if (!isCurrent()) break
         if (!imported) continue
         const source: ShapeSourceStem = { author: '', type: 'fx', ...imported }
         setDraft((current) =>
-          current && current.lanes.length < MAX_RIFFF_STEM_SLOTS
+          current?.id === draftId &&
+          current.projectKey === projectKey &&
+          current.lanes.length < MAX_RIFFF_STEM_SLOTS
             ? addShapeLane(current, source)
             : current
         )
       }
     } finally {
-      setDiscoverBusy(null)
+      if (isCurrent()) setDiscoverBusy(null)
     }
   }, [discoverBusy, setDraft])
 
@@ -1513,12 +1569,12 @@ export function ShapePanel({
         .ra-shape-clip-edge--left,
         html.ra-shape-resizing-left,
         html.ra-shape-resizing-left * {
-          cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M4 2V14M5 8H13M10 5L13 8L10 11' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='square' stroke-linejoin='miter'/%3E%3Cpath d='M4 2V14M5 8H13M10 5L13 8L10 11' fill='none' stroke='%23fff' stroke-width='1' stroke-linecap='square' stroke-linejoin='miter'/%3E%3C/svg%3E") 4 8, w-resize !important;
+          cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAJaSURBVHgBtVZLjtpAEHX7h7FhZkAQAlEkC7GCJRfgEtwHrsMpuARbxAYQ4iM2AcS4u/PK2KMe4s94pJRk9b+r6lXVa2vafxaWty6lfHQY05L6EEnjbynAJWw6nYZ7FosF2+/3YX8+n2vj8VgOBgM5mUykekT7qtDlOKyjawyHQ8v3fQd9t9VqeZ1Ox43GFhQZkaeJxpp5inC5vt1urfV6/ed5DdC4y+UyiIY86byedjHhSrDsdjtzs9nY8Vz8kdTrdet4PBrxEa2IRPBY+LxqtdqQj6hKVTB+w+eMRiOzsAI6gCDajUajin5LVVAqlXqu63Ywfo1iYaTFIBUius9xHCmEYM/7AJG4XC6EufA8T2iP7JGFFHxs0HUJa9mTggCwBcgm3u/3uVSKopCC2+3GDodD6JA6f71euWEY3LZtMZvNRKS0mAI6QBAhU5JOCngmVquViLKquAfIIkYeUPCA96c1QBa2SAItA51sibKC8v8FX1vNIrQ/4dkLZVla9uR6QByEKpaqxYoHH9SQRXR5EnpAluLCZw9+vUGoBoiLsmDKTdPT6fTPXLlcNs7ns3G/33XFmGKuEASEMbpUye0UqqA1i2ilcCVTDChNm83mpypVya5Wq+m9Xk8nUtSKClkUkZhXqVSaMkGg4BXr3+Mi0kHWI5DcNM13WN0G9j5aH0H/jfYHqjnkIQQ69ZKsB4diIPGgcATzThOc8wDKGJEdrA8AYYBUzqSKVAVx+cM6uuAdD4sAB4WPCyyXRIJ4PoNutxvyURpdfOmvgkyGonBv/PATfMqjn1oIfwGqMUPKPvTX4QAAAABJRU5ErkJggg==") 12 12, w-resize !important;
         }
         .ra-shape-clip-edge--right,
         html.ra-shape-resizing-right,
         html.ra-shape-resizing-right * {
-          cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='M12 2V14M11 8H3M6 5L3 8L6 11' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='square' stroke-linejoin='miter'/%3E%3Cpath d='M12 2V14M11 8H3M6 5L3 8L6 11' fill='none' stroke='%23fff' stroke-width='1' stroke-linecap='square' stroke-linejoin='miter'/%3E%3C/svg%3E") 12 8, e-resize !important;
+          cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAJeSURBVHgBtVVLquJAFK18/OvDb9sh0ojYA3HoBtyE61HX4ybcgEOnQoMTQXEgHdFYVX1uuuLLy0tM8uBdKJJUpe65534Z+2bRojallN4ZxH9nL95lJgBcfO4tl0ttvV7rwfNOpyNXq5WU71ZkByDF2+1W2+12+mazMXq9nua6rn44HGS/3xetVosPBgMBIEE4r0DMT4jaf8zJZEIKTShwwv/Ytl3BwyV71EovxGCxWJBbCs1m80254rnUdx2sStPp1Ay6NDXAbDYjt5RIkQyID1CtVjvdbpdY5FhMoviixx3s93tRr9dZpVKx4bbfISN0zjnd1fxsygQwHo8lLdM0OZQLbIkwwPF41JKsJ4kKsmcS3MTP5zO/3W5uqVR6hP9DfJhlWYkBjmRAtIlBPp8Xl8uFY4sHzx3HYWnFjNr0WQBENBoNCRZhS71v1MozreMkNshI1edNWPwBoFwua8oAlhTkWFH5ncd6w7KCaYrnT6oRAOST6iAuBl67IAshmm9xmEGxWJRJLkoCL6AW6sgiO8TAarfbNWKgqj69BFqFQcZitQDwKwgABhbev+4iEmp2sNKAgiOC/Cd45meZyqLsANSqT6eTodqBl4phPQCnaqdsY5kAfEVoE9KnT97xl/pHGIYhKMgAeJmnnwpNDRA2HA6ZruuiVqv9AJPi9Xo1EAuB5x1xv2NWiNFo9LVWQVYVCgUJCx+5XO4ONg5a9F96orKvCPId7uGYByKp0CKbnbr0ICDMBSmEcMHCcxcABWbBg0bmfD6XSTM5thcpEI6A0+xlsNYDoKFPjTCNcpJ/v05k/nA351QAAAAASUVORK5CYII=") 12 12, e-resize !important;
         }
       `}</style>
       <div

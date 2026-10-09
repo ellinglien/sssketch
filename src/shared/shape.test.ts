@@ -17,6 +17,8 @@ import {
   reverseShapeFragments,
   replaceShapeLaneSource,
   resetShapeLane,
+  shapeContentFingerprint,
+  shapeRenderFingerprint,
   splitShapeFragment,
   toggleShapeFragmentsDisabled,
   undoShape,
@@ -164,6 +166,78 @@ describe('Shape draft', () => {
     ])
     expect(shapeRenderSegments(after.lanes[0])).toEqual([
       { sourceStartBars: 0, sourceEndBars: 8, destStartBars: 0 }
+    ])
+  })
+
+  it('splits a reversed clip from the opposite source edge without changing playback', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const reversed = reverseShapeFragments(before, new Set([lane.fragments[0].id]))
+    const after = splitShapeFragment(reversed, lane.id, lane.fragments[0].id, 3, [
+      'left-reverse',
+      'right-reverse'
+    ])
+    expect(after.lanes[0].fragments).toEqual([
+      expect.objectContaining({
+        id: 'left-reverse',
+        sourceStartBars: 5,
+        sourceEndBars: 8,
+        destStartBars: 0,
+        reversed: true
+      }),
+      expect.objectContaining({
+        id: 'right-reverse',
+        sourceStartBars: 0,
+        sourceEndBars: 5,
+        destStartBars: 3,
+        reversed: true
+      })
+    ])
+    expect(shapeRenderSegments(after.lanes[0])).toEqual([
+      { sourceStartBars: 0, sourceEndBars: 8, destStartBars: 0, reversed: true }
+    ])
+  })
+
+  it('isolates and removes a reversed range with its source mapping intact', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const reversed = reverseShapeFragments(before, new Set([lane.fragments[0].id]))
+    const isolated = isolateShapeFragmentRange(reversed, lane.id, lane.fragments[0].id, 2, 5, [
+      'before-reverse',
+      'selection-reverse',
+      'after-reverse'
+    ])
+    expect(isolated.draft.lanes[0].fragments).toEqual([
+      expect.objectContaining({
+        id: 'before-reverse',
+        sourceStartBars: 6,
+        sourceEndBars: 8,
+        destStartBars: 0,
+        reversed: true
+      }),
+      expect.objectContaining({
+        id: 'selection-reverse',
+        sourceStartBars: 3,
+        sourceEndBars: 6,
+        destStartBars: 2,
+        reversed: true
+      }),
+      expect.objectContaining({
+        id: 'after-reverse',
+        sourceStartBars: 0,
+        sourceEndBars: 3,
+        destStartBars: 5,
+        reversed: true
+      })
+    ])
+    const removed = removeShapeFragmentRange(reversed, lane.id, lane.fragments[0].id, 2, 5, [
+      'before-reverse',
+      'selection-reverse',
+      'after-reverse'
+    ])
+    expect(removed.lanes[0].fragments).toEqual([
+      expect.objectContaining({ sourceStartBars: 6, sourceEndBars: 8, destStartBars: 0 }),
+      expect.objectContaining({ sourceStartBars: 0, sourceEndBars: 3, destStartBars: 5 })
     ])
   })
 
@@ -354,6 +428,63 @@ describe('Shape draft', () => {
     })
   })
 
+  it('preserves reversed neighbors when an expanded edge overwrites their middle', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const split = splitShapeFragment(before, lane.id, lane.fragments[0].id, 2, ['left', 'target'])
+    const reversed = reverseShapeFragments(split, new Set(['target']))
+    const expanded = resizeShapeFragment(reversed, lane.id, 'left', 'right', 5)
+    expect(expanded.lanes[0].fragments).toEqual([
+      expect.objectContaining({
+        id: 'left',
+        sourceStartBars: 0,
+        sourceEndBars: 5,
+        destStartBars: 0
+      }),
+      expect.objectContaining({
+        id: 'target',
+        sourceStartBars: 2,
+        sourceEndBars: 5,
+        destStartBars: 5,
+        reversed: true
+      })
+    ])
+  })
+
+  it('uses materialized audio as a fresh baseline when saved provenance has another loop length', () => {
+    const shapedSource: Rifff = {
+      ...source,
+      barLength: 8,
+      stems: [
+        {
+          ...source.stems[0],
+          path: '/materialized.shape.wav',
+          shape: {
+            version: 1,
+            source: { ...source.stems[0] },
+            loopBars: 2,
+            laneDisabled: false,
+            gain: 0.5,
+            fragments: [
+              {
+                id: 'old-fragment',
+                sourceStartBars: 0,
+                sourceEndBars: 2,
+                destStartBars: 0,
+                disabled: false
+              }
+            ]
+          }
+        }
+      ]
+    }
+    const value = createShapeDraft('project-session', shapedSource)
+    expect(value.lanes[0].source.path).toBe('/materialized.shape.wav')
+    expect(value.lanes[0].fragments).toEqual([
+      expect.objectContaining({ sourceStartBars: 0, sourceEndBars: 8, destStartBars: 0 })
+    ])
+  })
+
   it('reveals trimmed source material and overwrites clips crossed by the expanded edge', () => {
     const before = draft()
     const lane = before.lanes[0]
@@ -425,6 +556,29 @@ describe('Shape draft', () => {
     expect(grouped.past).toHaveLength(1)
     expect(grouped.revision).toBe(before.revision + 1)
     expect(undoShape(grouped).lanes[0].fragments).toEqual(before.lanes[0].fragments)
+  })
+
+  it('fingerprints musical content without treating undo history or revision as edits', () => {
+    const before = draft()
+    const bookkeepingOnly = {
+      ...before,
+      revision: 99,
+      past: [{ lanes: before.lanes }],
+      future: [{ lanes: before.lanes }]
+    }
+    expect(shapeContentFingerprint(bookkeepingOnly)).toBe(shapeContentFingerprint(before))
+  })
+
+  it('tracks gain for saving without needlessly re-rendering preview WAVs', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const gained = finishShapeLaneGain(
+      previewShapeLaneGain(before, lane.id, 0.25),
+      lane.id,
+      lane.gain
+    )
+    expect(shapeContentFingerprint(gained)).not.toBe(shapeContentFingerprint(before))
+    expect(shapeRenderFingerprint(gained)).toBe(shapeRenderFingerprint(before))
   })
 })
 

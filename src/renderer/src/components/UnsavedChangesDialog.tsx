@@ -17,10 +17,12 @@ import { ConfirmationDialog } from './ConfirmationDialog'
 // exists to remove. The user must press one of the three explicitly
 // labeled buttons.
 export function UnsavedChangesDialog({
+  hasShapeChanges,
   onSave,
   onDiscard,
   onCancel
 }: {
+  hasShapeChanges?: boolean
   onSave: () => void
   onDiscard: () => void
   onCancel: () => void
@@ -28,6 +30,7 @@ export function UnsavedChangesDialog({
   return (
     <ConfirmationDialog
       message="this project has unsaved changes."
+      detail={hasShapeChanges ? 'Saving will add the open Shape riff to the shelf.' : undefined}
       actions={[
         { label: 'cancel', onClick: onCancel },
         { label: 'discard', onClick: onDiscard, danger: true },

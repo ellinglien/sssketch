@@ -306,4 +306,60 @@ describe('assembleCrossRifff', () => {
   it('returns null when the center is empty', () => {
     expect(assembleCrossRifff(draft(), 'group-cross')).toBeNull()
   })
+
+  it('drops an editable Shape recipe when Cross changes its destination loop length', () => {
+    const value = draft()
+    const short = value.parents[0].sources[0]
+    short.stem = {
+      ...short.stem!,
+      shape: {
+        version: 1,
+        source: { ...short.stem! },
+        loopBars: 2,
+        laneDisabled: false,
+        gain: 1,
+        fragments: [
+          {
+            id: 'short-shape',
+            sourceStartBars: 0,
+            sourceEndBars: 2,
+            destStartBars: 0,
+            disabled: false
+          }
+        ]
+      }
+    }
+    let withShort = addCrossSource(value, short.id)
+    withShort = addCrossSource(withShort, 'b:2')
+    const assembly = assembleCrossRifff(withShort, 'group-cross')!
+    expect(assembly.rifff.barLength).toBe(8)
+    expect(assembly.rifff.stems[0].barLength).toBe(2)
+    expect(assembly.rifff.stems[0].shape).toBeUndefined()
+  })
+
+  it('retains Shape provenance when Cross keeps the authored loop length', () => {
+    const value = draft()
+    const long = value.parents[0].sources[1]
+    long.stem = {
+      ...long.stem!,
+      shape: {
+        version: 1,
+        source: { ...long.stem! },
+        loopBars: 8,
+        laneDisabled: false,
+        gain: 1,
+        fragments: [
+          {
+            id: 'long-shape',
+            sourceStartBars: 0,
+            sourceEndBars: 8,
+            destStartBars: 0,
+            disabled: false
+          }
+        ]
+      }
+    }
+    const withLong = addCrossSource(value, long.id)
+    expect(assembleCrossRifff(withLong, 'group-cross')!.rifff.stems[0].shape?.loopBars).toBe(8)
+  })
 })

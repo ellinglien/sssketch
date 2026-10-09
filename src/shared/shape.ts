@@ -71,6 +71,36 @@ export interface ShapeMaterializeResult {
   stems: ShapeMaterializedStem[]
 }
 
+function fingerprintLanes(draft: ShapeDraft, includeGain: boolean): string {
+  return JSON.stringify({
+    targetBpm: draft.targetBpm,
+    loopBars: draft.loopBars,
+    lanes: draft.lanes.map((lane) => ({
+      source: lane.source,
+      ...(includeGain ? { gain: lane.gain } : {}),
+      fragments: lane.fragments
+        .map((fragment) => ({
+          sourceStartBars: fragment.sourceStartBars,
+          sourceEndBars: fragment.sourceEndBars,
+          destStartBars: fragment.destStartBars,
+          disabled: fragment.disabled,
+          reversed: Boolean(fragment.reversed)
+        }))
+        .sort((a, b) => a.destStartBars - b.destStartBars)
+    }))
+  })
+}
+
+/** Musical/edit content only: excludes session ids and undo bookkeeping. */
+export function shapeContentFingerprint(draft: ShapeDraft): string {
+  return fingerprintLanes(draft, true)
+}
+
+/** Audio-file content only: lane gain is applied at playback, not baked. */
+export function shapeRenderFingerprint(draft: ShapeDraft): string {
+  return fingerprintLanes(draft, false)
+}
+
 export function shapeWaveformLayout(
   sourceStartBars: number,
   sourceBarLength: number,
@@ -159,7 +189,15 @@ export function createShapeDraft(
   }
   const groupGain = vol[rifff.groupId] ?? 1
   const lanes = rifff.stems.map((stem): ShapeLane => {
-    const provenance = stem.shape?.version === 1 ? stem.shape : undefined
+    // A shaped stem can later be placed into a longer Cross riff, where its
+    // already-rendered audio repeats normally. Its old edit recipe was
+    // authored in a different destination coordinate space, though; using
+    // it unchanged would render silence after the old endpoint. Treat that
+    // audio as a fresh immutable baseline instead.
+    const provenance =
+      stem.shape?.version === 1 && Math.abs(stem.shape.loopBars - rifff.barLength) <= EPS
+        ? stem.shape
+        : undefined
     const savedGain = vol[stemKey(rifff.groupId, stem.slot)]
     // Older Shape riffs could disable a whole lane. Shape now has one
     // durable-disable concept only -- clips -- so migrate that legacy bit
@@ -209,6 +247,35 @@ function sortFragments(fragments: ShapeFragmentRecipe[]): ShapeFragmentRecipe[] 
   return fragments.sort((a, b) => a.destStartBars - b.destStartBars || a.id.localeCompare(b.id))
 }
 
+/** Returns the portion of a clip audible in one retained destination range.
+ * Reversed clips map destination time from the opposite source edge, so all
+ * split/crop operations must go through this helper instead of applying the
+ * ordinary forward offset formula independently. */
+function sliceShapeFragment(
+  fragment: ShapeFragmentRecipe,
+  destStartBars: number,
+  destEndBars: number,
+  fragmentId = fragment.id
+): ShapeFragmentRecipe {
+  const offsetStart = destStartBars - fragment.destStartBars
+  const offsetEnd = destEndBars - fragment.destStartBars
+  return fragment.reversed
+    ? {
+        ...fragment,
+        id: fragmentId,
+        sourceStartBars: fragment.sourceEndBars - offsetEnd,
+        sourceEndBars: fragment.sourceEndBars - offsetStart,
+        destStartBars
+      }
+    : {
+        ...fragment,
+        id: fragmentId,
+        sourceStartBars: fragment.sourceStartBars + offsetStart,
+        sourceEndBars: fragment.sourceStartBars + offsetEnd,
+        destStartBars
+      }
+}
+
 export function splitShapeFragment(
   draft: ShapeDraft,
   laneId: string,
@@ -222,18 +289,12 @@ export function splitShapeFragment(
     const fragment = lane.fragments[index]
     const destEnd = fragment.destStartBars + fragment.sourceEndBars - fragment.sourceStartBars
     if (atBars <= fragment.destStartBars + EPS || atBars >= destEnd - EPS) return lane
-    const sourceCut = fragment.sourceStartBars + (atBars - fragment.destStartBars)
     const fragments = [...lane.fragments]
     fragments.splice(
       index,
       1,
-      { ...fragment, id: resultIds[0], sourceEndBars: sourceCut },
-      {
-        ...fragment,
-        id: resultIds[1],
-        sourceStartBars: sourceCut,
-        destStartBars: atBars
-      }
+      sliceShapeFragment(fragment, fragment.destStartBars, atBars, resultIds[0]),
+      sliceShapeFragment(fragment, atBars, destEnd, resultIds[1])
     )
     return { ...lane, fragments: sortFragments(fragments) }
   })
@@ -397,18 +458,10 @@ function trimForOverwrite(
     const hasLeft = fragmentStart < start - EPS
     const hasRight = fragmentEnd > end + EPS
     if (hasLeft) {
-      result.push({
-        ...fragment,
-        sourceEndBars: fragment.sourceStartBars + (start - fragmentStart)
-      })
+      result.push(sliceShapeFragment(fragment, fragmentStart, start))
     }
     if (hasRight) {
-      result.push({
-        ...fragment,
-        id: hasLeft ? id() : fragment.id,
-        sourceStartBars: fragment.sourceStartBars + (end - fragmentStart),
-        destStartBars: end
-      })
+      result.push(sliceShapeFragment(fragment, end, fragmentEnd, hasLeft ? id() : fragment.id))
     }
   }
   return result
@@ -639,14 +692,22 @@ export function shapeRenderSegments(lane: ShapeLane): ShapeRenderSegment[] {
     const previousDestEnd = previous
       ? previous.destStartBars + previous.sourceEndBars - previous.sourceStartBars
       : Number.NaN
-    if (
+    const continuousForward =
       previous &&
       !previous.reversed &&
       !segment.reversed &&
-      Math.abs(previousDestEnd - segment.destStartBars) <= EPS &&
       Math.abs(previous.sourceEndBars - segment.sourceStartBars) <= EPS
+    const continuousReverse =
+      previous?.reversed &&
+      segment.reversed &&
+      Math.abs(previous.sourceStartBars - segment.sourceEndBars) <= EPS
+    if (
+      previous &&
+      Math.abs(previousDestEnd - segment.destStartBars) <= EPS &&
+      (continuousForward || continuousReverse)
     ) {
-      previous.sourceEndBars = segment.sourceEndBars
+      if (continuousReverse) previous.sourceStartBars = segment.sourceStartBars
+      else previous.sourceEndBars = segment.sourceEndBars
     } else {
       result.push(segment)
     }

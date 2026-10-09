@@ -9,7 +9,7 @@ export function awaitSaveBeforeQuit(
   requestId: string,
   sendRequest: (requestId: string) => void,
   subscribe: (complete: (requestId: string, success: boolean) => void) => () => void,
-  timeoutMs = 5000
+  timeoutMs = 120000
 ): Promise<SaveBeforeQuitResult> {
   return new Promise((resolve) => {
     let settled = false

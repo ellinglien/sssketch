@@ -109,6 +109,58 @@ namespace sssketch
                 expectWithinAbsoluteError(decoded.getSample(0, 1000), 0.499f, 0.003f);
             }
 
+            beginTest("heals every natural repeat boundary while rendering in reverse");
+            {
+                auto source = writeShapeFixture("sssketch_shape_reverse_repeats_source.wav");
+                auto output = source.getSiblingFile("sssketch_shape_reverse_repeats.shape.wav");
+                output.deleteFile();
+                ShapeRenderInfo info;
+                juce::String error;
+                const bool ok = renderShapeStemToWav(
+                    source.getFullPathName(), 2.0, 1.0, 120.0, 4.0,
+                    { { 0.0, 4.0, 0.0, true } }, output.getFullPathName(), info, error);
+                expect(ok, error);
+                juce::AudioBuffer<float> decoded;
+                double rate = 0.0;
+                expect(decodeRawAudioFile(output.getFullPathName(), decoded, rate));
+                expectEquals(decoded.getNumSamples(), 8000);
+                for (const int boundary : { 2000, 4000, 6000 })
+                {
+                    const float jump = std::abs(
+                        decoded.getSample(0, boundary) - decoded.getSample(0, boundary - 1));
+                    expect(jump < 0.35f, "reverse repeat seam was not healed");
+                }
+            }
+
+            beginTest("repeating an already-sewn Shape source is sample-identical");
+            {
+                auto raw = writeShapeFixture("sssketch_shape_once_raw.wav");
+                auto sewn = raw.getSiblingFile("sssketch_shape_once.shape.wav");
+                auto repeated = raw.getSiblingFile("sssketch_shape_repeated.shape.wav");
+                sewn.deleteFile();
+                repeated.deleteFile();
+                ShapeRenderInfo info;
+                juce::String error;
+                expect(renderShapeStemToWav(
+                    raw.getFullPathName(), 2.0, 1.0, 120.0, 1.0,
+                    { { 0.0, 1.0, 0.0 } }, sewn.getFullPathName(), info, error), error);
+                error.clear();
+                expect(renderShapeStemToWav(
+                    sewn.getFullPathName(), 2.0, 1.0, 120.0, 4.0,
+                    { { 0.0, 4.0, 0.0 } }, repeated.getFullPathName(), info, error), error);
+
+                juce::AudioBuffer<float> once, fourTimes;
+                double onceRate = 0.0, repeatedRate = 0.0;
+                expect(decodeRawAudioFile(sewn.getFullPathName(), once, onceRate));
+                expect(decodeRawAudioFile(repeated.getFullPathName(), fourTimes, repeatedRate));
+                expectEquals(fourTimes.getNumSamples(), once.getNumSamples() * 4);
+                for (int i = 0; i < fourTimes.getNumSamples(); ++i)
+                    expectWithinAbsoluteError(
+                        fourTimes.getSample(0, i),
+                        once.getSample(0, i % once.getNumSamples()),
+                        0.000001f);
+            }
+
             beginTest("rejects missing and overlapping source material");
             {
                 auto output = juce::File::getSpecialLocation(juce::File::tempDirectory)

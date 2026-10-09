@@ -45,6 +45,7 @@ import {
 import { markPluginsTouched } from './pluginsTouched'
 import { stateWithMixerMute } from './mixerMute'
 import { stopActivePreview } from '../audio/previewLoop'
+import { nativePlayDispatchPlan } from './nativePlayDispatch'
 
 /** A slot's status text while its plugin failed to load: the slot keeps the plugin and its saved
  * settings (@shared/pluginSwitch's `failed`), retried after a scan. */
@@ -67,7 +68,7 @@ function failedToLoadText(error: string | undefined): string {
 // re-render on those changes; everything else only re-renders on a real
 // arrangement edit.
 export type TransportAction =
-  | { type: 'PLAY' }
+  | { type: 'PLAY'; nativeStart?: { fromPos: number; fadeIn?: boolean } }
   | { type: 'PAUSE' }
   | { type: 'STOP' }
   | { type: 'SET_POS'; pos: number }
@@ -268,6 +269,8 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   }, [state])
   const [pos, setPos] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const playingRef = useRef(playing)
+  const skipNextNativePlayEffectRef = useRef(false)
   // View-only (not undo-tracked, not persisted -- see ArrangerMode's own
   // "Not persisted" doc comment in store.ts for the same reasoning): resets
   // to 1 on every app launch. 24 is the base PPB (Ruler.tsx); effective PPB
@@ -372,18 +375,29 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // forces the position-update subscription effect below to resubscribe.
   const dispatch = useCallback((action: DispatchableAction): void => {
     switch (action.type) {
-      case 'PLAY':
+      case 'PLAY': {
         // Web Audio auditions (Shelf/Import) and native arrangement
         // playback are mutually exclusive. Keeping this at the transport
         // boundary covers every way playback can start—button, spacebar,
         // Sketch tile, coach, or recording—not just one click handler.
         stopActivePreview()
+        const playPlan = nativePlayDispatchPlan(playingRef.current, action.nativeStart)
+        if (playPlan.playNow && action.nativeStart) {
+          skipNextNativePlayEffectRef.current = playPlan.suppressNextPlayingEffect
+          void window.rifffApi.enginePlay(action.nativeStart.fromPos, action.nativeStart.fadeIn)
+        }
+        playingRef.current = true
         setPlaying(true)
         return
+      }
       case 'PAUSE':
+        skipNextNativePlayEffectRef.current = false
+        playingRef.current = false
         setPlaying(false)
         return
       case 'STOP':
+        skipNextNativePlayEffectRef.current = false
+        playingRef.current = false
         setPlaying(false)
         setPos(0)
         return
@@ -397,6 +411,8 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         setZoomMultiplier(1)
         return
       case 'LOAD_STATE':
+        skipNextNativePlayEffectRef.current = false
+        playingRef.current = false
         setPlaying(false)
         setPos(0)
         rawDispatch(action)
@@ -449,7 +465,6 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   })
   // Same pattern, for the position-update subscription's own playing check —
   // separate from stateRef since playing no longer lives on state at all.
-  const playingRef = useRef(playing)
   useEffect(() => {
     playingRef.current = playing
   })
@@ -831,7 +846,13 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
 
   useEffect(() => {
     if (playing) {
-      void window.rifffApi.enginePlay(pos)
+      if (skipNextNativePlayEffectRef.current) skipNextNativePlayEffectRef.current = false
+      // An ordinary transport start can land on any waveform value, especially
+      // in Sketch where Space resumes at the current riff position. Ask the
+      // native transport for its 3 ms output ramp so silence never steps
+      // directly to that value. This is audio-thread gain shaping, not a
+      // delayed start, so the playhead and controls still respond immediately.
+      else void window.rifffApi.enginePlay(pos, true)
     } else {
       void window.rifffApi.engineStop().catch((err) => {
         // A rapid Stop -> Play deliberately cancels the native halt fade;

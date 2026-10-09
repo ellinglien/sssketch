@@ -226,6 +226,91 @@ describe('EngineClient', () => {
     client.disconnect()
   })
 
+  it('correlates concurrent same-type replies with a payload matcher', async () => {
+    server = createServer((socket: Socket) => {
+      socket.once('data', () => {
+        socket.write(
+          Buffer.concat([
+            encodeMessage(
+              JSON.stringify({ type: 'project-load-result', payload: { token: 2, success: true } })
+            ),
+            encodeMessage(
+              JSON.stringify({ type: 'project-load-result', payload: { token: 1, success: true } })
+            )
+          ])
+        )
+      })
+    })
+    const port = await new Promise<number>((resolve) => {
+      server!.listen(0, '127.0.0.1', () => {
+        const address = server!.address()
+        if (address === null || typeof address === 'string') throw new Error('unexpected address')
+        resolve(address.port)
+      })
+    })
+    const client = new EngineClient()
+    await client.connect(port)
+    const [one, two] = await Promise.all([
+      client.sendAndAwaitType('load-project', {}, 'project-load-result', 1000, (payload) =>
+        Boolean(payload && (payload as { token?: number }).token === 1)
+      ),
+      client.sendAndAwaitType('load-project', {}, 'project-load-result', 1000, (payload) =>
+        Boolean(payload && (payload as { token?: number }).token === 2)
+      )
+    ])
+    expect(one).toMatchObject({ token: 1 })
+    expect(two).toMatchObject({ token: 2 })
+    client.disconnect()
+  })
+
+  it('rejects an outstanding acknowledgement immediately on disconnect', async () => {
+    server = createServer(() => undefined)
+    const port = await new Promise<number>((resolve) => {
+      server!.listen(0, '127.0.0.1', () => {
+        const address = server!.address()
+        if (address === null || typeof address === 'string') throw new Error('unexpected address')
+        resolve(address.port)
+      })
+    })
+    const client = new EngineClient()
+    await client.connect(port)
+    const pending = client.sendAndAwaitType('load-project', {}, 'project-load-result', 30000)
+    client.disconnect()
+    await expect(pending).rejects.toThrow('disconnected')
+  })
+
+  it('removes a timed-out waiter so it cannot steal a later reply of the same type', async () => {
+    let requestCount = 0
+    server = createServer((socket: Socket) => {
+      socket.on('data', () => {
+        requestCount += 1
+        if (requestCount === 2) {
+          socket.write(
+            encodeMessage(
+              JSON.stringify({ type: 'project-load-result', payload: { success: true } })
+            )
+          )
+        }
+      })
+    })
+    const port = await new Promise<number>((resolve) => {
+      server!.listen(0, '127.0.0.1', () => {
+        const address = server!.address()
+        if (address === null || typeof address === 'string') throw new Error('unexpected address')
+        resolve(address.port)
+      })
+    })
+    const client = new EngineClient()
+    await client.connect(port)
+    await expect(
+      client.sendAndAwaitType('load-project', {}, 'project-load-result', 10)
+    ).rejects.toThrow('timed out')
+    await expect(
+      client.sendAndAwaitType('load-project', {}, 'project-load-result', 1000)
+    ).resolves.toEqual({ success: true })
+    client.disconnect()
+  })
+
   it('does not crash when the engine sends a literal `null` (or otherwise malformed-shape) JSON payload', async () => {
     // JSON.parse('null') succeeds with no exception, so a naive `as IncomingMessage`
     // cast would let `null` through and the next line's `msg.type` access would

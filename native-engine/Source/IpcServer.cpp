@@ -232,6 +232,19 @@ namespace sssketch
         sendJson(juce::var(obj.get()));
     }
 
+    void IpcConnection::sendLoadResult(int token, bool success, const juce::String& error)
+    {
+        juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+        payload->setProperty("token", token);
+        payload->setProperty("success", success);
+        if (error.isNotEmpty())
+            payload->setProperty("error", error);
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("type", "project-load-result");
+        obj->setProperty("payload", juce::var(payload.get()));
+        sendJson(juce::var(obj.get()));
+    }
+
     juce::String IpcConnection::audioThreadApplyVia() const
     {
         return transport.lastStagedApplyWasAtRequestedBar() ? "bar" : "wrap";
@@ -522,6 +535,20 @@ namespace sssketch
 
         if (type == "load-project")
         {
+            // Live renderer loads carry a token so its promise resolves only
+            // after this process has decoded and published the snapshot.
+            // Export/test clients that still send the project directly keep
+            // the original fire-and-forget protocol.
+            int loadToken = -1;
+            auto projectPayload = payload;
+            if (auto* wrapper = payload.getDynamicObject())
+            {
+                if (wrapper->hasProperty("token") && wrapper->hasProperty("project"))
+                {
+                    loadToken = (int) wrapper->getProperty("token");
+                    projectPayload = wrapper->getProperty("project");
+                }
+            }
             // TEMP -- how far past its own loop top the transport already
             // is when this message lands. The whole point of the
             // measurement: the renderer's own trace stops at the socket
@@ -534,7 +561,7 @@ namespace sssketch
 
             EngineProject project;
             juce::String error;
-            const auto payloadJson = juce::JSON::toString(payload, true);
+            const auto payloadJson = juce::JSON::toString(projectPayload, true);
             const auto tTraceReserialized = juce::Time::getMillisecondCounterHiRes();
             if (parseEngineProject(payloadJson, project, error))
             {
@@ -571,10 +598,14 @@ namespace sssketch
                     + juce::String(tTraceStems) + " stems) · handler "
                     + juce::String(tTraceSetProject - tTraceEnter, 1) + "ms"); // TEMP (2026-09-28)
                 applyProjectPostPublish(project);
+                if (loadToken >= 0)
+                    sendLoadResult(loadToken, true, {});
             }
             else
             {
                 juce::Logger::writeToLog("IpcConnection: load-project failed: " + error);
+                if (loadToken >= 0)
+                    sendLoadResult(loadToken, false, error);
             }
         }
         else if (type == "stage-project")

@@ -13,6 +13,7 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <unordered_map>
 
 namespace sssketch
 {
@@ -437,6 +438,12 @@ namespace sssketch
         struct ProjectSnapshot
         {
             EngineProject project;
+
+            // Pins every decoded stem used by this immutable snapshot. The
+            // cache may prune obsolete Shape preview paths on the message
+            // thread, but an in-flight audio block keeps its buffers alive
+            // through this snapshot and never looks in the mutable cache.
+            std::unordered_map<std::string, StemBufferHandle> stemBuffers;
 
             // Groups project.rifffs by channelId. Pointers into THIS
             // snapshot's OWN project.rifffs vector -- never the previous

@@ -1635,9 +1635,9 @@ app.whenReady().then(async () => {
       }
     })
 
-  ipcMain.handle('engine-load-project', (_event, project: unknown) => {
+  ipcMain.handle('engine-load-project', (_event, project: unknown) =>
     playbackEngine?.sendLoadProject(project)
-  })
+  )
 
   // Radio's scheduled swap. The project rides NESTED inside the payload
   // rather than being the payload, because EngineClient matches replies by
@@ -2913,7 +2913,8 @@ app.on('before-quit', (event) => {
       defaultId: 0,
       cancelId: 2,
       message: 'This project has unsaved changes.',
-      detail: 'Do you want to save before quitting?'
+      detail:
+        'Do you want to save before quitting? Any unpublished Shape riff will be added to the shelf.'
     })
     if (choice === 2) {
       // Cancel -- stay open; the next quit checks for plugin edits again.

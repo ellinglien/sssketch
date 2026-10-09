@@ -25,10 +25,14 @@
 
 ### Fixed
 
+- Hardened Shape after review: unsaved drafts now participate in New/Open/Quit protection and are materialized into the exact saved project snapshot; Save As and project renames no longer detach the draft; stale async stem searches cannot alter a newer session; and gain-only edits no longer rebuild preview audio.
+- Corrected reversed-clip slicing, overwrite, coalescing, and repeated-source seam healing; prevented incompatible Shape provenance from creating silent tails after Cross changes loop length.
+- Bounded native Shape-preview memory with snapshot-pinned audio buffers, and fixed a smooth Solo handoff race that could leave the interface showing playback while the native transport was stopped.
 - Added a strict, atomic native Shape renderer: preview and saved results use the same float-WAV path; every lane must decode, tempo-prepare, render, and validate before any saved batch is published, and Re-1 establishes a fresh Shape baseline instead of reopening stale recipe provenance.
 - Preserved a riff's common phase origin through re-one, import, Discover, shelf, timeline, duplication, and Cross operations so stems no longer drift out of phase. Source files remain untouched; offsets and tempo adaptation are non-destructive.
 - Fixed cached/category progress getting stuck below the true completed count and made cache state propagation more reliable.
 - Fixed silent or stale import and shelf previews, preview ownership races, and ordered native-engine Play handling at the audio callback boundary.
+- Routed ordinary transport starts through the native 3 ms declick ramp, removing the discontinuity heard when Space resumes Sketch playback mid-waveform without delaying the playhead.
 - Made Solo non-destructive throughout Arrange, Sketch/Map, Discover, and Cross. Durable **Disable**, temporary **Mute**, and temporary **Solo** are now separate layers; clearing Solo restores the exact prior Mute state, while disabled stems remain disabled.
 - Prevented an accidental Delete/Backspace from silently unplacing an entire multi-selection in Sketch: multi-riff removal now confirms first and is recorded as one atomic Undo step.
 - Fixed Cross source stems with saved zero gain being inaudible when explicitly soloed, misleading default Solo indicators, aggressive source-row outlines, and center-slot over-allocation.

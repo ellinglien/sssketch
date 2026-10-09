@@ -114,11 +114,11 @@ import {
 import { initialState, SNAP_DIVS, startupState } from './state/store'
 import { newProjectSeed } from '@shared/seededRandom'
 import { appSoundDefaults } from './state/appSoundDefaults'
-import type { AppState, LoopRegion } from './state/store'
+import { reducer, type AppState, type LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
-import { stemKey, type BusId, type ProjectRef, type Rifff } from '@shared/types'
+import { stemKey, type BusId, type Rifff } from '@shared/types'
 import {
   createCrossDraft,
   crossParentFromRifff,
@@ -128,7 +128,9 @@ import {
 import {
   assembleShapeRifff,
   createShapeDraft,
+  shapeContentFingerprint,
   shapeRenderSegments,
+  type ShapeAssembly,
   type ShapeDraft
 } from '@shared/shape'
 import { stopActivePreview } from './audio/previewLoop'
@@ -168,18 +170,11 @@ import {
   usePluginsTouched
 } from './state/pluginsTouched'
 
-function shapeProjectKey(
-  project: ProjectRef,
-  projectSeed: string | undefined,
-  sessionEpoch: string
-): string {
-  const location =
-    project?.kind === 'library'
-      ? `library:${project.name}`
-      : project?.kind === 'external'
-        ? `external:${project.path}`
-        : 'unsaved'
-  return `${sessionEpoch}|${crossProjectKey(project, projectSeed)}|${location}`
+function shapeProjectKey(sessionEpoch: string): string {
+  // Shape belongs to the in-memory editing session, not to its current file
+  // name/path. Rename, first Save and Save As may change storage identity
+  // without replacing the music under the editor.
+  return sessionEpoch
 }
 
 /** Tracks what the currently-open project actually is, so Save/Export know
@@ -1333,6 +1328,14 @@ function Frame(): React.JSX.Element {
   // persistedJson. Its version also restarts the autosave's debounce below.
   const pluginsTouched = usePluginsTouched()
   const [dirty, setDirty] = useState(false)
+  const [shapeDirty, setShapeDirty] = useState(false)
+  const [departureSaveBusy, setDepartureSaveBusy] = useState(false)
+  const [projectDepartureLocked, setProjectDepartureLocked] = useState(false)
+  const departureShapeSnapshotRef = useRef<{
+    projectKey: string
+    draftId: string | null
+    fingerprint: string | null
+  } | null>(null)
   useEffect(() => {
     setDirty(
       hasUnsavedChanges(
@@ -1419,8 +1422,14 @@ function Frame(): React.JSX.Element {
    * back to older settings); the autosave, best effort, takes `bestEffort`.
    * A successful capture is kept as the fallback (an engine restart reloads
    * from it). */
-  async function serializeForSave(options?: { bestEffort?: boolean }): Promise<string> {
-    const chains = { masterChain: state.masterChain, channelPlugins: state.channelPlugins }
+  async function serializeForSave(
+    options?: { bestEffort?: boolean },
+    stateToSave: AppState = stateRef.current
+  ): Promise<string> {
+    const chains = {
+      masterChain: stateToSave.masterChain,
+      channelPlugins: stateToSave.channelPlugins
+    }
     const generation = pendingPluginStatesGeneration()
     const pending = pendingPluginStatesRef.current
     const fallback = pluginCaptureFallback()
@@ -1443,7 +1452,7 @@ function Frame(): React.JSX.Element {
       live = liveSettingsForSave(raw, chains, held)
       recordPluginCapture(live, generation)
     }
-    return projectJsonForSave(state, live, pending, fallback)
+    return projectJsonForSave(stateToSave, live, pending, fallback)
   }
 
   /** Returns whether the save actually succeeded, so every discard-guard
@@ -1451,11 +1460,11 @@ function Frame(): React.JSX.Element {
    * quit-time save) can tell a real failure (disk full, permission denied,
    * etc.) apart from a resolved promise and avoid proceeding to discard/
    * replace the live project on top of a save that never landed. */
-  async function handleSave(): Promise<boolean> {
+  async function handleSave(stateToSave: AppState = stateRef.current): Promise<boolean> {
     try {
       const touchedVersion = pluginsTouchedSnapshot().version
-      const savedDirtyJson = dirtyCheckJson(state)
-      const json = await serializeForSave()
+      const savedDirtyJson = dirtyCheckJson(stateToSave)
+      const json = await serializeForSave(undefined, stateToSave)
       if (currentSketch === null) {
         const name = await window.rifffApi.generateDefaultProjectName()
         await window.rifffApi.saveProjectToLibrary(name, json)
@@ -1465,7 +1474,7 @@ function Frame(): React.JSX.Element {
       } else {
         await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
       }
-      recordSaved(state, touchedVersion)
+      recordSaved(stateToSave, touchedVersion)
       return saveCompletionIsCurrent(
         savedDirtyJson,
         dirtyCheckJson(stateRef.current),
@@ -1487,7 +1496,7 @@ function Frame(): React.JSX.Element {
    * docs/superpowers/specs/2026-08-14-explicit-save-model-design.md,
    * section 4. */
   function confirmDiscardIfDirty(): Promise<'save' | 'discard' | 'cancel'> {
-    if (!dirty) return Promise.resolve('discard')
+    if (!dirty && !shapeDirty) return Promise.resolve('discard')
     return new Promise((resolve) => {
       unsavedChangesResolveRef.current = resolve
       setUnsavedChangesPromptOpen(true)
@@ -1503,14 +1512,21 @@ function Frame(): React.JSX.Element {
   const [newProjectModal, setNewProjectModal] = useState<{ defaultName: string } | null>(null)
 
   async function handleNew(): Promise<void> {
+    beginProjectDeparture()
     const choice = await confirmDiscardIfDirty()
-    if (choice === 'cancel') return
+    if (choice === 'cancel') {
+      endProjectDeparture()
+      return
+    }
     if (choice === 'save') {
-      const saved = await handleSave()
+      const saved = await handleSaveForDeparture()
       // Save failed (handleSave already alerted) -- the live project is
       // still safely in the editor and unsaved, so bail out here rather
       // than opening the new-project modal, which would discard it.
-      if (!saved) return
+      if (!saved) {
+        endProjectDeparture()
+        return
+      }
     } else {
       // 'discard' -- the user just explicitly threw away unsaved work.
       // The debounced autosave effect may still have a stale crash-recovery
@@ -1519,7 +1535,19 @@ function Frame(): React.JSX.Element {
       // discarded.
       clearAutosaveNow()
     }
-    setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
+    let defaultName: string
+    try {
+      defaultName = await window.rifffApi.generateDefaultProjectName()
+    } catch (error) {
+      console.error('App: failed to prepare a new project:', error)
+      endProjectDeparture()
+      return
+    }
+    if (!projectDepartureIsCurrent()) {
+      endProjectDeparture()
+      return
+    }
+    setNewProjectModal({ defaultName })
   }
 
   function commitNewProject(name: string, bpm: number): void {
@@ -1531,16 +1559,24 @@ function Frame(): React.JSX.Element {
       // project is created. The same goes for the sound settings: a new
       // project starts from the app-wide defaults (native radio sound plan,
       // Task 2; fetched once, at mount, below), and that is not an edit.
-      const sound = await appSoundDefaults()
-      // Its own seed, so its timeline throws are its own (@shared/timelineThrows).
-      const freshState = { ...initialState, bpm, sound, projectSeed: newProjectSeed() }
-      projectSessionEpochRef.current = crypto.randomUUID()
-      dispatch({ type: 'LOAD_STATE', state: freshState })
-      // The previous project's saved plugin settings are not this one's.
-      replacePendingPluginStates({})
-      lastSavedJsonRef.current = dirtyCheckJson(freshState)
-      setCurrentSketch({ kind: 'library', name })
-      setNewProjectModal(null)
+      try {
+        const sound = await appSoundDefaults()
+        if (!projectDepartureIsCurrent()) return
+        // Its own seed, so its timeline throws are its own (@shared/timelineThrows).
+        const freshState = { ...initialState, bpm, sound, projectSeed: newProjectSeed() }
+        invalidateShapeSession()
+        projectSessionEpochRef.current = crypto.randomUUID()
+        dispatch({ type: 'LOAD_STATE', state: freshState })
+        // The previous project's saved plugin settings are not this one's.
+        replacePendingPluginStates({})
+        lastSavedJsonRef.current = dirtyCheckJson(freshState)
+        setCurrentSketch({ kind: 'library', name })
+        setNewProjectModal(null)
+      } catch (error) {
+        console.error('App: failed to create a new project:', error)
+      } finally {
+        endProjectDeparture()
+      }
     })()
   }
   // Guards the startup effect below against StrictMode's dev-only
@@ -1624,6 +1660,7 @@ function Frame(): React.JSX.Element {
     // each mounted component's own decode finishes.
     setBusy('loading…')
     await warmStemCaches(loaded)
+    invalidateShapeSession()
     projectSessionEpochRef.current = crypto.randomUUID()
     restoreState(loaded, pluginStates)
     lastSavedJsonRef.current = dirtyCheckJson(loaded)
@@ -1776,15 +1813,51 @@ function Frame(): React.JSX.Element {
   const shapeProjectKeyRef = useRef('')
   shapeDraftRef.current = shapeDraft
   shapeOpenRef.current = shapeOpen
-  shapeProjectKeyRef.current = shapeProjectKey(
-    currentSketch,
-    state.projectSeed,
-    projectSessionEpochRef.current
-  )
+  shapeProjectKeyRef.current = shapeProjectKey(projectSessionEpochRef.current)
   const shapePreviewStopRef = useRef<(() => void) | null>(null)
   const shapeOpenGenerationRef = useRef(0)
-  const shapeSavedRevisionRef = useRef(0)
+  const shapeSavedFingerprintRef = useRef('')
   const shapePublishedRiffIdRef = useRef<string | null>(null)
+  const shapeDepartureSaveRef = useRef(false)
+  const shapeOpeningSelectionRef = useRef<{
+    ids: Set<string>
+    anchorId: string | null
+  } | null>(null)
+  function invalidateShapeSession(): void {
+    shapeOpenGenerationRef.current += 1
+    shapePreviewStopRef.current?.()
+    shapePreviewStopRef.current = null
+    shapeOpeningSelectionRef.current = null
+    shapePublishedRiffIdRef.current = null
+    shapeSavedFingerprintRef.current = ''
+    setShapeDirty(false)
+    setShapeDiscardPromptOpen(false)
+    setShapeOpen(false)
+    setShapeDraft(null)
+  }
+  function beginProjectDeparture(): void {
+    const current = shapeDraftRef.current
+    departureShapeSnapshotRef.current = {
+      projectKey: shapeProjectKeyRef.current,
+      draftId: current?.id ?? null,
+      fingerprint: current ? shapeContentFingerprint(current) : null
+    }
+    setProjectDepartureLocked(true)
+  }
+  function projectDepartureIsCurrent(): boolean {
+    const expected = departureShapeSnapshotRef.current
+    if (!expected) return false
+    const current = shapeDraftRef.current
+    return (
+      shapeProjectKeyRef.current === expected.projectKey &&
+      (current?.id ?? null) === expected.draftId &&
+      (current ? shapeContentFingerprint(current) : null) === expected.fingerprint
+    )
+  }
+  function endProjectDeparture(): void {
+    departureShapeSnapshotRef.current = null
+    setProjectDepartureLocked(false)
+  }
   // One shared, session-only riff selection for both Sketch and Shelf.
   // Keeping this above the fullscreen Cross/Discover workspaces means the
   // exact working set remains highlighted when either workspace closes;
@@ -1796,10 +1869,6 @@ function Frame(): React.JSX.Element {
     ids: Set<string>
     anchorId: string | null
   }>(() => ({ ids: new Set(), anchorId: null }))
-  const shapeOpeningSelectionRef = useRef<{
-    ids: Set<string>
-    anchorId: string | null
-  } | null>(null)
   const selectedRiffIds = useMemo(() => {
     const valid = new Set([...riffSelection.ids].filter((id) => state.rifffs[id] !== undefined))
     // A loaded project already has an Inspector selection. Until the user
@@ -1840,11 +1909,7 @@ function Frame(): React.JSX.Element {
   }, [selectedRiffIds, state.rifffs])
   useEffect(() => {
     if (!shapeDraft) return
-    if (
-      shapeDraft.projectKey ===
-      shapeProjectKey(currentSketch, state.projectSeed, projectSessionEpochRef.current)
-    )
-      return
+    if (shapeDraft.projectKey === shapeProjectKey(projectSessionEpochRef.current)) return
     shapeOpenGenerationRef.current += 1
     shapePreviewStopRef.current?.()
     shapePreviewStopRef.current = null
@@ -1853,6 +1918,12 @@ function Frame(): React.JSX.Element {
     setShapeOpen(false)
     setShapeDraft(null)
   }, [currentSketch, shapeDraft, state.projectSeed])
+  useEffect(() => {
+    setShapeDirty(
+      shapeDraft !== null &&
+        shapeContentFingerprint(shapeDraft) !== shapeSavedFingerprintRef.current
+    )
+  }, [shapeDraft])
   // Discover artist mode: the chosen artists (combine artists, spec
   // 2026-10-06), `[null]` = me. Session-only, the same lifetime as
   // discoverSlots -- Discover opens on `me` at launch.
@@ -2367,11 +2438,7 @@ function Frame(): React.JSX.Element {
 
   async function openShapeFromRifff(rifff: Rifff): Promise<void> {
     const generation = ++shapeOpenGenerationRef.current
-    const projectKey = shapeProjectKey(
-      currentSketch,
-      state.projectSeed,
-      projectSessionEpochRef.current
-    )
+    const projectKey = shapeProjectKey(projectSessionEpochRef.current)
     shapeOpeningSelectionRef.current = {
       ids: new Set(selectedRiffIds),
       anchorId: riffSelectionAnchorId
@@ -2408,8 +2475,10 @@ function Frame(): React.JSX.Element {
               ...prepared,
               stems: prepared.stems.map((stem) => ({ ...stem, shape: undefined }))
             }
-      setShapeDraft(createShapeDraft(projectKey, baseline, state.vol, undefined, state.bpm))
-      shapeSavedRevisionRef.current = 0
+      const nextDraft = createShapeDraft(projectKey, baseline, state.vol, undefined, state.bpm)
+      setShapeDraft(nextDraft)
+      shapeSavedFingerprintRef.current = shapeContentFingerprint(nextDraft)
+      setShapeDirty(false)
       shapePublishedRiffIdRef.current = null
       setShapeOpen(true)
     } catch (err) {
@@ -2422,39 +2491,44 @@ function Frame(): React.JSX.Element {
     }
   }
 
+  function shapeDraftIsCurrent(draft: ShapeDraft): boolean {
+    return (
+      shapeOpenRef.current &&
+      shapeDraftRef.current?.id === draft.id &&
+      shapeDraftRef.current.revision === draft.revision &&
+      shapeProjectKeyRef.current === draft.projectKey
+    )
+  }
+
+  async function materializeCurrentShape(draft: ShapeDraft): Promise<ShapeAssembly | null> {
+    const projectKey = shapeProjectKey(projectSessionEpochRef.current)
+    if (draft.projectKey !== projectKey)
+      throw new Error('This Shape draft belongs to another project.')
+    const jobId = `${draft.id}:${draft.revision}:commit:${crypto.randomUUID()}`
+    const result = await window.rifffApi.materializeShape({
+      jobId,
+      mode: 'commit',
+      targetBpm: draft.targetBpm,
+      loopBars: draft.loopBars,
+      lanes: draft.lanes.map((lane) => ({
+        source: lane.source,
+        segments: shapeRenderSegments(lane)
+      }))
+    })
+    if (!shapeDraftIsCurrent(draft)) {
+      await window.rifffApi.cleanupUncommittedShapeAssets(result.stems.map((stem) => stem.path))
+      return null
+    }
+    return assembleShapeRifff(draft, result.stems)
+  }
+
   async function publishShape(
     draft: ShapeDraft,
     destination: 'keep' | 'shelf' | 'timeline'
   ): Promise<'✓ kept' | 'already kept' | void> {
-    const projectKey = shapeProjectKey(
-      currentSketch,
-      state.projectSeed,
-      projectSessionEpochRef.current
-    )
-    if (draft.projectKey !== projectKey)
-      throw new Error('This Shape draft belongs to another project.')
-    const jobId = `${draft.id}:${draft.revision}:commit:${crypto.randomUUID()}`
     try {
-      const result = await window.rifffApi.materializeShape({
-        jobId,
-        mode: 'commit',
-        targetBpm: draft.targetBpm,
-        loopBars: draft.loopBars,
-        lanes: draft.lanes.map((lane) => ({
-          source: lane.source,
-          segments: shapeRenderSegments(lane)
-        }))
-      })
-      if (
-        !shapeOpenRef.current ||
-        shapeDraftRef.current?.id !== draft.id ||
-        shapeDraftRef.current.revision !== draft.revision ||
-        shapeProjectKeyRef.current !== draft.projectKey
-      ) {
-        await window.rifffApi.cleanupUncommittedShapeAssets(result.stems.map((stem) => stem.path))
-        return
-      }
-      const assembled = assembleShapeRifff(draft, result.stems)
+      const assembled = await materializeCurrentShape(draft)
+      if (!assembled) return
       if (destination === 'keep') {
         let saved: Awaited<ReturnType<typeof window.rifffApi.saveDiscoveredRifff>> = null
         try {
@@ -2472,10 +2546,14 @@ function Frame(): React.JSX.Element {
             []
           )
         } finally {
-          await window.rifffApi.cleanupUncommittedShapeAssets(result.stems.map((stem) => stem.path))
+          await window.rifffApi.cleanupUncommittedShapeAssets(
+            assembled.rifff.stems.map((stem) => stem.path)
+          )
         }
+        if (!shapeDraftIsCurrent(draft)) return
         if (!saved || !('duplicate' in saved)) throw new Error('Could not keep the shaped riff.')
-        shapeSavedRevisionRef.current = draft.revision
+        shapeSavedFingerprintRef.current = shapeContentFingerprint(draft)
+        setShapeDirty(false)
         return saved.duplicate ? 'already kept' : '✓ kept'
       }
       if (destination === 'shelf') {
@@ -2500,7 +2578,8 @@ function Frame(): React.JSX.Element {
           vol: assembled.vol
         })
       }
-      shapeSavedRevisionRef.current = draft.revision
+      shapeSavedFingerprintRef.current = shapeContentFingerprint(draft)
+      setShapeDirty(false)
     } catch (err) {
       console.error('App: failed to save Shape result:', err)
       window.alert('Could not render every shaped stem. The source riff was not changed.')
@@ -2508,9 +2587,76 @@ function Frame(): React.JSX.Element {
     }
   }
 
+  /** Save used by New/Open/Quit. An unpublished Shape draft is first
+   * materialized into the shelf, then that exact reducer result is written
+   * as the project snapshot. */
+  async function handleSaveForDeparture(): Promise<boolean> {
+    if (shapeDepartureSaveRef.current) return false
+    const draft = shapeDraftRef.current
+    const draftFingerprint = draft ? shapeContentFingerprint(draft) : null
+    const departureSnapshot = {
+      projectKey: shapeProjectKeyRef.current,
+      draftId: draft?.id ?? null,
+      fingerprint: draftFingerprint
+    }
+    const shapeSessionIsUnchanged = (): boolean => {
+      const current = shapeDraftRef.current
+      return (
+        shapeProjectKeyRef.current === departureSnapshot.projectKey &&
+        (current?.id ?? null) === departureSnapshot.draftId &&
+        (current ? shapeContentFingerprint(current) : null) === departureSnapshot.fingerprint
+      )
+    }
+    const needsShapePublish =
+      draft !== null && draftFingerprint !== shapeSavedFingerprintRef.current
+
+    shapeDepartureSaveRef.current = true
+    setDepartureSaveBusy(true)
+    setBusy(needsShapePublish ? 'saving shape…' : 'saving…')
+    try {
+      if (!needsShapePublish || !draft || draftFingerprint === null) {
+        const saved = await handleSave()
+        return saved && shapeSessionIsUnchanged()
+      }
+      const assembled = await materializeCurrentShape(draft)
+      if (!assembled || !shapeDraftIsCurrent(draft)) return false
+      const action = {
+        type: 'ADD_TO_SHELF' as const,
+        rifff: assembled.rifff,
+        vol: assembled.vol
+      }
+      const savedState = reducer(stateRef.current, action)
+      // The disk save below must serialize and validate the exact shelf
+      // result even before React has had a chance to render the dispatched
+      // action. Keep the live mirror transactionally in step with it.
+      stateRef.current = savedState
+      dispatch(action)
+      shapePublishedRiffIdRef.current = assembled.rifff.groupId
+      setRiffSelection({
+        ids: new Set([assembled.rifff.groupId]),
+        anchorId: assembled.rifff.groupId
+      })
+      shapeSavedFingerprintRef.current = draftFingerprint
+      setShapeDirty(false)
+      const saved = await handleSave(savedState)
+      return saved && shapeSessionIsUnchanged() && shapeProjectKeyRef.current === draft.projectKey
+    } catch (err) {
+      console.error('App: failed to publish Shape during project save:', err)
+      window.alert('Could not add the shaped riff before saving. The project stayed open.')
+      return false
+    } finally {
+      shapeDepartureSaveRef.current = false
+      setDepartureSaveBusy(false)
+      setBusy(null)
+    }
+  }
+
   function closeShape(): void {
     const currentDraft = shapeDraftRef.current
-    if (currentDraft && currentDraft.revision > shapeSavedRevisionRef.current) {
+    if (
+      currentDraft &&
+      shapeContentFingerprint(currentDraft) !== shapeSavedFingerprintRef.current
+    ) {
       setShapeDiscardPromptOpen(true)
       return
     }
@@ -3014,8 +3160,8 @@ function Frame(): React.JSX.Element {
   // its own declaration above), so this effect only fires then, not on
   // every keystroke.
   useEffect(() => {
-    void window.rifffApi.setDirtyState(dirty)
-  }, [dirty])
+    void window.rifffApi.setDirtyState(dirty || shapeDirty)
+  }, [dirty, shapeDirty])
 
   // Main pushes 'request-save-before-quit' when the user picks "Save" on
   // the native quit-time dialog (index.ts's before-quit handler) -- run the
@@ -3023,7 +3169,7 @@ function Frame(): React.JSX.Element {
   // actually landed. Main keeps the app open on false or timeout.
   useEffect(() => {
     return window.rifffApi.onRequestSaveBeforeQuit((requestId) => {
-      void handleSave().then(
+      void handleSaveForDeparture().then(
         (success) => window.rifffApi.notifySaveBeforeQuitComplete(requestId, success),
         () => window.rifffApi.notifySaveBeforeQuitComplete(requestId, false)
       )
@@ -3301,9 +3447,7 @@ function Frame(): React.JSX.Element {
           onSelectionChange={handleRiffSelectionChange}
           onBeforePreview={() => shapePreviewStopRef.current?.()}
         />
-        {shapeOpen &&
-        shapeDraft?.projectKey ===
-          shapeProjectKey(currentSketch, state.projectSeed, projectSessionEpochRef.current) ? (
+        {shapeOpen && shapeDraft?.projectKey === shapeProjectKey(projectSessionEpochRef.current) ? (
           <div style={{ flex: 1, minHeight: 0 }}>
             <ShapePanel
               draft={shapeDraft}
@@ -3311,7 +3455,15 @@ function Frame(): React.JSX.Element {
               onPreviewStopReady={(stop) => {
                 shapePreviewStopRef.current = stop
               }}
-              active={!riffLibraryOpen && !crossOpen}
+              active={
+                !riffLibraryOpen &&
+                !crossOpen &&
+                !departureSaveBusy &&
+                !projectDepartureLocked &&
+                !unsavedChangesPromptOpen &&
+                newProjectModal === null &&
+                !libraryBrowserOpen
+              }
               onKeep={async (draft) => {
                 const label = await publishShape(draft, 'keep')
                 if (!label) throw new Error('The Shape draft changed before Keep completed.')
@@ -3563,17 +3715,28 @@ function Frame(): React.JSX.Element {
               currentSketch !== null && currentSketch.kind === 'library' ? currentSketch.name : null
             }
             onBeforeReplaceProject={async () => {
+              beginProjectDeparture()
               const choice = await confirmDiscardIfDirty()
-              if (choice === 'cancel') return 'cancel'
+              if (choice === 'cancel') {
+                endProjectDeparture()
+                return 'cancel'
+              }
               if (choice === 'save') {
-                const saved = await handleSave()
+                const saved = await handleSaveForDeparture()
                 // Save failed (handleSave already alerted) -- abort the
                 // open/restore rather than replacing the still-unsaved
                 // live project.
-                if (!saved) return 'cancel'
+                if (!saved) {
+                  endProjectDeparture()
+                  return 'cancel'
+                }
               } else {
                 // 'discard' -- see handleNew's matching comment above.
                 clearAutosaveNow()
+              }
+              if (!projectDepartureIsCurrent()) {
+                endProjectDeparture()
+                return 'cancel'
               }
               return 'proceed'
             }}
@@ -3581,6 +3744,7 @@ function Frame(): React.JSX.Element {
               void (async () => {
                 setBusy('opening project…')
                 try {
+                  if (!projectDepartureIsCurrent()) return
                   const result = await window.rifffApi.openLibrarySketch(name)
                   if (!result) return
                   const { state: loaded, pluginStates } = deserializeProject(
@@ -3589,6 +3753,8 @@ function Frame(): React.JSX.Element {
                   )
                   setBusy('loading…')
                   await warmStemCaches(loaded)
+                  if (!projectDepartureIsCurrent()) return
+                  invalidateShapeSession()
                   projectSessionEpochRef.current = crypto.randomUUID()
                   restoreState(loaded, pluginStates)
                   lastSavedJsonRef.current = dirtyCheckJson(loaded)
@@ -3596,20 +3762,28 @@ function Frame(): React.JSX.Element {
                 } catch (err) {
                   console.error('App: failed to open library sketch:', err)
                 } finally {
+                  endProjectDeparture()
                   setBusy(null)
                 }
               })()
             }}
             onOpenFromDisk={() => {
               void (async () => {
+                beginProjectDeparture()
                 const choice = await confirmDiscardIfDirty()
-                if (choice === 'cancel') return
+                if (choice === 'cancel') {
+                  endProjectDeparture()
+                  return
+                }
                 if (choice === 'save') {
-                  const saved = await handleSave()
+                  const saved = await handleSaveForDeparture()
                   // Save failed (handleSave already alerted) -- bail out
                   // rather than proceeding to the disk-open flow, which
                   // would replace the still-unsaved live project.
-                  if (!saved) return
+                  if (!saved) {
+                    endProjectDeparture()
+                    return
+                  }
                 } else {
                   // 'discard' -- see handleNew's matching comment above.
                   clearAutosaveNow()
@@ -3627,6 +3801,8 @@ function Frame(): React.JSX.Element {
                   // handler right above -- see its own comment history.
                   setBusy('loading…')
                   await warmStemCaches(loaded)
+                  if (!projectDepartureIsCurrent()) return
+                  invalidateShapeSession()
                   projectSessionEpochRef.current = crypto.randomUUID()
                   restoreState(loaded, pluginStates)
                   lastSavedJsonRef.current = dirtyCheckJson(loaded)
@@ -3634,6 +3810,7 @@ function Frame(): React.JSX.Element {
                 } catch (err) {
                   console.error('App: failed to open project from disk:', err)
                 } finally {
+                  endProjectDeparture()
                   setBusy(null)
                 }
               })()
@@ -3664,11 +3841,15 @@ function Frame(): React.JSX.Element {
             defaultName={newProjectModal.defaultName}
             defaultBpm={loadLastProjectTempo(initialState.bpm)}
             onCreate={commitNewProject}
-            onCancel={() => setNewProjectModal(null)}
+            onCancel={() => {
+              setNewProjectModal(null)
+              endProjectDeparture()
+            }}
           />
         )}
         {unsavedChangesPromptOpen && (
           <UnsavedChangesDialog
+            hasShapeChanges={shapeDirty}
             onSave={() => resolveUnsavedChangesPrompt('save')}
             onDiscard={() => resolveUnsavedChangesPrompt('discard')}
             onCancel={() => resolveUnsavedChangesPrompt('cancel')}
@@ -3780,6 +3961,27 @@ function Frame(): React.JSX.Element {
 }
 
 export default function App(): React.JSX.Element {
+  useEffect(() => {
+    const root = document.documentElement
+    function handleKeyDown(event: KeyboardEvent): void {
+      // Chromium can promote the element most recently clicked to
+      // `:focus-visible` when a Command shortcut begins. That produced a
+      // large outline around composite UI instead of communicating useful
+      // focus. Only Tab navigation should opt into the app's focus rings.
+      if (event.key === 'Tab') root.classList.add('ra-keyboard-navigation')
+    }
+    function handlePointerDown(): void {
+      root.classList.remove('ra-keyboard-navigation')
+    }
+    window.addEventListener('keydown', handleKeyDown, true)
+    window.addEventListener('pointerdown', handlePointerDown, true)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+      window.removeEventListener('pointerdown', handlePointerDown, true)
+      root.classList.remove('ra-keyboard-navigation')
+    }
+  }, [])
+
   return (
     <StoreProvider>
       <BusyProvider>

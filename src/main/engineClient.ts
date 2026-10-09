@@ -37,6 +37,7 @@ export class EngineClient {
   private recvBuf = Buffer.alloc(0)
   private pendingWaiters: {
     type: string
+    matches?: (payload: unknown) => boolean
     resolve: (payload: unknown) => void
     reject: (err: Error) => void
   }[] = []
@@ -50,6 +51,10 @@ export class EngineClient {
       socket.connect(port, '127.0.0.1', () => {
         socket.off('error', onError)
         socket.on('error', (err) => this.failAllWaiters(err))
+        socket.on('close', () => {
+          if (this.socket === socket) this.socket = null
+          this.failAllWaiters(new Error('engine connection closed'))
+        })
         socket.on('data', (chunk) => this.onData(chunk))
         this.socket = socket
         resolve()
@@ -58,6 +63,7 @@ export class EngineClient {
   }
 
   disconnect(): void {
+    this.failAllWaiters(new Error('engine client disconnected'))
     this.socket?.destroy()
     this.socket = null
   }
@@ -119,7 +125,9 @@ export class EngineClient {
       for (const cb of subs) cb(msg.payload)
     }
 
-    const waiterIdx = this.pendingWaiters.findIndex((w) => w.type === msg.type)
+    const waiterIdx = this.pendingWaiters.findIndex(
+      (w) => w.type === msg.type && (w.matches === undefined || w.matches(msg.payload))
+    )
     if (waiterIdx === -1) return // not something anyone's waiting for (e.g. a stray position-update)
     const [waiter] = this.pendingWaiters.splice(waiterIdx, 1)
     waiter.resolve(msg.payload)
@@ -164,25 +172,34 @@ export class EngineClient {
     type: string,
     payload: unknown,
     responseType: string,
-    timeoutMs = 30000
+    timeoutMs = 30000,
+    matches?: (payload: unknown) => boolean
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingWaiters = this.pendingWaiters.filter((w) => w.resolve !== resolve)
-        reject(new Error(`timed out waiting for "${responseType}" after ${timeoutMs}ms`))
-      }, timeoutMs)
-      this.pendingWaiters.push({
+      const waiter = {
         type: responseType,
-        resolve: (payload) => {
+        matches,
+        resolve: (responsePayload: unknown): void => {
           clearTimeout(timer)
-          resolve(payload)
+          resolve(responsePayload)
         },
-        reject: (err) => {
+        reject: (err: Error): void => {
           clearTimeout(timer)
           reject(err)
         }
-      })
-      this.send(type, payload)
+      }
+      const timer = setTimeout(() => {
+        this.pendingWaiters = this.pendingWaiters.filter((candidate) => candidate !== waiter)
+        reject(new Error(`timed out waiting for "${responseType}" after ${timeoutMs}ms`))
+      }, timeoutMs)
+      this.pendingWaiters.push(waiter)
+      try {
+        this.send(type, payload)
+      } catch (error) {
+        clearTimeout(timer)
+        this.pendingWaiters = this.pendingWaiters.filter((candidate) => candidate !== waiter)
+        reject(error)
+      }
     })
   }
 }

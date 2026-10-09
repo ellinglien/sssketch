@@ -11,7 +11,9 @@ class ShutdownAbort extends Error {}
 
 export interface PlaybackEngineHandle {
   client: EngineClient
-  sendLoadProject: (project: unknown) => void
+  /** Resolves only after the native engine has parsed and published this
+   * exact project, so callers may safely release temporary source files. */
+  sendLoadProject: (project: unknown) => Promise<void>
   /** Radio's scheduled swap: hands the engine a project NOW and asks it to
    * make it real at the next loop top -- or, with `atBars`, at that bar
    * of the current lap (IpcServer.cpp's stage-project handler). Deliberately a sibling of sendLoadProject rather than a flag
@@ -101,6 +103,7 @@ export async function startPlaybackEngine(
   let engineHandle: EngineHandle
   let client: EngineClient
   let lastProject: unknown = null
+  let loadToken = 0
   // Staged projects the engine has been handed but has not yet said it
   // applied, by token. Normally holds at most one -- the engine supersedes
   // an older stage with a newer one -- but it is a Map rather than a
@@ -184,13 +187,36 @@ export async function startPlaybackEngine(
     get client(): EngineClient {
       return client
     },
-    sendLoadProject(project: unknown) {
-      lastProject = project
+    async sendLoadProject(project: unknown): Promise<void> {
       // A load-project makes the engine drop whatever is staged
       // (resolveStagedBefore("load-project")), so nothing here can still
       // be waiting to become the live project.
       stagedProjects.clear()
-      client.send('load-project', project)
+      const token = ++loadToken
+      const result = await client.sendAndAwaitType(
+        'load-project',
+        { token, project },
+        'project-load-result',
+        30000,
+        (payload) =>
+          typeof payload === 'object' &&
+          payload !== null &&
+          (payload as { token?: unknown }).token === token
+      )
+      if (
+        typeof result !== 'object' ||
+        result === null ||
+        (result as { success?: unknown }).success !== true
+      ) {
+        const error =
+          typeof result === 'object' && result !== null
+            ? (result as { error?: unknown }).error
+            : undefined
+        throw new Error(typeof error === 'string' ? error : 'native engine rejected project')
+      }
+      // Crash recovery must only resurrect a snapshot the native process
+      // confirmed it actually published.
+      lastProject = project
     },
     sendStageProject(token: number, project: unknown, atBars?: number) {
       stagedProjects.set(token, project)

@@ -1839,6 +1839,46 @@ namespace sssketch
                 expect(cache.get(twiceFixture.getFullPathName()) != nullptr);
             }
 
+            beginTest("repeated Shape preview snapshots keep only the currently pinned buffer");
+            {
+                auto previewA = writeFixtureWav("sssketch_a.shape-preview.wav", 0.1f, 44100);
+                auto previewB = writeFixtureWav("sssketch_b.shape-preview.wav", 0.2f, 44100);
+                auto previewC = writeFixtureWav("sssketch_c.shape-preview.wav", 0.3f, 44100);
+                const auto projectFor = [](const juce::File& file) {
+                    EngineProject project;
+                    project.bpm = 60.0;
+                    project.snapDiv = 16.0;
+                    EngineRifff rifff;
+                    rifff.groupId = "shape-preview";
+                    rifff.channelId = "shape-preview";
+                    rifff.barLength = 1.0;
+                    EngineStem stem;
+                    stem.stemKey = "shape-preview:1";
+                    stem.resolvedPath = file.getFullPathName();
+                    stem.durationSec = 1.0;
+                    stem.barLength = 1.0;
+                    stem.playedBars = 1.0;
+                    rifff.stems.push_back(stem);
+                    project.rifffs.push_back(rifff);
+                    return project;
+                };
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(projectFor(previewA));
+                expectEquals((int) cache.entryCount(), 1);
+                engine.setProject(projectFor(previewB));
+                expectEquals((int) cache.entryCount(), 1);
+                expect(cache.get(previewA.getFullPathName()) == nullptr);
+                engine.setProject(projectFor(previewC));
+                expectEquals((int) cache.entryCount(), 1);
+                expect(cache.get(previewB.getFullPathName()) == nullptr);
+
+                previewA.deleteFile();
+                previewB.deleteFile();
+                previewC.deleteFile();
+            }
+
             beginTest("preloadStem degrades silently for a missing or empty path");
             {
                 StemBufferCache cache;

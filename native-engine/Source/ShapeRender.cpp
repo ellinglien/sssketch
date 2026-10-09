@@ -96,6 +96,9 @@ namespace sssketch
         }
         const int frames = (int) std::ceil(exactFrames);
         const int channels = source.getNumChannels();
+        const bool sourceAlreadySewn =
+            sourcePath.endsWithIgnoreCase(".shape.wav")
+            || sourcePath.endsWithIgnoreCase(".shape-preview.wav");
         juce::AudioBuffer<float> output(channels, frames);
         output.clear();
         std::vector<std::pair<int, int>> tiledSourceSeams;
@@ -159,21 +162,29 @@ namespace sssketch
             // Ordinary playback loop-sews every source tile once. Record
             // the same internal wrap points here so a short source repeated
             // inside a longer Shape lane cannot acquire new clicks.
-            double sourceWrap =
-                (std::floor(segment.sourceStartBars / sourceBarLength) + 1.0) * sourceBarLength;
             int sourceTileStartFrame = destStart;
-            while (!segment.reversed && sourceWrap < segment.sourceEndBars - kEps)
+            double sourceWrap = segment.reversed
+                ? std::floor((segment.sourceEndBars - kEps) / sourceBarLength) * sourceBarLength
+                : (std::floor(segment.sourceStartBars / sourceBarLength) + 1.0) * sourceBarLength;
+            const auto hasAnotherWrap = [&]() {
+                return segment.reversed
+                    ? sourceWrap > segment.sourceStartBars + kEps
+                    : sourceWrap < segment.sourceEndBars - kEps;
+            };
+            while (hasAnotherWrap())
             {
-                const double wrapDestBars =
-                    segment.destStartBars + sourceWrap - segment.sourceStartBars;
+                const double wrapDestBars = segment.reversed
+                    ? segment.destStartBars + segment.sourceEndBars - sourceWrap
+                    : segment.destStartBars + sourceWrap - segment.sourceStartBars;
                 const int wrapFrame =
                     (int) std::llround(wrapDestBars * secPerBar * sampleRate);
-                if (wrapFrame > 0 && wrapFrame < frames)
+                if (wrapFrame > destStart && wrapFrame < destEnd)
                 {
-                    tiledSourceSeams.push_back({ wrapFrame, wrapFrame - sourceTileStartFrame });
+                    if (!sourceAlreadySewn)
+                        tiledSourceSeams.push_back({ wrapFrame, wrapFrame - sourceTileStartFrame });
                     sourceTileStartFrame = wrapFrame;
                 }
-                sourceWrap += sourceBarLength;
+                sourceWrap += segment.reversed ? -sourceBarLength : sourceBarLength;
             }
             if (reachesOutputEnd)
                 outputTailStartFrame = sourceTileStartFrame;
@@ -218,7 +229,20 @@ namespace sssketch
         // The materialized file is marked as already sewn (StemBufferCache
         // recognizes Shape's private suffixes), so heal its outer loop once
         // here as well. This keeps preview and committed playback identical.
-        if (hasAudioAtLoopStart && hasAudioAtLoopEnd)
+        bool outerBoundaryAlreadySewn = false;
+        if (sourceAlreadySewn && hasAudioAtLoopStart && hasAudioAtLoopEnd)
+        {
+            const auto& first = segments.front();
+            const auto& last = segments.back();
+            const double firstBoundary = first.reversed ? first.sourceEndBars : first.sourceStartBars;
+            const double lastBoundary = last.reversed ? last.sourceStartBars : last.sourceEndBars;
+            double phaseDifference = std::fmod(lastBoundary - firstBoundary, sourceBarLength);
+            if (phaseDifference < 0.0)
+                phaseDifference += sourceBarLength;
+            outerBoundaryAlreadySewn = phaseDifference <= kEps
+                || std::abs(phaseDifference - sourceBarLength) <= kEps;
+        }
+        if (hasAudioAtLoopStart && hasAudioAtLoopEnd && !outerBoundaryAlreadySewn)
         {
             healShapeSeam(output, frames, 0, frames - outputTailStartFrame);
         }
