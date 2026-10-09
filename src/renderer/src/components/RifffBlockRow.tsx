@@ -205,8 +205,14 @@ export function RifffBlockRow({
       </div>
 
       {expanded ? (
-        rifff.stems.map((stem) => (
-          <StemWaveformRow key={stem.slot} groupId={groupId} slot={stem.slot} ppb={ppb} />
+        rifff.stems.map((stem, index) => (
+          <StemWaveformRow
+            key={stem.slot}
+            groupId={groupId}
+            slot={stem.slot}
+            ppb={ppb}
+            belowChannelButtons={index === 0}
+          />
         ))
       ) : (
         <CollapsedRifffRow groupId={groupId} selected={selected} />

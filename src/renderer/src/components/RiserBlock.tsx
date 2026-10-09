@@ -478,13 +478,14 @@ export function RiserBlock({
           </div>
         </div>
         {/* The riser's LEVEL, in the same place every other row keeps its
-            gain (RowGainDial, pinned at the row's right edge beside the m/s
-            letters) instead of a second knob in the block's corner. One row,
+            gain (RowGainDial, in the narrow mixer column beneath m/s)
+            instead of a second knob in the block's corner. One row,
             one level control. */}
         <RowGainDial
           target={{ kind: 'riser', riserId: riser.id }}
           defaultGain={RISER_DEFAULTS.level}
           ariaLabel={`level for ${riser.name}`}
+          belowChannelButtons
         />
       </div>
     </div>

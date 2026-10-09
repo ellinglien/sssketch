@@ -804,8 +804,8 @@ export function CollapsedRifffRow({
           )}
         </div>
 
-        {/* The whole rifff's gain, pinned to the right edge of the row
-            beside the channel's m/s letters. One dial for the group, same
+        {/* The whole rifff's gain, pinned below the channel's m/s letters in
+            the narrow mixer column. One dial for the group, same
             reason there's one mute button and one lane here: collapsing
             already hides per-stem detail. It writes SET_GROUP_VOLUME, so
             expanding afterwards shows per-stem dials that agree with it and
@@ -815,6 +815,7 @@ export function CollapsedRifffRow({
             target={{ kind: 'group', groupId, representativeStemKey: firstStemKey }}
             defaultGain={sqrtGain(rifff.stems.length)}
             ariaLabel={`gain for ${rifff.name}`}
+            belowChannelButtons
           />
         )}
       </div>

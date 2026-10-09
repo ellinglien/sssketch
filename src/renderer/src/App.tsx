@@ -30,6 +30,7 @@ import {
 } from './components/zoomMath'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
+import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './components/arrangementMixerRail'
 import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
 import { CrossPanel } from './components/CrossPanel'
@@ -2978,6 +2979,8 @@ function Frame(): React.JSX.Element {
             />
           </div>
         </div>
+        {/* Kept above the mode-specific Arrange / Map / Sketch content so
+            two-riff Shelf selection and Cross are available in all three. */}
         <Shelf
           onImported={handleImported}
           onOpenLibrary={openRiffLibrary}
@@ -3050,8 +3053,8 @@ function Frame(): React.JSX.Element {
                   zIndex: 4,
                   top: 0,
                   right: 0,
-                  bottom: 12,
-                  width: 72,
+                  bottom: 0,
+                  width: ARRANGEMENT_MIXER_RAIL_WIDTH,
                   boxSizing: 'border-box',
                   borderLeft: '1px solid var(--ra-border)',
                   background: 'color-mix(in srgb, var(--ra-bg-bar) 97%, transparent)',

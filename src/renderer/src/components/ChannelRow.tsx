@@ -17,6 +17,7 @@ import {
   usePlaying,
   useZoom
 } from '../state/StoreContext'
+import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './arrangementMixerRail'
 
 // The right-edge m/s/fx/r/x button stack (rendered further down, an
 // absolutely-positioned flex column with gap: 2, anchored at top: 4 from
@@ -542,13 +543,13 @@ function ChannelRowImpl({
         <div
           style={{
             position: 'absolute',
-            right: 4,
+            right: 0,
             top: 4,
-            width: 20,
+            width: ARRANGEMENT_MIXER_RAIL_WIDTH,
             boxSizing: 'border-box',
             display: 'flex',
             flexDirection: 'column',
-            alignItems: 'flex-end',
+            alignItems: 'center',
             gap: 3
           }}
         >

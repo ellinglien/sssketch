@@ -23,7 +23,8 @@ export const ROW_HEIGHT = 44
 export function StemWaveformRow({
   groupId,
   slot,
-  ppb
+  ppb,
+  belowChannelButtons = false
 }: {
   groupId: string
   slot: number
@@ -32,6 +33,7 @@ export function StemWaveformRow({
    * than read directly so every stem row in the arranger always agrees
    * with the Ruler/Playhead/clip blocks around it. */
   ppb: number
+  belowChannelButtons?: boolean
 }): React.JSX.Element {
   const dispatch = useDispatch()
   const playing = usePlaying()
@@ -532,7 +534,7 @@ export function StemWaveformRow({
           )}
         </div>
 
-        {/* This stem's own gain, pinned to the right edge of the row beside
+        {/* This stem's own gain, pinned into the narrow mixer column beneath
             the channel's m/s letters -- the LEVEL the clip's drawn volume
             curve (its shape) multiplies on top of. Outside the clip box on
             purpose: it belongs to the stem wherever that clip happens to
@@ -542,6 +544,7 @@ export function StemWaveformRow({
           target={{ kind: 'stem', stemKey: key }}
           defaultGain={sqrtGain(rifff.stems.length)}
           ariaLabel={`gain for ${stem.name}`}
+          belowChannelButtons={belowChannelButtons}
         />
       </div>
     </div>
