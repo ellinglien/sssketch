@@ -14,6 +14,7 @@ import {
 import { join, basename, resolve, sep } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { app, shell } from 'electron'
+import { noteSessionProjectText } from './reonedCopiesSession'
 
 const LIBRARY_PREFS_FILENAME = 'libraryPrefs.json'
 
@@ -428,6 +429,8 @@ export function restoreSketchBackup(
   // the oldest entry at the cap, that pruning can delete it, so capture its
   // small project JSON before rotating the current live file.
   const restoredBytes = readFileSync(resolvedBackup)
+  // The restored project is the sketch the renderer opens next (reonedCopiesSession).
+  noteSessionProjectText(restoredBytes.toString('utf-8'))
   rotateBackupBeforeOverwrite(name)
   writeFileAtomically(sketchProjectPath(name), restoredBytes)
   return { ok: true }
@@ -462,7 +465,9 @@ export function readSketchBackup(name: string, backupPath: string): string | nul
   const resolvedBackup = resolveBackupPathOrNull(name, backupPath)
   if (!resolvedBackup || !existsSync(resolvedBackup)) return null
   try {
-    return readFileSync(resolvedBackup, 'utf-8')
+    const json = readFileSync(resolvedBackup, 'utf-8')
+    noteSessionProjectText(json)
+    return json
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`readSketchBackup: failed to read ${resolvedBackup}: ${message}`)

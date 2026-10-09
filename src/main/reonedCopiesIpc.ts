@@ -12,7 +12,7 @@ import type { ReonedCleanResult, ReonedSurvey } from '@shared/reonedCleanup'
 import { rebuildReonedCopies } from './reonedRebuild'
 import { cleanBakes, collectUsedNames, surveyBakes, type UsedScan } from './reonedUsage'
 import { knownProjects, notNowUntil, setNotNow } from './reonedCopiesStore'
-import { sessionIssuedNames } from './reonedCopiesSession'
+import { sessionKeptNames } from './reonedCopiesSession'
 import { bakeAssetsDir, libraryRootPath } from './projectLibrary'
 import { AUTOSAVE_FILENAME, AUTOSAVE_PREVIOUS_FILENAME } from './projectFile'
 
@@ -54,7 +54,7 @@ function validBatches(value: unknown): ReonedRepairBatch[] {
 
 /** The used set from scratch: library projects and backups, the autosave and its aside
  * snapshot, remembered outside projects (read fresh), what the renderer holds, and this
- * session's copies. */
+ * session's copies and project names (read again inside the lock by cleanBakes). */
 function scanUsed(inMemoryNames: string[]): Promise<UsedScan> {
   const userData = app.getPath('userData')
   return collectUsedNames({
@@ -62,7 +62,7 @@ function scanUsed(inMemoryNames: string[]): Promise<UsedScan> {
     userDataFiles: [join(userData, AUTOSAVE_FILENAME), join(userData, AUTOSAVE_PREVIOUS_FILENAME)],
     knownProjects: knownProjects(),
     inMemoryNames,
-    sessionIssued: sessionIssuedNames()
+    sessionIssued: sessionKeptNames()
   })
 }
 

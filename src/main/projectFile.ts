@@ -10,6 +10,7 @@ import {
   libraryRootPath
 } from './projectLibrary'
 import { rememberExternalProject, renameKnownProject } from './reonedCopiesStore'
+import { noteSessionProjectText } from './reonedCopiesSession'
 
 /** Library projects are scanned for the re-oned copies they name at cleanup time; a project
  * anywhere else is remembered with its names (reonedCopiesStore.ts), so its copies stay kept
@@ -207,6 +208,8 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
   if (result.canceled || !result.filePath) return null
 
   try {
+    // Before the write: a clean running now keeps what this project names (reonedCopiesSession).
+    noteSessionProjectText(json)
     writeFileSync(result.filePath, json, 'utf-8')
     // The user's own file now has this exact content, so the crash-recovery
     // snapshot (see writeAutosave below) is redundant — clear it so a later
@@ -235,6 +238,7 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
  * caught and resolved as null. The caller (a later task's App.tsx Save
  * action) is expected to wrap this in its own try/catch. */
 export function saveProjectInPlace(path: string, json: string): void {
+  noteSessionProjectText(json)
   writeFileSync(path, json, 'utf-8')
   clearAutosave()
   // saveProjectToLibrary comes through here too: only a file outside the library is remembered.
@@ -286,7 +290,9 @@ export function openLibrarySketch(name: string): { path: string; json: string } 
   const path = sketchProjectPath(name)
   if (!existsSync(path)) return null
   try {
-    return { path, json: readFileSync(path, 'utf-8') }
+    const json = readFileSync(path, 'utf-8')
+    noteSessionProjectText(json)
+    return { path, json }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`openLibrarySketch: failed to read ${path}: ${message}`)
@@ -398,6 +404,7 @@ function setUndecidedAutosaveAside(): void {
  */
 export function writeAutosave(json: string): void {
   setUndecidedAutosaveAside()
+  noteSessionProjectText(json)
   try {
     writeFileSync(autosavePath(), json, 'utf-8')
   } catch (err) {
@@ -413,7 +420,11 @@ export function writeAutosave(json: string): void {
  * offered: it stays undecided (autosaveUndecided) until discardAutosave. */
 export function loadAutosave(): string | null {
   const json = readIfExists(autosavePath(), 'loadAutosave')
-  if (json !== null) autosaveUndecided = true
+  if (json !== null) {
+    autosaveUndecided = true
+    // Offered to the renderer: a recover may delete the file before a clean's scan reads it.
+    noteSessionProjectText(json)
+  }
   return json
 }
 
@@ -470,6 +481,7 @@ export function discardAutosave(): void {
 export function loadPreviousAutosave(): { json: string; sketchJson: string | null } | null {
   const json = readIfExists(previousAutosavePath(), 'loadPreviousAutosave')
   if (json === null) return null
+  noteSessionProjectText(json)
   return { json, sketchJson: readIfExists(previousAutosaveSketchPath(), 'loadPreviousAutosave') }
 }
 
@@ -496,6 +508,7 @@ export async function openProject(
   const path = result.filePaths[0]
   try {
     const json = readFileSync(path, 'utf-8')
+    noteSessionProjectText(json)
     if (!isInsideLibrary(path)) rememberExternalProject(path, json)
     return { path, json }
   } catch (err) {

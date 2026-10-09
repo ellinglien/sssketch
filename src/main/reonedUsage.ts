@@ -7,7 +7,7 @@ import { readdir, readFile, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CLEANUP_GRACE_MS } from '@shared/reonedCleanup'
 import { isReonedCopyFileName, isStaleTempFileName, reonedNamesInText } from '@shared/reonedNames'
-import { sessionIssuedNames, withReonedCopiesLock } from './reonedCopiesSession'
+import { sessionKeptNames, withReonedCopiesLock } from './reonedCopiesSession'
 import type { KnownProject } from './reonedCopiesStore'
 
 const SLICE_CHARS = 1_000_000
@@ -26,7 +26,8 @@ export interface UsedNameSources {
   knownProjects: KnownProject[]
   /** What the renderer holds: the open project, its undo history, Cross and Discover. */
   inMemoryNames: Iterable<string>
-  /** Copies main handed out this session (reonedCopiesSession.ts). */
+  /** Copies main handed out this session, and copies named by a project it handed out or wrote
+   * (reonedCopiesSession.ts's sessionKeptNames). */
   sessionIssued: Iterable<string>
 }
 
@@ -140,17 +141,19 @@ export async function surveyBakes(
 }
 
 /** Deletes the unused files, under the `.bakes` lock, so no bake can publish or hand out a copy
- * meanwhile. The names handed out this session are read inside the lock, not with the scan: a
- * copy a re-one reused after the scan (and before this got the lock) is then kept. The folder is
- * surveyed again inside the lock too, so the age is checked right before each delete. */
+ * meanwhile. This session's names (copies handed out, and copies named by any project opened,
+ * recovered or saved) are read inside the lock, not with the scan: a copy a re-one reused, or a
+ * project that reached the renderer, after the scan started (and before this got the lock) is
+ * then kept. The folder is surveyed again inside the lock too, so the age is checked right
+ * before each delete. */
 export function cleanBakes(
   bakesDir: string,
   used: ReadonlySet<string>,
   now: number,
-  issuedNames: () => Iterable<string> = sessionIssuedNames
+  sessionNames: () => Iterable<string> = sessionKeptNames
 ): Promise<{ freedBytes: number; deletedCount: number; failedCount: number }> {
   return withReonedCopiesLock(async () => {
-    const keep = new Set([...used, ...issuedNames()])
+    const keep = new Set([...used, ...sessionNames()])
     const { unused } = await surveyBakes(bakesDir, keep, now)
     let freedBytes = 0
     let deletedCount = 0
