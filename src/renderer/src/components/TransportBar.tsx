@@ -701,7 +701,7 @@ export function TransportBar({
             dispatch({ type: 'PLAY' })
           }
         }}
-        aria-label={playing ? 'Stop' : 'Play'}
+        aria-label={playing ? 'stop' : 'play'}
         style={{
           width: 22,
           height: 22,
@@ -734,7 +734,7 @@ export function TransportBar({
           // clicked to disable.
           disabled={!state.gatedRecordingEnabled && !state.loopRegion}
           aria-label={
-            state.gatedRecordingEnabled ? 'Disable gated recording' : 'Enable gated recording'
+            state.gatedRecordingEnabled ? 'disable gated recording' : 'enable gated recording'
           }
           title={
             state.gatedRecordingEnabled
@@ -807,7 +807,7 @@ export function TransportBar({
               })
             })
           }}
-          aria-label="Toggle metronome"
+          aria-label="toggle metronome"
           title={`${state.metronomeEnabled ? 'metronome: on' : 'metronome: off'} · ${Math.round(state.metronomeVolume * 100)}% · drag up/down for volume`}
           style={{
             height: 26,
@@ -854,7 +854,7 @@ export function TransportBar({
       >
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm - 1 })}
-          aria-label="Decrease tempo"
+          aria-label="decrease tempo"
           style={{
             width: 20,
             height: 20,
@@ -875,7 +875,7 @@ export function TransportBar({
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur()
           }}
-          aria-label="Tempo (BPM)"
+          aria-label="tempo (bpm)"
           style={{
             fontSize: 11,
             width: 44,
@@ -896,7 +896,7 @@ export function TransportBar({
         />
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm + 1 })}
-          aria-label="Increase tempo"
+          aria-label="increase tempo"
           style={{
             width: 20,
             height: 20,
@@ -917,7 +917,7 @@ export function TransportBar({
             void window.rifffApi.engineGetLinkStatus().then(setLinkStatus)
           })
         }}
-        aria-label="Toggle Ableton Link"
+        aria-label="toggle ableton link"
         data-tooltip="ableton link"
         style={{
           display: 'flex',
@@ -956,7 +956,7 @@ export function TransportBar({
       <button
         onClick={() => dispatch({ type: 'SET_AUTOMATION_LANES', on: !automationLanes })}
         disabled={!lanesAvailable}
-        aria-label="Toggle automation lanes"
+        aria-label="toggle automation lanes"
         data-tooltip={
           !lanesAvailable
             ? 'arrange view only'
@@ -982,7 +982,7 @@ export function TransportBar({
       {pluginsOn && (
         <button
           onClick={() => setMasterChainPanelOpen((open) => !open)}
-          aria-label="Toggle master chain panel"
+          aria-label="toggle master chain panel"
           data-tooltip="master plugin chain"
           style={{
             height: 22,
@@ -1005,7 +1005,7 @@ export function TransportBar({
 
       <button
         onClick={() => setSoundPanel((open) => (open === 'project' ? null : 'project'))}
-        aria-label="Toggle sound panel"
+        aria-label="toggle sound panel"
         data-tooltip="sound"
         style={{
           height: 22,
@@ -1048,7 +1048,7 @@ export function TransportBar({
       <button
         ref={settingsButtonRef}
         onClick={handleOpenSettingsMenu}
-        aria-label="Settings"
+        aria-label="settings"
         title="settings"
         style={{
           display: 'flex',

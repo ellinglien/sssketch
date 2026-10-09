@@ -593,7 +593,7 @@ export function BeatPicker({
       rifff.stems,
       bakeTargetGroupIds(state.rifffs, groupId)
     )
-    if (!results) setApplyError('Could not update every stem. Nothing was changed; try again.')
+    if (!results) setApplyError('could not update every stem. nothing was changed; try again.')
     return results !== null
   }
 
@@ -1118,7 +1118,7 @@ export function BeatPicker({
                   })
                 })
               }}
-              aria-label="Toggle metronome click"
+              aria-label="toggle metronome click"
               title={`${metronomeOn ? 'metronome click: on' : 'metronome click: off'} · ${Math.round(state.metronomeVolume * 100)}% · drag up/down for volume`}
               style={{
                 display: 'flex',

@@ -1078,7 +1078,7 @@ export function LibraryBrowser({
         : 'remove it from sync (any already-downloaded audio stays on disk)'
       if (
         !window.confirm(
-          `Really ${consequence} for "${jamName}"? Re-syncing it later will re-download everything from Endlesss from scratch.`
+          `really ${consequence} for "${jamName}"? re-syncing it later will re-download everything from endlesss from scratch.`
         )
       ) {
         return
@@ -1106,7 +1106,7 @@ export function LibraryBrowser({
         })
         .catch((err) => {
           console.error('LibraryBrowser: riffLibraryRemoveJamSync() failed:', err)
-          alert(`Couldn't remove "${jamName}" from sync — see the console for details.`)
+          alert(`couldn't remove "${jamName}" from sync — see the console for details.`)
         })
     },
     [syncingKeys, jamFilter, riffLibraryUsername, selectedJamCID]
@@ -1623,7 +1623,7 @@ export function LibraryBrowser({
     if (
       hasRealContent &&
       !window.confirm(
-        "Replace the current Discover loop with this riff's stems? Whatever you've built so far in Discover will be lost."
+        "replace the current discover loop with this riff's stems? whatever you've built so far in discover will be lost."
       )
     ) {
       return

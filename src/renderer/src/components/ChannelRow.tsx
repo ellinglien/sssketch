@@ -363,7 +363,7 @@ function ChannelRowImpl({
             })
           }
         } else if (result.error) {
-          window.alert(`Recording failed: ${result.error}`)
+          window.alert(`recording failed: ${result.error}`)
         } else {
           // committed: false with no error -- no minimum-length
           // requirement anymore (LoopRecorder.hasAnyAudio() just checks
@@ -375,7 +375,7 @@ function ChannelRowImpl({
           // manual testing: an old take just sitting there, revealed once
           // the live overlay disappears, read as "it recorded the wrong
           // thing" rather than "it recorded nothing."
-          window.alert('Nothing recorded.')
+          window.alert('nothing recorded.')
         }
       } else {
         if (!selectedInputDevice || !loopRegion) return
@@ -404,7 +404,7 @@ function ChannelRowImpl({
             dispatch({ type: 'PLAY' })
           }
         } else {
-          window.alert(`Failed to arm recording: ${result.error ?? 'unknown error'}`)
+          window.alert(`failed to arm recording: ${result.error ?? 'unknown error'}`)
         }
       }
     } catch (err) {
@@ -414,7 +414,7 @@ function ChannelRowImpl({
       // visibly instead of leaving an unhandled rejection and a channel
       // stuck mid-toggle with no user-facing feedback.
       console.error('ChannelRow: arm/disarm toggle failed:', err)
-      window.alert(`Recording action failed: ${err instanceof Error ? err.message : String(err)}`)
+      window.alert(`recording action failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setTogglingArm(false)
     }
@@ -433,7 +433,7 @@ function ChannelRowImpl({
   // each other (e.g. removing mid-arm/disarm, or double-clicking remove).
   async function handleRemoveRecordingChannel(): Promise<void> {
     if (togglingArm) return
-    if (!window.confirm('Remove this recording channel?')) return
+    if (!window.confirm('remove this recording channel?')) return
     if (isArmed) {
       setTogglingArm(true)
       try {
@@ -445,13 +445,13 @@ function ChannelRowImpl({
           // may still be actively recording into a channel nothing in the
           // UI references anymore.
           window.alert(
-            `Channel removed, but the engine may still be recording (disarm failed: ${result.error}). Restart if audio behaves oddly.`
+            `channel removed, but the engine may still be recording (disarm failed: ${result.error}). restart if audio behaves oddly.`
           )
         }
       } catch (err) {
         console.error('ChannelRow: failed to disarm before removing channel:', err)
         window.alert(
-          `Channel removed, but the engine may still be recording (disarm failed: ${err instanceof Error ? err.message : String(err)}). Restart if audio behaves oddly.`
+          `channel removed, but the engine may still be recording (disarm failed: ${err instanceof Error ? err.message : String(err)}). restart if audio behaves oddly.`
         )
       } finally {
         setTogglingArm(false)

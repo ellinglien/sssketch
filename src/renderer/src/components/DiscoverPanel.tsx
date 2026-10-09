@@ -13719,7 +13719,7 @@ export function DiscoverPanel({
             <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tempo</span>
             <button
               onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm - 1 })}
-              aria-label="Decrease tempo"
+              aria-label="decrease tempo"
               style={{
                 width: 18,
                 height: 18,
@@ -13742,7 +13742,7 @@ export function DiscoverPanel({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur()
               }}
-              aria-label="Tempo (BPM)"
+              aria-label="tempo (bpm)"
               style={{
                 fontSize: 10,
                 width: 36,
@@ -13758,7 +13758,7 @@ export function DiscoverPanel({
             />
             <button
               onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm + 1 })}
-              aria-label="Increase tempo"
+              aria-label="increase tempo"
               style={{
                 width: 18,
                 height: 18,
@@ -13777,7 +13777,7 @@ export function DiscoverPanel({
               <button
                 onClick={() => dispatch({ type: 'SET_TEMPO', bpm: seedTempo })}
                 title={`seed tempo ${seedTempo} bpm`}
-                aria-label="Match seeded riff's own tempo"
+                aria-label="match seeded riff's own tempo"
                 style={{
                   height: 18,
                   padding: '0 6px',

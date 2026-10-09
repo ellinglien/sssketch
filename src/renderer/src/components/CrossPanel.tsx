@@ -1162,7 +1162,7 @@ export function CrossPanel({
           className="ra-cross-button"
           data-active={playing}
           onClick={() => (playing ? dispatch({ type: 'PAUSE' }) : void playTarget(selectedTarget))}
-          aria-label={playing ? 'pause Cross' : 'play Cross'}
+          aria-label={playing ? 'pause cross' : 'play cross'}
         >
           {playing ? '■' : '▶'}
         </button>
@@ -1171,7 +1171,7 @@ export function CrossPanel({
         <button
           className="ra-cross-button"
           onClick={() => changeTempo(draft.targetBpm - 1)}
-          aria-label="Decrease tempo"
+          aria-label="decrease tempo"
         >
           −
         </button>
@@ -1188,7 +1188,7 @@ export function CrossPanel({
         <button
           className="ra-cross-button"
           onClick={() => changeTempo(draft.targetBpm + 1)}
-          aria-label="Increase tempo"
+          aria-label="increase tempo"
         >
           +
         </button>
@@ -1253,7 +1253,7 @@ export function CrossPanel({
           className="ra-cross-button ra-cross-close"
           onClick={onBack}
           disabled={!!committing}
-          aria-label="close Cross"
+          aria-label="close cross"
           title="close"
         >
           ×

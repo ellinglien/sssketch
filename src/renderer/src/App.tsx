@@ -725,7 +725,7 @@ function ProjectMenu({
       await window.rifffApi.saveProject(await serializeForSave())
     } catch (err) {
       console.error('ProjectMenu: failed to save a copy elsewhere:', err)
-      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+      window.alert(`save failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -743,7 +743,7 @@ function ProjectMenu({
       markSaved(touchedVersion)
     } catch (err) {
       console.error('ProjectMenu: failed to duplicate sketch as a new version:', err)
-      window.alert(`Duplicate failed: ${err instanceof Error ? err.message : String(err)}`)
+      window.alert(`duplicate failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -766,7 +766,7 @@ function ProjectMenu({
       // Export now has exactly one code path (the native engine, with no Web
       // Audio fallback) — a spawn/render failure here would otherwise reset
       // the button with zero visible indication anything went wrong.
-      window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+      window.alert(`export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setExporting(false)
     }
@@ -809,7 +809,7 @@ function ProjectMenu({
           if (
             warn &&
             !window.confirm(
-              "This sketch's Ableton export has been modified since the last export from sssketch (likely from mixing directly in Ableton). Exporting again will overwrite it. Continue?"
+              "this sketch's ableton export has been modified since the last export from sssketch (likely from mixing directly in ableton). exporting again will overwrite it. continue?"
             )
           ) {
             return
@@ -868,7 +868,7 @@ function ProjectMenu({
       if (wrote) markV1Exported()
     } catch (err) {
       console.error(`ProjectMenu: failed to export (${format}):`, err)
-      window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+      window.alert(`export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setExporting(false)
     }
@@ -1013,7 +1013,7 @@ function ProjectMenu({
           const rect = e.currentTarget.getBoundingClientRect()
           setGearMenu({ x: rect.left, y: rect.bottom + 4 })
         }}
-        aria-label="More arranger options"
+        aria-label="more arranger options"
         title="tidy options"
         data-tour-id="tour-tidy"
         style={{
@@ -2172,7 +2172,7 @@ function Frame(): React.JSX.Element {
     const hasExistingContent = Object.keys(state.rifffs).length > 0
     if (
       hasExistingContent &&
-      !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
+      !window.confirm('start the tour? this adds a demo rifff to your current sketch.')
     ) {
       return
     }
@@ -2285,7 +2285,7 @@ function Frame(): React.JSX.Element {
     if (
       hasRealContent &&
       !window.confirm(
-        "Replace the current Discover loop with this riff's stems? Whatever you've built so far in Discover will be lost."
+        "replace the current discover loop with this riff's stems? whatever you've built so far in discover will be lost."
       )
     ) {
       return
@@ -2311,7 +2311,7 @@ function Frame(): React.JSX.Element {
       return
     }
     if (!seedRifff) {
-      window.alert('Could not prepare every stem for Discover. Nothing was changed; try again.')
+      window.alert('could not prepare every stem for discover. nothing was changed; try again.')
       return
     }
 
@@ -2359,7 +2359,7 @@ function Frame(): React.JSX.Element {
         )
       )
       if (!prepared[0] || !prepared[1]) {
-        window.alert('Could not prepare every stem for Cross. Nothing was changed; try again.')
+        window.alert('could not prepare every stem for cross. nothing was changed; try again.')
         return
       }
       setCrossDraft({
@@ -2378,7 +2378,7 @@ function Frame(): React.JSX.Element {
     } catch (err) {
       console.error('App: failed to prepare selected riffs for Cross:', err)
       window.alert(
-        'Could not prepare the selected riffs for Cross. Nothing was changed; try again.'
+        'could not prepare the selected riffs for cross. nothing was changed; try again.'
       )
     } finally {
       setBusy(null)
@@ -3246,7 +3246,7 @@ function Frame(): React.JSX.Element {
             Inspector's current state. */}
           <button
             onClick={() => dispatch({ type: 'TOGGLE_INSPECTOR_COLLAPSED' })}
-            aria-label="Toggle inspector panel"
+            aria-label="toggle inspector panel"
             title={state.inspectorCollapsed ? 'show inspector' : 'hide inspector'}
             style={{
               flex: 'none',
@@ -3539,7 +3539,7 @@ function Frame(): React.JSX.Element {
                 const hasExistingContent = Object.keys(state.rifffs).length > 0
                 if (
                   hasExistingContent &&
-                  !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
+                  !window.confirm('start the tour? this adds a demo rifff to your current sketch.')
                 ) {
                   return
                 }
