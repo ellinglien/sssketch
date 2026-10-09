@@ -105,10 +105,15 @@ export function samplesCacheDir(): string {
   return join(libraryRootPath(), '.samples-cache')
 }
 
-/** Durable derived audio created by the re-one/downbeat baker. Despite the
- * dot-prefix this is not an evictable cache: saved projects may reference
- * these immutable files indefinitely. Keeping them under the relocatable
- * project-library root avoids writing beside read-only LORE/archive audio. */
+/** The re-oned stem copies the re-one baker writes: a rebuildable cache.
+ * Each copy is named by its recipe (reonedRecipe.ts), a missing one that a
+ * project names is rebuilt from the stem's lineage on open and before export
+ * (reonedRebuild.ts), and the cleanup deletes only copies no project, backup,
+ * snapshot or session names that are more than a day old (reonedUsage.ts).
+ * `root` defaults to the library root; the cleanup passes the one it resolved,
+ * so its scan and its delete are about the same library. Under the
+ * relocatable project-library root, so nothing is written beside read-only
+ * LORE/archive audio. */
 export function bakeAssetsDir(root: string = libraryRootPath()): string {
   return join(root, '.bakes')
 }
