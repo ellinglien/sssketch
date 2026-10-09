@@ -8,6 +8,7 @@ import { materializeStemsForExport } from './exportAudioMaterialization'
 import { renderToolkitAudio } from './exportToolkitAudio'
 import { sketchReaperDir } from './projectLibrary'
 import type { ToolkitExportMode } from '@shared/toolkit'
+import { createStemExportFileNameAllocator, externalDawExportLocation } from './exportFileNames'
 
 /**
  * Materializes every placed stem's source audio into
@@ -31,11 +32,13 @@ export async function buildAndWriteRppProject(
 ): Promise<void> {
   // Before materializing, same as the Ableton path: a baked clip gets no dry
   // copy.
-  const toolkitAudio = await renderToolkitAudio(state, outputDir, toolkitMode)
+  const uniqueFileName = createStemExportFileNameAllocator()
+  const toolkitAudio = await renderToolkitAudio(state, outputDir, toolkitMode, uniqueFileName)
   const { stemFileNames } = await materializeStemsForExport(
     state,
     outputDir,
-    new Set(toolkitAudio.bakedClips.keys())
+    new Set(toolkitAudio.bakedClips.keys()),
+    uniqueFileName
   )
   const rppText = buildRppProject(state, stemFileNames, { mode: toolkitMode, toolkitAudio })
   writeFileSync(join(outputDir, `${projectName}.rpp`), rppText, 'utf-8')
@@ -66,17 +69,17 @@ export async function exportReaperToLibrary(
  * Same no-dialog, always-named-after-the-project export as
  * exportReaperToLibrary above, for a sketch that's real and has a known
  * file location but isn't a library sketch -- an external .sssketchproj
- * path. Mirrors exportAbletonNextToSource exactly.
+ * path. Each source gets its own
+ * `<source directory>/Reaper/<project name>/` folder. As on the Ableton
+ * path, it is not recursively cleared without proof of directory ownership.
  */
 export async function exportReaperNextToSource(
   state: AppState,
   sourcePath: string,
   toolkitMode: ToolkitExportMode = 'bake'
 ): Promise<void> {
-  const projectName = basename(sourcePath, '.sssketchproj')
-  const reaperDir = join(dirname(sourcePath), 'Reaper')
+  const { projectName, outputDir: reaperDir } = externalDawExportLocation(sourcePath, 'Reaper')
   mkdirSync(reaperDir, { recursive: true })
-  rmSync(join(reaperDir, 'Samples', 'Imported'), { recursive: true, force: true })
   await buildAndWriteRppProject(state, reaperDir, projectName, toolkitMode)
   await shell.openPath(reaperDir)
 }
