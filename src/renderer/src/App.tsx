@@ -100,6 +100,9 @@ import { StemsUnavailableIndicator } from './components/StemsUnavailableIndicato
 import { PluginsHeldNotice, PluginsOffNotice } from './components/PluginsOffNotice'
 import { ReonedCopyMissingNotice } from './components/ReonedCopyMissingNotice'
 import { ReonedCopiesNotice } from './components/ReonedCopiesNotice'
+import { ReoneNotice } from './components/ReoneNotice'
+import { showReoneNotice } from './state/reoneNotice'
+import { reoneSiblings, siblingsNotReonedText } from '@shared/reoneNotices'
 import { StartupGate } from './components/StartupGate'
 import { OwnUsernameReporter } from './components/OwnUsernameReporter'
 import { markManualSeek } from './state/manualSeek'
@@ -3117,6 +3120,7 @@ function Frame(): React.JSX.Element {
       <PluginsHeldNotice />
       <ReonedCopyMissingNotice />
       <ReonedCopiesNotice />
+      <ReoneNotice />
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the
@@ -3337,14 +3341,19 @@ function Frame(): React.JSX.Element {
               if (wasBatchImport) setRiffLibraryOpen(false)
             }}
             onBaked={(steps) => {
-              const siblingGroupIds = pickerBatchGroupIds.filter((id) => id !== pickerGroupId)
-              for (const siblingGroupId of siblingGroupIds) {
-                const siblingRifff = state.rifffs[siblingGroupId]
-                if (!siblingRifff) continue
-                void bakeStems(dispatch, steps, SNAP_DIVS[state.snapIdx], siblingRifff.stems, [
-                  siblingGroupId
-                ])
-              }
+              const siblings = pickerBatchGroupIds
+                .filter((id) => id !== pickerGroupId)
+                .flatMap((id) => (state.rifffs[id] ? [state.rifffs[id]] : []))
+              if (siblings.length === 0) return
+              const batchSize = pickerBatchGroupIds.length
+              const snapDiv = SNAP_DIVS[state.snapIdx]
+              // Each sibling is its own all-or-nothing bake; one that fails stays wholly at its
+              // original phase, so it is named rather than left to a console line.
+              void reoneSiblings(siblings, (sibling) =>
+                bakeStems(dispatch, steps, snapDiv, sibling.stems, [sibling.groupId])
+              ).then((failed) => {
+                if (failed.length > 0) showReoneNotice(siblingsNotReonedText(failed, batchSize))
+              })
             }}
           />
         )}
