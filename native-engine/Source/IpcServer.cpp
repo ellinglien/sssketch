@@ -336,6 +336,17 @@ namespace sssketch
         sendMessage(block);
     }
 
+    void IpcConnection::playSupersedingStops(double fromPos)
+    {
+        // Play explicitly wins over an in-flight stop fade. Resolve any
+        // silence waiters as cancelled now, rather than leaving them to
+        // time out while the transport keeps playing.
+        stopTimer(kHaltAckTimerId);
+        for (const int token : takeSupersededHaltAcks(pendingHaltAcks))
+            sendTransportStopped(token, false);
+        transport.play(fromPos);
+    }
+
     void IpcConnection::sendTransportStopped(int token, bool stopped)
     {
         juce::DynamicObject::Ptr payload = new juce::DynamicObject();
@@ -708,15 +719,8 @@ namespace sssketch
         }
         else if (type == "play")
         {
-            // Play explicitly wins over an in-flight stop fade. Resolve any
-            // silence waiters as cancelled now, rather than leaving them to
-            // time out while the transport keeps playing.
-            stopTimer(kHaltAckTimerId);
-            for (const auto& pending : pendingHaltAcks)
-                sendTransportStopped(pending.token, false);
-            pendingHaltAcks.clear();
             const double fromPos = payload.isObject() ? (double) payload.getProperty("fromPos", 0.0) : 0.0;
-            transport.play(fromPos);
+            playSupersedingStops(fromPos);
             // ~33ms (~30Hz) position-update push rate — matches the renderer's
             // existing ~60fps rAF poll closely enough for a smooth playhead
             // without flooding the socket. kLinkPollTimerId is untouched here
@@ -995,7 +999,7 @@ namespace sssketch
                 // for "the take starts now." Calling this every arm (even if
                 // already playing) is intentional: it guarantees capture and
                 // the audible backing track are aligned to the same instant.
-                transport.play(startBar);
+                playSupersedingStops(startBar);
                 transport.setLoopRecorder(armedRecorder.get());
                 payloadObj->setProperty("success", true);
             }

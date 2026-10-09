@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace sssketch
 {
@@ -60,5 +61,19 @@ namespace sssketch
         }
         // Unsigned subtraction: correct across the millisecond counter's wrap.
         return (std::uint32_t) (nowMs - wait.lastAdvanceMs) >= stallMs;
+    }
+
+    /** A Play supersedes every stop still waiting for silence: it will not be
+     * silent now, so each is answered stopped=false at once rather than left
+     * to time out while the transport plays. Returns their tokens in request
+     * order and empties `pending`. */
+    inline std::vector<int> takeSupersededHaltAcks(std::vector<HaltAckWait>& pending)
+    {
+        std::vector<int> tokens;
+        tokens.reserve(pending.size());
+        for (const auto& wait : pending)
+            tokens.push_back(wait.token);
+        pending.clear();
+        return tokens;
     }
 }

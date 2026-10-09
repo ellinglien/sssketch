@@ -56,6 +56,10 @@ namespace sssketch
     private:
         void sendJson(const juce::var& payload);
         void sendTransportStopped(int token, bool stopped);
+        // transport.play(fromPos), answering every stop still waiting for
+        // silence as superseded first. Both play sites ("play" and
+        // "arm-recording") go through it, so neither leaves a waiter to time out.
+        void playSupersedingStops(double fromPos);
         // timerID is one of kPositionTimerId/kLinkPollTimerId/
         // kHaltAckTimerId (IpcServer.cpp) --
         // see this class's own doc comment above for why this is a MultiTimer

@@ -57,6 +57,15 @@ namespace sssketch
                     expect(haltAckDue(wait, 0, true, 10, 0x00000100u, 250));
                 }
 
+                beginTest("a play takes every waiting stop, in request order, to answer superseded");
+                {
+                    std::vector<HaltAckWait> pending { { 3, 5, 10, 1000 }, { 7, 6, 10, 1000 } };
+                    const auto tokens = takeSupersededHaltAcks(pending);
+                    expect(tokens == std::vector<int> { 3, 7 });
+                    expect(pending.empty());
+                    expect(takeSupersededHaltAcks(pending).empty());
+                }
+
                 beginTest("the stall window is three blocks, never under 250 ms");
                 {
                     expectEquals((int) haltAckStallMs(512, 44100.0), 250);
