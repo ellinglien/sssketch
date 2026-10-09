@@ -44,7 +44,7 @@ export function applyLoopMicroFadeToChannel(
 }
 
 /** Returns a COPY of `buf` (never mutates the original — callers may reuse
- * it elsewhere, e.g. BeatPicker's spectrogram analysis) with the loop-sewing
+ * it elsewhere, e.g. BeatPicker's waveform lanes) with the loop-sewing
  * blend applied to every channel, ending exactly at `loopEndSec`. `windowSec`
  * defaults to ~2.9ms (128 samples at 44.1kHz) — OUROVEON's own literal
  * value (Stem::applyLoopSewingBlend, src/r3.endlesss/endlesss/live.stem.cpp,

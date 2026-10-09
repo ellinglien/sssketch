@@ -8,8 +8,8 @@ export interface PitchContourOptions {
   windowSize?: number
   /** Frame spacing, in the ORIGINAL sample domain — independent of
    * windowSize, so overlapping windows are normal. Should match whatever
-   * x-axis timing the caller is positioning frames against (BeatPicker
-   * computes each frame's x position as `t * hopSize / totalSamples`).
+   * x-axis timing the caller is positioning frames against (frame t sits
+   * at `t * hopSize / totalSamples` of the signal).
    * Default 1024. */
   hopSize?: number
   /** Fundamental frequency search range. Default 60-2000Hz covers typical

@@ -22,6 +22,7 @@
 - Shelf previews take ownership of playback instead of layering over the running arrangement, and their highlighting is easier to see.
 - Import browsing preserves the selected jam while moving back and forth, and clicking an already-playing import preview stops it.
 - A re-one now bakes from the stem's original audio.
+- The re-one picker draws each stem as a waveform in its own colour, like everywhere else, instead of a spectrogram with a pitch line. The waveform is finer than the arranger's, so drum hits and note onsets stand out as separate spikes.
 
 ### Fixed
 

@@ -13,43 +13,20 @@ import { stemColorVar } from '../theme/typeColor'
 import { stemKey, type Stem } from '@shared/types'
 import { bakeTargetGroupIds, placedClipsSharingStems } from '@shared/bakePropagation'
 import { evictStemAnalysis } from '../audio/evictStemAnalysis'
-import { computeSpectrogram, type Spectrogram } from '@shared/spectrogram'
-import { computePitchContour } from '@shared/pitchContour'
-import { octaveGridlines } from '@shared/noteNames'
-import { SpectrogramCanvas } from './SpectrogramCanvas'
+import { getDetailWaveform } from '../audio/detailPeakCache'
+import { waveformMaskDataUrl } from '@shared/waveformMaskSvg'
+import { WaveformMaskTiles } from './RepeatedWaveform'
+import { reOneLaneLayout } from './reOneLane'
 import { LoadingLoader } from './LoadingLoader'
 import { reOneMarkerModel } from './reOneMarker'
 import { startPointerDrag } from './dragUtils'
 import { metronomeVolumeFromDrag } from './metronomeVolume'
 
-// Shared frequency range/resolution for every stem's spectrogram lane —
-// explicit here (rather than relying on computeSpectrogram's own defaults)
-// so the note gridlines and pitch contour overlays, which need this same
-// range to place themselves correctly, can't silently drift out of sync
-// with it.
-const SPECTROGRAM_MIN_FREQ_HZ = 40
-const SPECTROGRAM_MAX_FREQ_HZ = 8000
-const SPECTROGRAM_NUM_FREQ_BINS = 64
-const SPECTROGRAM_DYNAMIC_RANGE_DB = 45
-const PITCH_HOP_SIZE = 1024
-const NOTE_GRIDLINES = octaveGridlines(SPECTROGRAM_MIN_FREQ_HZ, SPECTROGRAM_MAX_FREQ_HZ)
-
-/** Where a frequency lands vertically within a lane, as a percentage from
- * the top — must match SpectrogramCanvas's own low-frequency-at-the-bottom
- * flip (see its doc comment) for the gridlines/contour to actually line up
- * with the spectrogram bands drawn underneath them. */
-function freqToTopPct(freqHz: number): number {
-  const logMin = Math.log2(SPECTROGRAM_MIN_FREQ_HZ)
-  const logMax = Math.log2(SPECTROGRAM_MAX_FREQ_HZ)
-  const frac = (Math.log2(freqHz) - logMin) / (logMax - logMin)
-  return (1 - Math.max(0, Math.min(1, frac))) * 100
-}
-
 /**
  * Endlesss stems are internally beat-locked, but a rifff's declared bar length can
  * be off by a few beats relative to the timeline's bar boundary. Framed to the user
  * as "re-one" — find the beginning of the loop, not a numeric offset entry: every
- * stem gets its own spectrogram lane (all layers visible at once, not just a
+ * stem gets its own waveform lane (all layers visible at once, not just a
  * combined mix) with a beat grid overlaid, and the user clicks whichever beat is
  * where the loop actually starts. offsetStepsForBeatIndex converts that click into
  * the shift needed to land it on the clip's timeline start.
@@ -285,40 +262,43 @@ export function BeatPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately mount-only: re-running on every `playing` change would re-pause every time the main arrangement is resumed while this picker happens to still be open, which is never the intent
   }, [])
 
-  // One spectrogram per stem, each spanning the whole rifff's own bar length
-  // — not just the identity stem's own (possibly much shorter) native loop.
-  // Real bug this fixed (back when this was a single combined waveform):
-  // a rifff whose identity stem (stems[0]) was a short 4-bar drum loop, but
-  // with other stems running much longer, only ever showed/gridded those 4
-  // bars — hiding most of the loop (and wherever ITS downbeat-relevant
-  // transients were) from the picker entirely. secPerBar is derived from the
-  // identity stem's own known duration/barLength (every stem in a rifff is
-  // beat-locked to the same clock, so this is exactly the rifff's own
-  // tempo), matching schedulePlayback.ts's identical derivation. Each stem
-  // is tiled across that full span by repeating its own buffer from the
-  // start (`i % data.length`), the same way computeStemSchedule tiles a
-  // shorter stem across a longer rifff — so every lane stays aligned to the
-  // same beat grid the picker's gridlines are drawn against. Kept as
-  // separate per-stem spectrograms (rather than one combined mix) so the
-  // layers are visible together instead of summed into one blur — the whole
-  // point of "see where the loops happen in the melody" across all of them
-  // at once.
+  // One waveform lane per stem, each spanning the whole rifff's own bar
+  // length — not just the identity stem's own (possibly much shorter)
+  // native loop. Real bug this fixed (back when this was a single combined
+  // waveform): a rifff whose identity stem (stems[0]) was a short 4-bar drum
+  // loop, but with other stems running much longer, only ever showed/gridded
+  // those 4 bars — hiding most of the loop (and wherever ITS
+  // downbeat-relevant transients were) from the picker entirely. A stem
+  // shorter than the rifff is tiled across it, as the arranger tiles a stem
+  // across a clip, so every lane stays aligned to the same beat grid the
+  // picker's gridlines are drawn against (reOneLane.ts). Kept as separate
+  // per-stem lanes (rather than one combined mix) so the layers are visible
+  // together instead of summed into one blur.
   //
-  // Computed via an effect (not useMemo) specifically so each stem's work
-  // can be chunked with a real yield between stems: computeSpectrogram and
-  // computePitchContour are both plain synchronous nested loops (see their
-  // own files under src/shared/), and a rifff with several stems running
-  // all of them back-to-back in one synchronous pass blocks the main thread
-  // long enough to visibly stutter the "loading…" animation below —
-  // confirmed live. `await new Promise((r) => setTimeout(r, 0))` between
-  // stems hands control back to the browser to paint/animate before the
-  // next stem's computation starts; a microtask (Promise.resolve().then)
-  // would NOT do this, since only a macrotask actually yields to rendering.
-  const [stemSpectrograms, setStemSpectrograms] = useState<
+  // Drawn as waveforms in the stem's colour, the same bars the arranger and
+  // Discover draw (2026-10-09: the spectrogram lanes this replaced didn't
+  // match the waveforms everywhere else, and weren't more help finding the
+  // downbeat). Finer than the shared 128-bucket peaks, though — see
+  // detailPeakCache.ts — so a drum hit or note onset reads as its own
+  // spike at the picker's zoom. Built from the buffers already decoded for
+  // preview playback, so nothing is decoded twice.
+  //
+  // Computed via an effect (not useMemo) so each stem's work is chunked
+  // with a real yield between stems: the peak pass is a plain synchronous
+  // loop over every sample, and a rifff with several long stems running
+  // back-to-back in one pass can block the main thread long enough to
+  // visibly stutter the "loading…" animation below. `await new
+  // Promise((r) => setTimeout(r, 0))` between stems hands control back to
+  // the browser to paint/animate before the next stem's computation
+  // starts; a microtask (Promise.resolve().then) would NOT do this, since
+  // only a macrotask actually yields to rendering.
+  const [stemLanes, setStemLanes] = useState<
     | {
         stem: Stem
-        spectrogram: Spectrogram
-        pitchPathD: string
+        /** One repeat of this stem's waveform (waveformMaskSvg.ts). */
+        maskUrl: string
+        /** One repeat, as a percentage of the lane's width. */
+        tileWidthPct: number
         /** Where this stem's own native loop repeats within the full
          * rifff-spanning lane, as percentages of the lane's width — one entry
          * per internal repeat boundary (excludes the very start, same as
@@ -336,71 +316,32 @@ export function BeatPicker({
     // doesn't read as a synchronous setState-in-effect -- same established
     // workaround as EndlesssLibraryBrowser.tsx's own sync-status effects.
     void Promise.resolve().then(() => {
-      if (!cancelled) setStemSpectrograms(null)
+      if (!cancelled) setStemLanes(null)
     })
     if (!rifff || !stem) return
-    const identityBuf = buffers[stem.slot]
-    if (!identityBuf) return
-    const secPerBar = stem.durationSec / stem.barLength
-    const totalSamples = Math.round(secPerBar * rifff.barLength * identityBuf.sampleRate)
-    const results: {
-      stem: Stem
-      spectrogram: Spectrogram
-      pitchPathD: string
-      tileBoundaryPcts: number[]
-    }[] = []
+    if (!buffers[stem.slot]) return
+    const results: NonNullable<typeof stemLanes> = []
     ;(async () => {
       for (const s of rifff.stems) {
         if (cancelled) return
         const buf = buffers[s.slot]
-        if (buf) {
-          const data = buf.getChannelData(0)
-          if (data.length > 0) {
-            const tileBoundaryPcts: number[] = []
-            for (let boundary = data.length; boundary < totalSamples; boundary += data.length) {
-              tileBoundaryPcts.push((boundary / totalSamples) * 100)
-            }
-            const tiled = new Float32Array(totalSamples)
-            for (let i = 0; i < totalSamples; i++) {
-              tiled[i] = data[i % data.length]
-            }
-            const spectrogram = computeSpectrogram(tiled, buf.sampleRate, {
-              minFreqHz: SPECTROGRAM_MIN_FREQ_HZ,
-              maxFreqHz: SPECTROGRAM_MAX_FREQ_HZ,
-              numFreqBins: SPECTROGRAM_NUM_FREQ_BINS,
-              dynamicRangeDb: SPECTROGRAM_DYNAMIC_RANGE_DB
+        if (buf && buf.length > 0) {
+          const lane = reOneLaneLayout(s.barLength, rifff.barLength)
+          try {
+            const { peaks, brightness } = await getDetailWaveform(s.path, lane.buckets, buf)
+            results.push({
+              stem: s,
+              maskUrl: waveformMaskDataUrl(peaks, brightness),
+              tileWidthPct: lane.tileWidthPct,
+              tileBoundaryPcts: lane.loopMarkPcts
             })
-
-            // A melody-contour line drawn on top of the spectrogram — built as a
-            // single SVG path (multiple "M" subpaths at gaps, rather than one
-            // <path>/<circle> per frame) so it stays cheap to render even at a
-            // long rifff's frame count. Unpitched frames (freqHz 0 — see
-            // computePitchContour's own confidence-threshold doc comment) break
-            // the line rather than being interpolated across, since a percussive
-            // gap really isn't "on" any pitch.
-            const pitch = computePitchContour(tiled, buf.sampleRate, { hopSize: PITCH_HOP_SIZE })
-            let pitchPathD = ''
-            let drawing = false
-            for (let t = 0; t < pitch.numFrames; t++) {
-              const f = pitch.freqHz[t]
-              if (f <= 0) {
-                drawing = false
-                continue
-              }
-              const xPct = ((t * PITCH_HOP_SIZE) / totalSamples) * 100
-              const yPct = freqToTopPct(f)
-              pitchPathD += drawing
-                ? ` L ${xPct.toFixed(2)} ${yPct.toFixed(2)}`
-                : `M ${xPct.toFixed(2)} ${yPct.toFixed(2)}`
-              drawing = true
-            }
-
-            results.push({ stem: s, spectrogram, pitchPathD, tileBoundaryPcts })
+          } catch (err) {
+            console.error(`BeatPicker: failed to draw the waveform for ${s.path}`, err)
           }
         }
         await new Promise((resolve) => setTimeout(resolve, 0))
       }
-      if (!cancelled) setStemSpectrograms(results)
+      if (!cancelled) setStemLanes(results)
     })()
     return () => {
       cancelled = true
@@ -480,7 +421,7 @@ export function BeatPicker({
   useEffect(() => {
     // Deferred through a microtask (not called directly) so this doesn't
     // read as a synchronous setState-in-effect -- same established
-    // workaround as this file's own stemSpectrograms reset effect above.
+    // workaround as this file's own stemLanes reset effect above.
     let cancelled = false
     void Promise.resolve().then(() => {
       if (!cancelled) setPendingSteps(null)
@@ -677,7 +618,7 @@ export function BeatPicker({
     // hasPendingChange flipping false the moment the bake resolved, the
     // button row swapped from cancel/confirm-change to continue/close(+
     // cancel import), which read as a SECOND picker having appeared (same
-    // spectrogram, different buttons), forcing a second click to actually
+    // lanes, different buttons), forcing a second click to actually
     // finish -- and clicking "cancel import" there, thinking it was this
     // "new" screen's cancel, deleted the rifff that had just been correctly
     // baked. Scoped to isNewImport only: editing an already-placed rifff's
@@ -804,8 +745,8 @@ export function BeatPicker({
   const oneMarker = reOneMarkerModel(currentSubdivisionIndex, totalSubdivisions, hasPendingChange)
   const LANE_HEIGHT = 68
   const LANE_GAP = 3
-  const lanesHeight = stemSpectrograms?.length
-    ? stemSpectrograms.length * LANE_HEIGHT + (stemSpectrograms.length - 1) * LANE_GAP
+  const lanesHeight = stemLanes?.length
+    ? stemLanes.length * LANE_HEIGHT + (stemLanes.length - 1) * LANE_GAP
     : 140
 
   /** The "cancel import" button's handler (isNewImport only — see its render
@@ -1177,7 +1118,7 @@ export function BeatPicker({
             overflowY: lanesHeight > 400 ? 'auto' : 'hidden'
           }}
         >
-          {!stemSpectrograms && (
+          {!stemLanes && (
             <div
               style={{
                 position: 'relative',
@@ -1196,9 +1137,9 @@ export function BeatPicker({
               </span>
             </div>
           )}
-          {stemSpectrograms && (
+          {stemLanes && (
             <div style={{ position: 'relative', height: lanesHeight }}>
-              {stemSpectrograms.map(({ stem: s, spectrogram, pitchPathD, tileBoundaryPcts }, i) => (
+              {stemLanes.map(({ stem: s, maskUrl, tileWidthPct, tileBoundaryPcts }, i) => (
                 <div
                   key={s.slot}
                   style={{
@@ -1214,16 +1155,33 @@ export function BeatPicker({
                     border: '1px solid var(--ra-border-strong)'
                   }}
                 >
-                  <SpectrogramCanvas
-                    spectrogram={spectrogram}
-                    color={stemColorVar(s)}
-                    height={LANE_HEIGHT}
-                  />
+                  {/* One positioned copy per repeat rather than a CSS
+                      mask-repeat: each repeat's left edge is placed exactly,
+                      so a short stem tiled many times can't drift off the
+                      beat grid by rounding. The last repeat is cut off by
+                      the lane's own edge, as in the arranger. */}
+                  {[0, ...tileBoundaryPcts].map((left) => (
+                    <div
+                      key={left}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: `${left}%`,
+                        width: `${tileWidthPct}%`,
+                        pointerEvents: 'none'
+                      }}
+                    >
+                      <WaveformMaskTiles url={maskUrl} color={stemColorVar(s)} tileWidthPct={100} />
+                    </div>
+                  ))}
                   {/* One thin line at every point this stem's own native loop
                       repeats — same "how long is the underlying loop"
                       marker StemWaveformRow already draws in the main
                       arranger, just as a percentage of this lane's full
-                      rifff-spanning width instead of a pixel offset. */}
+                      rifff-spanning width instead of a pixel offset. Wider
+                      and brighter than the arranger's, since here it lands
+                      on a bar gridline and has to read above it. */}
                   {tileBoundaryPcts.map((pct) => (
                     <div
                       key={pct}
@@ -1233,65 +1191,11 @@ export function BeatPicker({
                         bottom: 0,
                         left: `${pct}%`,
                         width: 2,
-                        background: 'color-mix(in srgb, white 80%, transparent)',
+                        background: 'color-mix(in srgb, var(--ra-text) 80%, transparent)',
                         pointerEvents: 'none'
                       }}
                     />
                   ))}
-                  {NOTE_GRIDLINES.map((g, gi) => (
-                    <div
-                      key={g.label}
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        top: `${freqToTopPct(g.freqHz)}%`,
-                        borderTop: '1px solid color-mix(in srgb, var(--ra-text) 20%, transparent)',
-                        pointerEvents: 'none'
-                      }}
-                    >
-                      {gi % 2 === 0 && (
-                        <span
-                          style={{
-                            position: 'absolute',
-                            left: 2,
-                            top: -6,
-                            fontSize: 6,
-                            color: 'var(--ra-text-3)',
-                            textShadow: '0 0 2px var(--ra-bg-row), 0 0 2px var(--ra-bg-row)'
-                          }}
-                        >
-                          {g.label}
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                  {pitchPathD && (
-                    <svg
-                      width="100%"
-                      height="100%"
-                      viewBox="0 0 100 100"
-                      preserveAspectRatio="none"
-                      style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
-                    >
-                      <path
-                        d={pitchPathD}
-                        stroke="black"
-                        strokeOpacity={0.45}
-                        strokeWidth={2.2}
-                        fill="none"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                      <path
-                        d={pitchPathD}
-                        stroke="#5ec8ff"
-                        strokeOpacity={0.9}
-                        strokeWidth={0.9}
-                        fill="none"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                    </svg>
-                  )}
                   <span
                     style={{
                       position: 'absolute',
@@ -1421,7 +1325,7 @@ export function BeatPicker({
         </div>
 
         <div style={{ marginTop: 10, fontSize: 10, color: 'var(--ra-text-3)' }}>
-          {stemSpectrograms
+          {stemLanes
             ? hasPendingChange
               ? `loop would begin at beat ${currentBeat + 1} of ${totalBeats} — confirm to apply`
               : `loop begins at beat ${currentBeat + 1} of ${totalBeats}`

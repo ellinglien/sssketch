@@ -14,9 +14,7 @@ const primed = createPrimedEntries((path) => cache.delete(path))
  * eviction-on-rejection behavior. Kept separate from bandEnergyCache.ts
  * (a different real FFT-based analysis, computePitchContour's own
  * autocorrelation pass rather than computeSpectrogram's) even though both
- * are "new cost" tiers — same reasoning as keeping BeatPicker.tsx's own
- * spectrogram and pitch computations as two separate calls rather than one
- * merged pass. */
+ * are "new cost" tiers. */
 export function getPitchContour(path: string): Promise<PitchContour> {
   const cached = cache.get(path)
   if (cached) {

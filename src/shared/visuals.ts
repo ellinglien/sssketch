@@ -195,9 +195,9 @@ export function zcrFromChannel(samples: Float32Array, buckets = 128): number[] {
 /** Traces a guessed pitch contour (see pitchContour.ts's computePitchContour
  * — 0 means "unpitched," not "silence at 0Hz") as a stroke-only path around
  * a ring, log-frequency mapped to radius within [r0, r0+amp] — the polar
- * analog of BeatPicker.tsx's own linear melody-contour overlay. Breaks into
- * a new subpath (M) at every unpitched frame rather than interpolating
- * across it, same as BeatPicker's: a percussive gap isn't "on" any pitch. */
+ * analog of linearPitchLine below. Breaks into a new subpath (M) at every
+ * unpitched frame rather than interpolating across it: a percussive gap
+ * isn't "on" any pitch. */
 export function polarPitchLine(
   freqHz: readonly number[],
   r0: number,
@@ -229,9 +229,8 @@ export function polarPitchLine(
 }
 
 /** Linear counterpart to polarPitchLine, in the same 128x100 box
- * linearWave/linearWaveBars use — higher pitch nearer the top, matching
- * BeatPicker.tsx's own freqToTopPct convention (and the spectrogram's
- * low-frequency-at-the-bottom orientation). Kept off the very top/bottom
+ * linearWave/linearWaveBars use — higher pitch nearer the top (the
+ * spectrogram's low-frequency-at-the-bottom orientation). Kept off the very top/bottom
  * edge (5-95 instead of 0-100) so an extreme pitch doesn't draw flush
  * against the waveform lane's border. */
 export function linearPitchLine(

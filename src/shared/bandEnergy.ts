@@ -36,7 +36,7 @@ const MID_MAX_HZ = 2000
  * docs/superpowers/specs — spectral visualization mockup). Reuses
  * computeSpectrogram's own FFT pass rather than a second, parallel
  * frequency analysis: no new DSP here, just a different read of the same
- * data BeatPicker.tsx already computes for its spectrogram lane.
+ * spectrogram.
  */
 export function computeBandEnergy(
   samples: Float32Array,

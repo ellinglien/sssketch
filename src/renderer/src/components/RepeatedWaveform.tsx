@@ -41,7 +41,22 @@ export const RepeatedWaveform = memo(function RepeatedWaveform({
   }, [path, url])
 
   if (!url) return null
+  return <WaveformMaskTiles url={url} color={color} tileWidthPct={tileWidthPct} />
+})
 
+/** The painting half of RepeatedWaveform: a mask URL (waveformMaskSvg.ts)
+ * repeated every `tileWidthPct` percent, in `color`. Separate so a view
+ * that builds its own mask -- the re-one picker's finer one
+ * (detailPeakCache.ts) -- draws a stem exactly as Discover does. */
+export function WaveformMaskTiles({
+  url,
+  color,
+  tileWidthPct
+}: {
+  url: string
+  color: string
+  tileWidthPct: number
+}): React.JSX.Element {
   const mask = `url("${url}")`
   const size = `${tileWidthPct}% 100%`
   return (
@@ -61,4 +76,4 @@ export const RepeatedWaveform = memo(function RepeatedWaveform({
       }}
     />
   )
-})
+}

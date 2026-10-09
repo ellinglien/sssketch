@@ -137,9 +137,9 @@ export function PolarGlyph({
           {g.pitchPath && (
             <>
               {/* Black halo underneath, same double-stroke technique
-                  BeatPicker.tsx uses for its own melody contour — keeps the
+                  Waveform.tsx uses for its own pitch line — keeps the
                   thin line legible over any band fill it crosses. The bright
-                  stroke uses the stem's OWN hue (not BeatPicker's fixed cyan)
+                  stroke uses the stem's OWN hue (not Waveform's fixed cyan)
                   since multiple stems' pitch lines can be layered here at
                   once — a shared cyan would make them indistinguishable. */}
               <path

@@ -83,8 +83,8 @@ pre-aligned to each other — becomes one Shelf tile.
 ## The downbeat picker
 
 Endlesss exports aren't always trimmed to start exactly on beat 1. Right after
-import, a full-screen picker opens showing every stem's own spectrogram lane
-over a beat grid. Click the beat where the loop should actually start; that
+import, a full-screen picker opens showing every stem's own waveform lane, in
+its colour, over a beat grid. Click the beat where the loop should actually start; that
 correction is baked into a rotated copy of the audio.
 
 You can reopen this later from the Inspector's **re-pick beat** button if the
