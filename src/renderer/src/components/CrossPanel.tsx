@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -8,17 +9,21 @@ import {
   type SetStateAction
 } from 'react'
 import {
+  addCrossDiscoveredSource,
   addCrossSource,
   assembleCrossRifff,
   clearCrossCenter,
   crossCommitIsCurrent,
   crossParentOnSide,
   crossSourceForRow,
+  duplicateCrossRow,
   finishCrossGainDrag,
   moveCrossRow,
   previewCrossGain,
   redoCross,
   removeCrossRow,
+  replaceCrossRowSource,
+  setCrossTargetBpm,
   swapCrossSides,
   toggleCrossAudible,
   toggleCrossSolo,
@@ -28,11 +33,22 @@ import {
   type CrossParent,
   type CrossSourceOccurrence
 } from '@shared/cross'
+import {
+  DISCOVER_SLOT_KIND_LABEL,
+  DISCOVER_SLOT_KIND_OPTIONS,
+  isTraitSlotKind,
+  type DiscoverSlotKind
+} from '@shared/discoverSlotKind'
+import { DEFAULT_DISCOVER_CHAOS, pickReroll, rankCandidates } from '@shared/discoverRanking'
 import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
 import type { Stem } from '@shared/types'
+import type { DiscoverCandidate } from '@shared/discoverCandidate'
 import { typeColorVar } from '../theme/typeColor'
+import { discoverSlotKindForSoundType } from '../audio/discoverSeed'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
+import { resolveCandidateStem } from './discoverCandidateStem'
+import { Copy, Shuffle, SkipForward } from '@phosphor-icons/react'
 import { useAppSelector, useDispatch } from '../state/StoreContext'
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { useCrossPreview, type CrossPreviewMode } from '../state/useCrossPreview'
@@ -40,9 +56,17 @@ import { useCrossPreview, type CrossPreviewMode } from '../state/useCrossPreview
 const SOURCE_DRAG_TYPE = 'application/x-sssketch-cross-source'
 const ROW_DRAG_TYPE = 'application/x-sssketch-cross-row'
 
-function sourceMembers(parent: CrossParent): { stem: Omit<Stem, 'slot'>; gain: number }[] {
+function randomCrossSlotKind(): DiscoverSlotKind {
+  const index = crypto.getRandomValues(new Uint32Array(1))[0] % DISCOVER_SLOT_KIND_OPTIONS.length
+  return DISCOVER_SLOT_KIND_OPTIONS[index]
+}
+
+function sourceMembers(
+  parent: CrossParent,
+  muted: ReadonlySet<string> = new Set()
+): { stem: Omit<Stem, 'slot'>; gain: number }[] {
   return parent.sources.flatMap((source) =>
-    source.stem ? [{ stem: source.stem, gain: source.gain }] : []
+    source.stem && !muted.has(source.id) ? [{ stem: source.stem, gain: source.gain }] : []
   )
 }
 
@@ -62,18 +86,67 @@ function centerLoopBars(draft: CrossDraft): number {
   return bars.length > 0 ? Math.max(...bars) : 1
 }
 
+function discoverSource(
+  candidate: DiscoverCandidate,
+  kinds: DiscoverSlotKind[],
+  stem: Awaited<ReturnType<typeof resolveCandidateStem>>
+): CrossSourceOccurrence | null {
+  if (!stem) return null
+  return {
+    id: `discover:${crypto.randomUUID()}`,
+    parentId: 'discover',
+    sourceSlot: 0,
+    stem: {
+      author: stem.author,
+      name: stem.name,
+      type: stem.type,
+      path: stem.path,
+      durationSec: stem.durationSec,
+      barLength: stem.barLength,
+      phaseSourcePath: stem.phaseSourcePath,
+      phaseBars: stem.phaseBars,
+      creationTime: stem.creationTime
+    },
+    gain: 1,
+    discover: { candidate, kinds }
+  }
+}
+
+function sampleSource(result: {
+  name: string
+  path: string
+  durationSec: number
+  barLength: number
+}): CrossSourceOccurrence {
+  return {
+    id: `sample:${crypto.randomUUID()}`,
+    parentId: 'sample',
+    sourceSlot: 0,
+    stem: { author: '', type: 'fx', ...result },
+    gain: 1
+  }
+}
+
 function SourceRow({
   source,
   added,
   active,
+  audible,
+  soloed,
   onAdd,
-  onPreview
+  onPreview,
+  onToggleMute,
+  onToggleSolo
 }: {
   source: CrossSourceOccurrence
   added: boolean
   active: boolean
+  audible: boolean
+  soloed: boolean
   onAdd: () => void
   onPreview: () => void
+  onToggleMute: () => void
+  onToggleSolo: () => void
 }): React.JSX.Element {
   const stem = source.stem
   return (
@@ -89,12 +162,30 @@ function SourceRow({
         border: `1px solid ${active ? 'var(--ra-playhead)' : 'var(--ra-border)'}`,
         background: 'var(--ra-bg-row)',
         display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) auto',
-        gap: 6,
+        gridTemplateColumns: '28px 28px minmax(0, 1fr) 34px',
+        gap: 4,
         padding: 5,
-        opacity: stem ? 1 : 0.45
+        opacity: stem ? (audible ? 1 : 0.55) : 0.45
       }}
     >
+      <button
+        onClick={onToggleMute}
+        disabled={!stem}
+        title={audible ? 'mute' : 'unmute'}
+        data-active={!audible}
+        className="ra-cross-row-button"
+      >
+        m
+      </button>
+      <button
+        onClick={onToggleSolo}
+        disabled={!stem}
+        title={soloed ? 'unsolo' : 'solo'}
+        data-active={soloed}
+        className="ra-cross-row-button"
+      >
+        s
+      </button>
       <button
         onClick={onPreview}
         disabled={!stem}
@@ -150,18 +241,27 @@ function SourceColumn({
   parent,
   draft,
   activeMode,
+  muted,
   onAdd,
   onPreviewSource,
-  onPreviewParent
+  onPreviewParent,
+  onToggleMute,
+  onToggleSolo
 }: {
   parent: CrossParent
   draft: CrossDraft
   activeMode: CrossPreviewMode | null
+  muted: ReadonlySet<string>
   onAdd: (sourceId: string) => void
   onPreviewSource: (source: CrossSourceOccurrence) => void
   onPreviewParent: (parent: CrossParent) => void
+  onToggleMute: (parent: CrossParent, sourceId: string) => void
+  onToggleSolo: (parent: CrossParent, sourceId: string) => void
 }): React.JSX.Element {
   const added = useMemo(() => new Set(draft.center.map((row) => row.sourceId)), [draft.center])
+  const audibleCount = parent.sources.filter(
+    (source) => source.stem && !muted.has(source.id)
+  ).length
   return (
     <section style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28 }}>
@@ -191,8 +291,12 @@ function SourceColumn({
           source={source}
           added={added.has(source.id)}
           active={activeMode === `source:${source.id}`}
+          audible={!muted.has(source.id)}
+          soloed={audibleCount === 1 && !muted.has(source.id)}
           onAdd={() => onAdd(source.id)}
           onPreview={() => onPreviewSource(source)}
+          onToggleMute={() => onToggleMute(parent, source.id)}
+          onToggleSolo={() => onToggleSolo(parent, source.id)}
         />
       ))}
     </section>
@@ -203,14 +307,24 @@ function CenterRow({
   row,
   source,
   index,
+  soloed,
+  rolling,
   onDropAt,
-  onDraftChange
+  onDraftChange,
+  onSkip,
+  onRandomize,
+  onDuplicate
 }: {
   row: CrossCenterRow
   source: CrossSourceOccurrence
   index: number
+  soloed: boolean
+  rolling: boolean
   onDropAt: (event: React.DragEvent, index: number) => void
   onDraftChange: Dispatch<SetStateAction<CrossDraft | null>>
+  onSkip: () => void
+  onRandomize: () => void
+  onDuplicate: () => void
 }): React.JSX.Element {
   const stem = source.stem!
   function beginGainDrag(event: React.PointerEvent): void {
@@ -244,11 +358,29 @@ function CenterRow({
         border: '1px solid var(--ra-border-strong)',
         background: 'var(--ra-bg-row-active)',
         display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) 28px 28px 28px',
+        gridTemplateColumns: '28px 28px minmax(0, 1fr) 28px 28px 28px 28px',
         gap: 4,
         padding: 5
       }}
     >
+      <button
+        onClick={() =>
+          onDraftChange((draft) => (draft ? toggleCrossAudible(draft, row.id) : draft))
+        }
+        title={row.audible ? 'mute' : 'unmute'}
+        data-active={!row.audible}
+        className="ra-cross-row-button"
+      >
+        m
+      </button>
+      <button
+        onClick={() => onDraftChange((draft) => (draft ? toggleCrossSolo(draft, row.id) : draft))}
+        title={soloed ? 'unsolo' : 'solo'}
+        data-active={soloed}
+        className="ra-cross-row-button"
+      >
+        s
+      </button>
       <button
         onPointerDown={beginGainDrag}
         title="drag vertically to adjust gain"
@@ -291,25 +423,28 @@ function CenterRow({
         )}
       </button>
       <button
-        onClick={() =>
-          onDraftChange((draft) => (draft ? toggleCrossAudible(draft, row.id) : draft))
-        }
-        title={row.audible ? 'mute' : 'unmute'}
-        style={{ borderRadius: 0, border: '1px solid var(--ra-border)', background: 'transparent' }}
+        onClick={onSkip}
+        disabled={rolling}
+        title="skip to a similar stem"
+        className="ra-cross-row-button"
       >
-        m
+        {rolling ? <LoadingLoader size={10} /> : <SkipForward size={12} />}
       </button>
       <button
-        onClick={() => onDraftChange((draft) => (draft ? toggleCrossSolo(draft, row.id) : draft))}
-        title="solo"
-        style={{ borderRadius: 0, border: '1px solid var(--ra-border)', background: 'transparent' }}
+        onClick={onRandomize}
+        disabled={rolling}
+        title="any stem"
+        className="ra-cross-row-button"
       >
-        s
+        <Shuffle size={12} />
+      </button>
+      <button onClick={onDuplicate} title="duplicate" className="ra-cross-row-button">
+        <Copy size={12} />
       </button>
       <button
         onClick={() => onDraftChange((draft) => (draft ? removeCrossRow(draft, row.id) : draft))}
         title="remove"
-        style={{ borderRadius: 0, border: '1px solid var(--ra-border)', background: 'transparent' }}
+        className="ra-cross-row-button"
       >
         ×
       </button>
@@ -331,20 +466,243 @@ export function CrossPanel({
   const dispatch = useDispatch()
   const rifffs = useAppSelector((state) => state.rifffs)
   const playedBars = useAppSelector((state) => state.playedBars)
+  const projectBpm = useAppSelector((state) => state.bpm)
   const { preview, stop } = useCrossPreview()
   const [activeMode, setActiveMode] = useState<CrossPreviewMode | null>(null)
   const [committing, setCommitting] = useState<'shelf' | 'timeline' | null>(null)
   const [committed, setCommitted] = useState<'shelf' | 'timeline' | null>(null)
+  const [sideMuted, setSideMuted] = useState<Set<string>>(() => new Set())
+  const [rollingRows, setRollingRows] = useState<Set<string>>(() => new Set())
+  const [discoverError, setDiscoverError] = useState<string | null>(null)
   const draftRef = useRef(draft)
   const currentProjectKeyRef = useRef(currentProjectKey)
   const committingRef = useRef(false)
   const left = crossParentOnSide(draft, 'left')
   const right = crossParentOnSide(draft, 'right')
+  const sideMutedKey = [...sideMuted].sort().join('|')
 
   useEffect(() => {
     draftRef.current = draft
     currentProjectKeyRef.current = currentProjectKey
   }, [currentProjectKey, draft])
+
+  useEffect(() => {
+    if (draft.targetBpm === projectBpm) return
+    setDraft((value) => (value ? setCrossTargetBpm(value, projectBpm) : value))
+  }, [draft.targetBpm, projectBpm, setDraft])
+
+  function toggleSideMute(sourceId: string): void {
+    setSideMuted((before) => {
+      const next = new Set(before)
+      if (next.has(sourceId)) next.delete(sourceId)
+      else next.add(sourceId)
+      return next
+    })
+  }
+
+  function toggleSideSolo(parent: CrossParent, sourceId: string): void {
+    setSideMuted((before) => {
+      const available = parent.sources.filter((source) => source.stem).map((source) => source.id)
+      const audible = available.filter((id) => !before.has(id))
+      const restoreAll = audible.length === 1 && audible[0] === sourceId
+      const next = new Set(before)
+      for (const id of available) {
+        if (restoreAll || id === sourceId) next.delete(id)
+        else next.add(id)
+      }
+      return next
+    })
+  }
+
+  async function findDiscoveredSource(
+    kinds: DiscoverSlotKind[],
+    replacingSourceId?: string
+  ): Promise<CrossSourceOccurrence | null> {
+    const current = draftRef.current
+    const candidates = await window.rifffApi.getDiscoverCandidates(kinds, false)
+    const used = new Set(
+      current.center.flatMap((row) => {
+        const source = crossSourceForRow(current, row)
+        return source?.discover ? [source.discover.candidate.stemCID] : []
+      })
+    )
+    const replacing = replacingSourceId
+      ? current.discoveredSources?.find((source) => source.id === replacingSourceId)
+      : undefined
+    if (replacing?.discover) used.add(replacing.discover.candidate.stemCID)
+    const unused = candidates.filter((candidate) => !used.has(candidate.stemCID))
+    const pool =
+      unused.length > 0
+        ? unused
+        : candidates.filter((candidate) => {
+            return candidate.stemCID !== replacing?.discover?.candidate.stemCID
+          })
+    const ranked = rankCandidates(pool, {
+      targetBpm: current.targetBpm,
+      targetTraits: kinds.filter(isTraitSlotKind)
+    })
+    const picked = pickReroll(ranked, DEFAULT_DISCOVER_CHAOS)
+    if (!picked) return null
+    return discoverSource(picked, kinds, await resolveCandidateStem(picked))
+  }
+
+  async function findRandomDiscoveredSource(
+    kinds: DiscoverSlotKind[],
+    replacingSourceId?: string
+  ): Promise<CrossSourceOccurrence | null> {
+    const current = replacingSourceId
+      ? draftRef.current.discoveredSources?.find((source) => source.id === replacingSourceId)
+      : undefined
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const candidate = await window.rifffApi.getRandomDiscoverCandidate(kinds, false)
+      if (!candidate) return null
+      if (candidate.stemCID === current?.discover?.candidate.stemCID) continue
+      return discoverSource(candidate, kinds, await resolveCandidateStem(candidate))
+    }
+    return null
+  }
+
+  async function addDiscoveredStem(kind: DiscoverSlotKind): Promise<void> {
+    const key = `add:${kind}`
+    const draftId = draftRef.current.id
+    const projectKey = draftRef.current.projectKey
+    setDiscoverError(null)
+    setRollingRows((before) => new Set(before).add(key))
+    try {
+      const source = await findDiscoveredSource([kind])
+      if (!source) {
+        setDiscoverError(`no ${DISCOVER_SLOT_KIND_LABEL[kind]} stem found`)
+        return
+      }
+      setDraft((value) =>
+        value?.id === draftId && value.projectKey === projectKey
+          ? addCrossDiscoveredSource(value, source)
+          : value
+      )
+    } catch (error) {
+      console.error('CrossPanel: failed to add a discovered stem:', error)
+      setDiscoverError('could not add that stem')
+    } finally {
+      setRollingRows((before) => {
+        const next = new Set(before)
+        next.delete(key)
+        return next
+      })
+    }
+  }
+
+  async function addRandomStem(): Promise<void> {
+    const key = 'add:random'
+    const kinds = [randomCrossSlotKind()]
+    const draftId = draftRef.current.id
+    const projectKey = draftRef.current.projectKey
+    setDiscoverError(null)
+    setRollingRows((before) => new Set(before).add(key))
+    try {
+      const source = await findRandomDiscoveredSource(kinds)
+      if (!source) {
+        setDiscoverError('no random stem found')
+        return
+      }
+      setDraft((value) =>
+        value?.id === draftId && value.projectKey === projectKey
+          ? addCrossDiscoveredSource(value, source)
+          : value
+      )
+    } catch (error) {
+      console.error('CrossPanel: failed to add a random stem:', error)
+      setDiscoverError('could not add a random stem')
+    } finally {
+      setRollingRows((before) => {
+        const next = new Set(before)
+        next.delete(key)
+        return next
+      })
+    }
+  }
+
+  async function skipCenterRow(row: CrossCenterRow): Promise<void> {
+    const source = crossSourceForRow(draftRef.current, row)
+    if (!source?.stem) return
+    const kinds = source.discover?.kinds ?? [discoverSlotKindForSoundType(source.stem.type)]
+    const draftId = draftRef.current.id
+    const projectKey = draftRef.current.projectKey
+    setDiscoverError(null)
+    setRollingRows((before) => new Set(before).add(row.id))
+    try {
+      const replacement = await findDiscoveredSource(kinds, source.id)
+      if (!replacement) {
+        setDiscoverError('no similar replacement found')
+        return
+      }
+      setDraft((value) =>
+        value?.id === draftId && value.projectKey === projectKey
+          ? replaceCrossRowSource(value, row.id, replacement)
+          : value
+      )
+    } catch (error) {
+      console.error('CrossPanel: failed to skip a center stem:', error)
+      setDiscoverError('could not replace that stem')
+    } finally {
+      setRollingRows((before) => {
+        const next = new Set(before)
+        next.delete(row.id)
+        return next
+      })
+    }
+  }
+
+  async function randomizeCenterRow(row: CrossCenterRow): Promise<void> {
+    const source = crossSourceForRow(draftRef.current, row)
+    if (!source?.stem) return
+    const kinds = source.discover?.kinds ?? [discoverSlotKindForSoundType(source.stem.type)]
+    const draftId = draftRef.current.id
+    const projectKey = draftRef.current.projectKey
+    setDiscoverError(null)
+    setRollingRows((before) => new Set(before).add(row.id))
+    try {
+      const replacement = await findRandomDiscoveredSource(kinds, source.id)
+      if (!replacement) {
+        setDiscoverError('no random replacement found')
+        return
+      }
+      setDraft((value) =>
+        value?.id === draftId && value.projectKey === projectKey
+          ? replaceCrossRowSource(value, row.id, replacement)
+          : value
+      )
+    } catch (error) {
+      console.error('CrossPanel: failed to randomize a center stem:', error)
+      setDiscoverError('could not replace that stem')
+    } finally {
+      setRollingRows((before) => {
+        const next = new Set(before)
+        next.delete(row.id)
+        return next
+      })
+    }
+  }
+
+  async function addSample(): Promise<void> {
+    const draftId = draftRef.current.id
+    const projectKey = draftRef.current.projectKey
+    const paths = await window.rifffApi.pickDiscoverLoopSeedPaths()
+    for (const path of paths) {
+      const result = await window.rifffApi.importDiscoverLoopSeed(path, draftRef.current.targetBpm)
+      if (!result) continue
+      const source = sampleSource(result)
+      setDraft((value) =>
+        value?.id === draftId && value.projectKey === projectKey
+          ? addCrossDiscoveredSource(value, source)
+          : value
+      )
+    }
+  }
+
+  function changeTempo(nextBpm: number): void {
+    dispatch({ type: 'SET_TEMPO', bpm: nextBpm })
+    setDraft((value) => (value ? setCrossTargetBpm(value, nextBpm) : value))
+  }
 
   const playCenter = useCallback(async (): Promise<void> => {
     const members = centerMembers(draft, true)
@@ -358,18 +716,40 @@ export function CrossPanel({
   }, [draft, preview, stop])
 
   useEffect(() => {
-    if (activeMode !== 'center') return
-    const members = centerMembers(draft, true)
+    if (activeMode === null) return
+    let members: ReturnType<typeof sourceMembers> = []
+    let loopBars = 1
+    if (activeMode === 'center') {
+      members = centerMembers(draft, true)
+      loopBars = centerLoopBars(draft)
+    } else if (activeMode.startsWith('riff:')) {
+      const parentId = activeMode.slice('riff:'.length)
+      const parent = draft.parents.find((item) => item.id === parentId)
+      if (parent) {
+        members = sourceMembers(parent, sideMuted)
+        loopBars = parent.barLength
+      }
+    } else {
+      const sourceId = activeMode.slice('source:'.length)
+      const source = draft.parents
+        .flatMap((parent) => parent.sources)
+        .find((item) => item.id === sourceId)
+      if (source?.stem && !sideMuted.has(source.id)) {
+        members = [{ stem: source.stem, gain: source.gain }]
+        loopBars = source.stem.barLength
+      }
+    }
     if (members.length === 0) {
       stop()
       void Promise.resolve().then(() => setActiveMode(null))
       return
     }
-    void preview('center', members, draft.targetBpm, centerLoopBars(draft))
+    void preview(activeMode, members, draft.targetBpm, loopBars)
     // revision is the intended trigger; the matching immutable draft is
-    // captured here without re-arming on unrelated renders.
+    // captured here without re-arming on unrelated renders. sideMutedKey
+    // does the same for either parent riff's non-destructive audition mix.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.revision])
+  }, [draft.revision, sideMutedKey])
 
   function togglePreview(
     mode: CrossPreviewMode,
@@ -471,6 +851,45 @@ export function CrossPanel({
           padding: 0;
           font-size: 14px;
         }
+        .ra-cross-row-button {
+          display: grid;
+          place-items: center;
+          min-width: 0;
+          border: 1px solid var(--ra-border);
+          border-radius: 0;
+          padding: 0;
+          background: transparent;
+          color: var(--ra-text-2);
+          font-size: 10px;
+        }
+        .ra-cross-row-button[data-active='true'] {
+          background: var(--ra-play-on);
+          color: var(--ra-play-on-ink);
+        }
+        .ra-cross-row-button:disabled {
+          color: var(--ra-text-4);
+          cursor: default;
+        }
+        .ra-cross-divider {
+          width: 1px;
+          align-self: stretch;
+          background: var(--ra-border);
+        }
+        .ra-cross-add-chip {
+          border: none;
+          padding: 3px 5px;
+          background: transparent;
+          color: var(--ra-text-2);
+          font-size: 9px;
+        }
+        .ra-cross-add-chip:hover:not(:disabled) {
+          color: var(--ra-text);
+          background: var(--ra-bg-row-active);
+        }
+        .ra-cross-add-chip:disabled {
+          color: var(--ra-text-4);
+          cursor: default;
+        }
       `}</style>
       <div
         style={{
@@ -482,9 +901,45 @@ export function CrossPanel({
         }}
       >
         <span className="ra-eyebrow">cross</span>
-        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-          project tempo · {Math.round(draft.targetBpm)} bpm
+        <button
+          className="ra-cross-button"
+          data-active={activeMode === 'center'}
+          onClick={() =>
+            activeMode === 'center' ? (stop(), setActiveMode(null)) : void playCenter()
+          }
+          disabled={draft.center.length === 0}
+          aria-label={activeMode === 'center' ? 'stop Cross' : 'play Cross'}
+        >
+          {activeMode === 'center' ? '■' : '▶'}
+        </button>
+        <span className="ra-cross-divider" />
+        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tempo</span>
+        <button
+          className="ra-cross-button"
+          onClick={() => changeTempo(projectBpm - 1)}
+          aria-label="Decrease tempo"
+        >
+          −
+        </button>
+        <span
+          style={{
+            minWidth: 38,
+            textAlign: 'center',
+            fontSize: 10,
+            color: 'var(--ra-text)'
+          }}
+        >
+          {Math.round(projectBpm)}
         </span>
+        <button
+          className="ra-cross-button"
+          onClick={() => changeTempo(projectBpm + 1)}
+          aria-label="Increase tempo"
+        >
+          +
+        </button>
+        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
+        <span className="ra-cross-divider" />
         <div style={{ flex: 1 }} />
         <button
           className="ra-cross-button"
@@ -568,6 +1023,7 @@ export function CrossPanel({
           parent={left}
           draft={draft}
           activeMode={activeMode}
+          muted={sideMuted}
           onAdd={(sourceId) =>
             setDraft((value) => (value ? addCrossSource(value, sourceId) : value))
           }
@@ -580,8 +1036,10 @@ export function CrossPanel({
             )
           }
           onPreviewParent={(parent) =>
-            togglePreview(`riff:${parent.id}`, sourceMembers(parent), parent.barLength)
+            togglePreview(`riff:${parent.id}`, sourceMembers(parent, sideMuted), parent.barLength)
           }
+          onToggleMute={(_parent, sourceId) => toggleSideMute(sourceId)}
+          onToggleSolo={toggleSideSolo}
         />
 
         <section style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -592,16 +1050,6 @@ export function CrossPanel({
             <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>
               {draft.center.length} / {MAX_RIFFF_STEM_SLOTS}
             </span>
-            <button
-              className="ra-cross-button"
-              data-active={activeMode === 'center'}
-              onClick={() =>
-                activeMode === 'center' ? (stop(), setActiveMode(null)) : void playCenter()
-              }
-              disabled={draft.center.length === 0}
-            >
-              {activeMode === 'center' ? '■ stop' : '▶ mix'}
-            </button>
           </div>
           {draft.center.map((row, index) => {
             const source = crossSourceForRow(draft, row)
@@ -611,8 +1059,15 @@ export function CrossPanel({
                 row={row}
                 source={source}
                 index={index}
+                soloed={row.audible && draft.center.filter((item) => item.audible).length === 1}
+                rolling={rollingRows.has(row.id)}
                 onDropAt={handleDropAt}
                 onDraftChange={setDraft}
+                onSkip={() => void skipCenterRow(row)}
+                onRandomize={() => void randomizeCenterRow(row)}
+                onDuplicate={() =>
+                  setDraft((value) => (value ? duplicateCrossRow(value, row.id) : value))
+                }
               />
             ) : null
           })}
@@ -636,12 +1091,72 @@ export function CrossPanel({
               </div>
             )
           })}
+          <div
+            style={{
+              marginTop: 6,
+              padding: '8px 4px',
+              borderTop: '1px solid var(--ra-border)',
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 3
+            }}
+          >
+            <span style={{ fontSize: 10, color: 'var(--ra-text)', marginRight: 4 }}>
+              add a stem that is:
+            </span>
+            {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => (
+              <Fragment key={kind}>
+                {kind === 'bassHeavy' && <span className="ra-cross-divider" />}
+                <button
+                  className="ra-cross-add-chip"
+                  onClick={() => void addDiscoveredStem(kind)}
+                  disabled={
+                    draft.center.length >= MAX_RIFFF_STEM_SLOTS || rollingRows.has(`add:${kind}`)
+                  }
+                >
+                  {rollingRows.has(`add:${kind}`) ? '…' : DISCOVER_SLOT_KIND_LABEL[kind]}
+                </button>
+              </Fragment>
+            ))}
+            <span className="ra-cross-divider" />
+            <button
+              className="ra-cross-add-chip"
+              onClick={() => void addRandomStem()}
+              disabled={
+                draft.center.length >= MAX_RIFFF_STEM_SLOTS || rollingRows.has('add:random')
+              }
+            >
+              {rollingRows.has('add:random') ? '…' : '+ random'}
+            </button>
+            <button
+              className="ra-cross-add-chip"
+              onClick={() => void addSample()}
+              disabled={draft.center.length >= MAX_RIFFF_STEM_SLOTS}
+            >
+              + sample
+            </button>
+            {discoverError && (
+              <span
+                style={{
+                  width: '100%',
+                  textAlign: 'center',
+                  fontSize: 8,
+                  color: 'var(--ra-text-3)'
+                }}
+              >
+                {discoverError}
+              </span>
+            )}
+          </div>
         </section>
 
         <SourceColumn
           parent={right}
           draft={draft}
           activeMode={activeMode}
+          muted={sideMuted}
           onAdd={(sourceId) =>
             setDraft((value) => (value ? addCrossSource(value, sourceId) : value))
           }
@@ -654,8 +1169,10 @@ export function CrossPanel({
             )
           }
           onPreviewParent={(parent) =>
-            togglePreview(`riff:${parent.id}`, sourceMembers(parent), parent.barLength)
+            togglePreview(`riff:${parent.id}`, sourceMembers(parent, sideMuted), parent.barLength)
           }
+          onToggleMute={(_parent, sourceId) => toggleSideMute(sourceId)}
+          onToggleSolo={toggleSideSolo}
         />
       </div>
     </div>

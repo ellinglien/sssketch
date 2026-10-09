@@ -1,4 +1,6 @@
 import { MAX_RIFFF_STEM_SLOTS } from './riffStemSlots'
+import type { DiscoverCandidate } from './discoverCandidate'
+import type { DiscoverSlotKind } from './discoverSlotKind'
 import { stemKey, type ProjectRef, type Rifff, type Stem } from './types'
 
 export interface CrossSourceOccurrence {
@@ -9,6 +11,8 @@ export interface CrossSourceOccurrence {
   sourceSlot: number
   stem: Omit<Stem, 'slot'> | null
   gain: number
+  /** Present only for stems added from Cross's Discover-style controls. */
+  discover?: { candidate: DiscoverCandidate; kinds: DiscoverSlotKind[] }
 }
 
 export interface CrossParent {
@@ -37,9 +41,17 @@ export interface CrossDraft {
   sideOrder: [string, string]
   targetBpm: number
   center: CrossCenterRow[]
-  past: CrossCenterRow[][]
-  future: CrossCenterRow[][]
+  /** Locally-resolved stems added from the center column rather than either parent. */
+  discoveredSources?: CrossSourceOccurrence[]
+  /** The array variant is accepted for drafts kept alive across the v1 hot reload. */
+  past: (CrossHistorySnapshot | CrossCenterRow[])[]
+  future: (CrossHistorySnapshot | CrossCenterRow[])[]
   revision: number
+}
+
+export interface CrossHistorySnapshot {
+  center: CrossCenterRow[]
+  discoveredSources: CrossSourceOccurrence[]
 }
 
 export interface CrossAssembly {
@@ -99,13 +111,52 @@ function cloneCenter(center: readonly CrossCenterRow[]): CrossCenterRow[] {
   return center.map((row) => ({ ...row }))
 }
 
+function cloneSources(sources: readonly CrossSourceOccurrence[]): CrossSourceOccurrence[] {
+  return sources.map((source) => ({
+    ...source,
+    stem: source.stem ? { ...source.stem } : null,
+    discover: source.discover
+      ? {
+          candidate: { ...source.discover.candidate },
+          kinds: [...source.discover.kinds]
+        }
+      : undefined
+  }))
+}
+
+function discoveredSources(draft: CrossDraft): CrossSourceOccurrence[] {
+  return draft.discoveredSources ?? []
+}
+
+function snapshotOf(draft: CrossDraft): CrossHistorySnapshot {
+  return {
+    center: cloneCenter(draft.center),
+    discoveredSources: cloneSources(discoveredSources(draft))
+  }
+}
+
+function restoreSnapshot(
+  snapshot: CrossHistorySnapshot | CrossCenterRow[],
+  fallbackSources: readonly CrossSourceOccurrence[]
+): CrossHistorySnapshot {
+  return Array.isArray(snapshot)
+    ? { center: cloneCenter(snapshot), discoveredSources: cloneSources(fallbackSources) }
+    : snapshot
+}
+
 function sourceMap(draft: CrossDraft): Map<string, CrossSourceOccurrence> {
   return new Map(
-    draft.parents.flatMap((parent) => parent.sources).map((source) => [source.id, source])
+    [...draft.parents.flatMap((parent) => parent.sources), ...discoveredSources(draft)].map(
+      (source) => [source.id, source]
+    )
   )
 }
 
-function commitCenter(draft: CrossDraft, center: CrossCenterRow[]): CrossDraft {
+function commitCrossState(
+  draft: CrossDraft,
+  center: CrossCenterRow[],
+  nextDiscoveredSources = discoveredSources(draft)
+): CrossDraft {
   if (
     center.length === draft.center.length &&
     center.every((row, index) => {
@@ -117,17 +168,23 @@ function commitCenter(draft: CrossDraft, center: CrossCenterRow[]): CrossDraft {
         row.gain === before.gain &&
         row.audible === before.audible
       )
-    })
+    }) &&
+    nextDiscoveredSources === discoveredSources(draft)
   ) {
     return draft
   }
   return {
     ...draft,
     center,
-    past: [...draft.past, cloneCenter(draft.center)],
+    discoveredSources: cloneSources(nextDiscoveredSources),
+    past: [...draft.past, snapshotOf(draft)],
     future: [],
     revision: draft.revision + 1
   }
+}
+
+function commitCenter(draft: CrossDraft, center: CrossCenterRow[]): CrossDraft {
+  return commitCrossState(draft, center)
 }
 
 export function crossPairInVisualOrder(
@@ -153,10 +210,67 @@ export function createCrossDraft(
     sideOrder: [left.id, right.id],
     targetBpm,
     center: [],
+    discoveredSources: [],
     past: [],
     future: [],
     revision: 0
   }
+}
+
+/** Adds a resolved Discover candidate directly to the editable center. */
+export function addCrossDiscoveredSource(
+  draft: CrossDraft,
+  source: CrossSourceOccurrence,
+  atIndex?: number
+): CrossDraft {
+  if (!source.stem || draft.center.length >= MAX_RIFFF_STEM_SLOTS) return draft
+  const sources = [...discoveredSources(draft).filter((item) => item.id !== source.id), source]
+  const center = cloneCenter(draft.center)
+  const index = Math.max(0, Math.min(center.length, atIndex ?? center.length))
+  center.splice(index, 0, {
+    id: source.id,
+    sourceId: source.id,
+    gain: source.gain,
+    audible: true
+  })
+  return commitCrossState(draft, center, sources)
+}
+
+/** Replaces one center row's audio while preserving its mix state and position. */
+export function replaceCrossRowSource(
+  draft: CrossDraft,
+  rowId: string,
+  source: CrossSourceOccurrence
+): CrossDraft {
+  if (!source.stem || !draft.center.some((row) => row.id === rowId)) return draft
+  const sources = [...discoveredSources(draft).filter((item) => item.id !== source.id), source]
+  return commitCrossState(
+    draft,
+    draft.center.map((row) => (row.id === rowId ? { ...row, sourceId: source.id } : row)),
+    sources
+  )
+}
+
+/** Makes an independently mixable center instance of the same source. */
+export function duplicateCrossRow(
+  draft: CrossDraft,
+  rowId: string,
+  duplicateId = crypto.randomUUID()
+): CrossDraft {
+  if (draft.center.length >= MAX_RIFFF_STEM_SLOTS) return draft
+  const index = draft.center.findIndex((row) => row.id === rowId)
+  if (index === -1) return draft
+  const center = cloneCenter(draft.center)
+  center.splice(index + 1, 0, { ...center[index], id: duplicateId })
+  return commitCenter(draft, center)
+}
+
+/** Follows the real project tempo without creating a separate Cross undo step. */
+export function setCrossTargetBpm(draft: CrossDraft, targetBpm: number): CrossDraft {
+  const bpm = Math.max(40, Math.min(200, targetBpm))
+  return bpm === draft.targetBpm
+    ? draft
+    : { ...draft, targetBpm: bpm, revision: draft.revision + 1 }
 }
 
 export function crossParentOnSide(draft: CrossDraft, side: 'left' | 'right'): CrossParent {
@@ -259,24 +373,28 @@ export function toggleCrossSolo(draft: CrossDraft, rowId: string): CrossDraft {
 }
 
 export function undoCross(draft: CrossDraft): CrossDraft {
-  const previous = draft.past[draft.past.length - 1]
-  if (!previous) return draft
+  const saved = draft.past[draft.past.length - 1]
+  if (!saved) return draft
+  const previous = restoreSnapshot(saved, discoveredSources(draft))
   return {
     ...draft,
-    center: cloneCenter(previous),
+    center: cloneCenter(previous.center),
+    discoveredSources: cloneSources(previous.discoveredSources),
     past: draft.past.slice(0, -1),
-    future: [cloneCenter(draft.center), ...draft.future],
+    future: [snapshotOf(draft), ...draft.future],
     revision: draft.revision + 1
   }
 }
 
 export function redoCross(draft: CrossDraft): CrossDraft {
-  const next = draft.future[0]
-  if (!next) return draft
+  const saved = draft.future[0]
+  if (!saved) return draft
+  const next = restoreSnapshot(saved, discoveredSources(draft))
   return {
     ...draft,
-    center: cloneCenter(next),
-    past: [...draft.past, cloneCenter(draft.center)],
+    center: cloneCenter(next.center),
+    discoveredSources: cloneSources(next.discoveredSources),
+    past: [...draft.past, snapshotOf(draft)],
     future: draft.future.slice(1),
     revision: draft.revision + 1
   }

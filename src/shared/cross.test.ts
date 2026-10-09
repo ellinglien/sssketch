@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Stem } from './types'
 import {
+  addCrossDiscoveredSource,
   addCrossSource,
   assembleCrossRifff,
   createCrossDraft,
@@ -9,9 +10,11 @@ import {
   crossPairInVisualOrder,
   crossParentOnSide,
   crossProjectKey,
+  duplicateCrossRow,
   finishCrossGainDrag,
   moveCrossRow,
   previewCrossGain,
+  replaceCrossRowSource,
   redoCross,
   removeCrossRow,
   setCrossGain,
@@ -210,6 +213,49 @@ describe('Cross center editing', () => {
     value = finishCrossGainDrag(value, 'a:1', 1)
     expect(value.past).toHaveLength(frames + 1)
     expect(undoCross(value).center[0].gain).toBe(1)
+  })
+
+  it('adds, replaces, duplicates, and undoes center-only discovered stems', () => {
+    const candidate = {
+      stemCID: 'stem-c',
+      jamCID: 'jam-c',
+      riffCID: 'riff-c',
+      presetName: 'found',
+      creatorUserName: 'artist',
+      slotKinds: ['drums'] as const,
+      drumSubRole: null,
+      riffBpm: 126,
+      traitValues: {},
+      traitPercentiles: {},
+      kindSources: {},
+      riffCreationTime: null
+    }
+    const discovered = {
+      id: 'discover-c',
+      parentId: 'discover',
+      sourceSlot: 0,
+      stem: stem('/found.wav'),
+      gain: 1,
+      discover: { candidate: { ...candidate, slotKinds: ['drums'] }, kinds: ['drums'] as const }
+    }
+    let value = addCrossDiscoveredSource(draft(), discovered)
+    expect(value.center.map((row) => row.sourceId)).toEqual(['discover-c'])
+
+    value = duplicateCrossRow(value, value.center[0].id, 'copy-c')
+    expect(value.center).toHaveLength(2)
+    expect(value.center[1]).toMatchObject({ id: 'copy-c', sourceId: 'discover-c' })
+
+    value = replaceCrossRowSource(value, 'copy-c', {
+      ...discovered,
+      id: 'discover-d',
+      stem: stem('/replacement.wav')
+    })
+    expect(value.center[1].sourceId).toBe('discover-d')
+    value = undoCross(value)
+    expect(value.center[1].sourceId).toBe('discover-c')
+    value = redoCross(value)
+    expect(value.center[1].sourceId).toBe('discover-d')
+    expect(assembleCrossRifff(value, 'with-discover')?.rifff.stems[1].path).toBe('/replacement.wav')
   })
 })
 
