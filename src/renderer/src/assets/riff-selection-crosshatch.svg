@@ -1,3 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8" shape-rendering="crispEdges">
-  <path fill="#1d1d1d" d="M2 2h1v1H2zM6 6h1v1H6z"/>
+  <!-- A mask, not a picture: only these two pixels' alpha is used. Their colour is the
+       ra-riff-selected-hatch token (tokens.css), applied in global.css. -->
+  <path d="M2 2h1v1H2zM6 6h1v1H6z"/>
 </svg>

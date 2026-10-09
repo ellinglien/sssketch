@@ -16,6 +16,7 @@
   --ra-bg-row:         #0a0a0a;  /* block row */
   --ra-bg-row-active:  #161616;  /* selected block row, control fill */
   --ra-bg-riff-selected: #191919; /* quiet pixel-grid riff selection */
+  --ra-riff-selected-hatch: #1d1d1d; /* its dots (riff-selection-crosshatch.svg) */
   --ra-bg-row-sub:     #0e0e0e;  /* expanded stem sub-row */
 
   --ra-border:         #222222;

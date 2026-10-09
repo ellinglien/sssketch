@@ -201,11 +201,21 @@ textarea:focus-visible,
 
 .ra-riff-tile[data-selected='true'] {
   background-color: var(--ra-bg-riff-selected);
-  background-image: url('../assets/riff-selection-crosshatch.svg');
-  background-repeat: repeat;
-  background-size: 8px 8px;
-  image-rendering: pixelated;
   box-shadow: none;
+}
+
+/* The selection's pixel dots: the SVG is only a mask, so their colour is a
+ * token rather than a fill baked into the asset. Every child of a riff tile is
+ * absolutely positioned, so this first positioned box paints beneath them. */
+.ra-riff-tile[data-selected='true']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: var(--ra-riff-selected-hatch);
+  mask-image: url('../assets/riff-selection-crosshatch.svg');
+  mask-repeat: repeat;
+  mask-size: 8px 8px;
+  pointer-events: none;
 }
 
 .ra-shelf-riff-tile[data-previewing='true'] {
