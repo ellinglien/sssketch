@@ -32,6 +32,20 @@ export function updateReonedMissingReasons(entries: readonly ReonedMissing[]): v
   publish(missing.map((m) => ({ ...m, reason: reasons.get(m.path) ?? m.reason })))
 }
 
+/** Keeps only the copies a stem in `rifffs` still names. Every retry round runs it against the
+ * open project (a stem or riff deleted since takes its entry with it), and so does an open that
+ * failed after its repair set the new project's copies. When none remain the set clears, which
+ * stops the retry timer. */
+export function reconcileReonedMissing(
+  rifffs: Readonly<Record<string, { stems: readonly { path: string }[] }>>
+): void {
+  if (missing.length === 0) return
+  const named = new Set<string>()
+  for (const rifff of Object.values(rifffs)) for (const stem of rifff.stems) named.add(stem.path)
+  if (missing.every((m) => named.has(m.path))) return
+  publish(missing.filter((m) => named.has(m.path)))
+}
+
 export function reonedMissingPaths(): string[] {
   return missing.map((m) => m.path)
 }

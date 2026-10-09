@@ -4,6 +4,7 @@ import { evictStemAnalysis } from '../audio/evictStemAnalysis'
 import { getStateSnapshot, useDispatch, useFlushEngineSyncNow } from '../state/StoreContext'
 import {
   clearReonedMissing,
+  reconcileReonedMissing,
   retryableReonedMissingPaths,
   updateReonedMissingReasons,
   useReonedMissing
@@ -34,7 +35,13 @@ export function ReonedCopyMissingNotice(): React.JSX.Element | null {
       inFlight.current = true
       void (async () => {
         try {
-          const result = await retryReonedMissing(getStateSnapshot(), retryableReonedMissingPaths())
+          // First drop what the project no longer names; once nothing is left to retry, the set
+          // (or its last retryable entry) is gone and this effect stops the timer.
+          const state = getStateSnapshot()
+          reconcileReonedMissing(state.rifffs)
+          const retryable = retryableReonedMissingPaths()
+          if (retryable.length === 0) return
+          const result = await retryReonedMissing(state, retryable)
           if (!result) return
           if (result.moved.length > 0) {
             dispatch({ type: 'REPAIR_REONED_PATHS', results: result.moved })

@@ -11,6 +11,7 @@ import {
 } from 'react'
 import {
   StoreProvider,
+  getStateSnapshot,
   useAppSelector,
   useAppState,
   useDispatch,
@@ -22,7 +23,7 @@ import {
 } from './state/StoreContext'
 import { setReonedSessionRoot } from './state/reonedInUse'
 import { openWithReonedRepair } from './state/reonedRepairOnOpen'
-import { setReonedMissing } from './state/reonedMissing'
+import { reconcileReonedMissing, setReonedMissing } from './state/reonedMissing'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
 import { Ruler, PPB } from './components/Ruler'
@@ -203,6 +204,13 @@ const GHOST_ROW_HEIGHT = 44
 // No Node `path` module in the renderer -- a plain string split covers what
 // this needs (an externally-opened sketch's own file name, sans its project
 // extension, as an Ableton export's default suggested filename).
+/** An open that failed after openWithReonedRepair set the new project's missing copies: the
+ * project in the store (the previous one, or the new one if it got that far) keeps only the
+ * entries it names, so the pill and the retry never chase another project's copies. */
+function reonedOpenFailed(): void {
+  reconcileReonedMissing(getStateSnapshot().rifffs)
+}
+
 function basenameWithoutProjectExt(filePath: string): string {
   const base = filePath.split(/[\\/]/).pop() ?? filePath
   return base.replace(/\.sssketchproj$/i, '')
@@ -1689,8 +1697,13 @@ function Frame(): React.JSX.Element {
     // Missing re-oned copies are rebuilt before the engine sees the project; the baseline is the
     // snapshot as saved, so only a copy that moved shows as unsaved (reonedRepairOnOpen.ts).
     const opened = await openWithReonedRepair(loaded)
-    await warmStemCaches(opened.state)
-    restoreState(opened.state, pluginStates)
+    try {
+      await warmStemCaches(opened.state)
+      restoreState(opened.state, pluginStates)
+    } catch (err) {
+      reonedOpenFailed()
+      throw err
+    }
     lastSavedJsonRef.current = opened.savedJson
     setBusy(null)
     // The sketch-info sidecar can be missing/corrupted even when the
@@ -3420,6 +3433,7 @@ function Frame(): React.JSX.Element {
                   setCurrentSketch({ kind: 'library', name })
                 } catch (err) {
                   console.error('App: failed to open library sketch:', err)
+                  reonedOpenFailed()
                 } finally {
                   setBusy(null)
                 }
@@ -3458,6 +3472,7 @@ function Frame(): React.JSX.Element {
                   setCurrentSketch({ kind: 'external', path: result.path })
                 } catch (err) {
                   console.error('App: failed to open project from disk:', err)
+                  reonedOpenFailed()
                 } finally {
                   setBusy(null)
                 }
