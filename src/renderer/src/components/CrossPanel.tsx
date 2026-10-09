@@ -58,6 +58,7 @@ import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { useCrossPreview, type CrossPreviewMode } from '../state/useCrossPreview'
 import { crossEmptyDropSlotCount } from './crossDropSlots'
 import { crossColumnMark } from './crossColumnMark'
+import { MetronomeButton } from './MetronomeButton'
 
 const SOURCE_DRAG_TYPE = 'application/x-sssketch-cross-source'
 const ROW_DRAG_TYPE = 'application/x-sssketch-cross-row'
@@ -1193,6 +1194,11 @@ export function CrossPanel({
           +
         </button>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
+        {/* The app's metronome, not a Cross-only one: the same switch and
+            volume as the main transport. The engine clicks at the loaded
+            project's tempo, so while Cross plays it follows draft.targetBpm,
+            and the real project's tempo once Cross restores it. */}
+        <MetronomeButton />
         <span className="ra-cross-divider" />
         <div style={{ flex: 1 }} />
         <button
