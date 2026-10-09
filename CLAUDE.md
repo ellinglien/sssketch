@@ -195,17 +195,35 @@ lineage when the project opens (`state/reonedRepairOnOpen.ts`) and before any ex
 (`ensureReonedCopiesForState`, `reonedRebuild.ts`, placed riffs only). It lands on the same name,
 so the project isn't marked unsaved. One that can't be rebuilt shows "re-oned copy missing ·
 rebuilds when its original is back" (`ReonedCopyMissingNotice.tsx`, the Inspector) and is retried
-every 15 s while its original is unreachable. Unused copies are cleaned by the launch notice
+every 15 s while its original is unreachable. Each round first drops entries no stem in the open
+project names any more (`reconcileReonedMissing`, also run when an open fails after its repair),
+so the timer stops once nothing is left to retry. A copy rebuilt under a new name is repointed by
+`REPAIR_REONED_PATHS` in the present and every undo and redo step (`history.ts`): it is the same
+audio, and no undo step is added. Unused copies are cleaned by the launch notice
 (`ReonedCopiesNotice.tsx`, from 200 MB, "not now" for 7 days) and the gear menu's "clean up
 re-oned stem copies…". Their IPC (rebuild, library check, survey, clean, not now) is in
 `src/main/reonedCopiesIpc.ts`, registered from `index.ts`.
 
 "Used" means named by:
-- any library project or backup;
-- the autosave or its aside snapshot;
-- a remembered outside project (`reonedCopiesStore.ts`, 50 kept);
-- the open project, its undo history, Cross or Discover (`state/reonedInUse.ts`);
-- a copy handed out this session (read inside the `.bakes` lock at delete time).
+- the autosave or its aside snapshot, read first (a recover deletes the autosave; it is written to
+  a temporary and renamed over, so it is never read half-written);
+- any project file under the library root: the scan walks the whole tree (`reonedUsage.ts`), every
+  `.sssketchproj` at any depth, dot-named and symlinked folders included (each real folder once),
+  and every file in any `.backups` folder. It skips only `.bakes`, `.samples-cache` and macOS's
+  volume folders (`.Trashes`, `.Spotlight-V100`, ...), and stops at a folder it can't list or a
+  symlink whose target is away. `isInsideLibrary` (`projectFile.ts`) uses the walk's own rule
+  (`isReadByLibraryWalk`), so a project the walk doesn't read is remembered instead;
+- a remembered outside project (`reonedCopiesStore.ts`, 50 kept). A store that can't be read is
+  never written over; a corrupt one is moved aside to `reonedCopies.corrupt-<time>.json`, and the
+  survey and the clean stop until that file is deleted;
+- the open project, its undo history, Cross, Discover and Discover's undo and redo
+  (`state/reonedInUse.ts`);
+- this session (`reonedCopiesSession.ts`, read again inside the `.bakes` lock at delete time):
+  copies handed out, and copies named by any project text main handed to the renderer or wrote
+  (open, library open, backup read or restore, autosave offer, save, autosave). That covers a
+  project opened, recovered or saved while a clean's scan runs.
+
+The survey and the clean read the library root once, for the scan and the delete alike.
 
 A copy is deleted only if it is unused and more than a day old (`reonedUsage.ts`). Rules:
 - Bump `BAKER_VERSION` whenever the baker's bytes change (rotation, seam blend, `BakeStem.cpp`).
