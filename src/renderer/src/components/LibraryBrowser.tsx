@@ -80,6 +80,7 @@ import { resolveOwnUsername } from '@shared/ownUsernameReport'
 import { syncOutcomeNote, syncOutcomeNoteRefreshMs } from '@shared/syncOutcomeNote'
 import { loginSyncPromptText, type LoginSyncConsent } from '@shared/loginSyncConsent'
 import { loadLastSelectedImportJam, storeLastSelectedImportJam } from './libraryBrowserSelection'
+import { IMPORT_MULTI_SELECT_HINT } from '@shared/keyGestures'
 
 // The "your username" setting is persisted locally (not in project files or
 // app state) since it's a per-person identity setting, not something that
@@ -2579,7 +2580,7 @@ export function LibraryBrowser({
                                       }}
                                     >
                                       <RiffCircle
-                                        title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                                        title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)\n${IMPORT_MULTI_SELECT_HINT}`}
                                         selected={selectedRiffCID === riff.riffCID}
                                         multiSelected={
                                           selectedRiffCID !== riff.riffCID &&
@@ -2755,6 +2756,7 @@ export function LibraryBrowser({
                             // slower. importResolvedRiff already no-ops safely (returns null) if
                             // that fetch fails and truly nothing ends up cached.
                             disabled={downloadingRiffCID !== null}
+                            title={IMPORT_MULTI_SELECT_HINT}
                             style={{
                               height: 34,
                               borderRadius: 0,
