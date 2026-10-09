@@ -118,6 +118,17 @@ describe('collectUsedNames: each source on its own keeps a copy', () => {
     expect(yields).toBeGreaterThanOrEqual(3)
   })
 
+  it('reads the autosave before the library (I1)', async () => {
+    // A recover deletes the autosave; reading it first leaves the library's walk no chance to
+    // let one in before it is read.
+    project(join(root, 's', 's.sssketchproj'), 1)
+    project(join(userData, 'autosave.sssketchproj'), 3)
+    const scan = await collectUsedNames(sources(), async () => {
+      rmSync(join(userData, 'autosave.sssketchproj'), { force: true })
+    })
+    expect(scan.ok && sorted(scan.used)).toEqual([name(1), name(3)])
+  })
+
   it.skipIf(process.getuid?.() === 0)(
     'stops when a library project cannot be read (D10)',
     async () => {

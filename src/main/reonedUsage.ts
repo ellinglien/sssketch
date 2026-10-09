@@ -75,22 +75,31 @@ export async function collectUsedNames(
 ): Promise<UsedScan> {
   const used = new Set<string>([...src.inMemoryNames, ...src.sessionIssued])
   for (const p of src.knownProjects) for (const n of p.names) used.add(n)
+  // A required file: missing is fine (deleted since listing, or no snapshot at all), unreadable
+  // stops the pass.
+  const scanRequired = async (path: string): Promise<boolean> => {
+    let text: string
+    try {
+      text = await readFile(path, 'utf-8')
+    } catch (err) {
+      return isNotFound(err)
+    }
+    await scanText(text, used, yieldFn)
+    return true
+  }
+  // The recovery files first: a recover deletes the autosave, so read it before the library's
+  // slow walk gives one the chance (the session's project names cover a recover even earlier).
+  for (const path of src.userDataFiles) {
+    if (!(await scanRequired(path))) return { ok: false, path }
+  }
   let libraryFiles: string[]
   try {
     libraryFiles = await libraryProjectFiles(src.libraryRoot)
   } catch {
     return { ok: false, path: src.libraryRoot }
   }
-  const required = [...libraryFiles, ...src.userDataFiles]
-  for (const path of required) {
-    let text: string
-    try {
-      text = await readFile(path, 'utf-8')
-    } catch (err) {
-      if (isNotFound(err)) continue // deleted since listing, or no snapshot at all
-      return { ok: false, path }
-    }
-    await scanText(text, used, yieldFn)
+  for (const path of libraryFiles) {
+    if (!(await scanRequired(path))) return { ok: false, path }
   }
   for (const { path } of src.knownProjects) {
     let text: string
