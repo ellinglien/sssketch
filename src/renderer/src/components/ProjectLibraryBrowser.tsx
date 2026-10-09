@@ -8,8 +8,11 @@ import {
   startPreviewLoop,
   stopPreviewSources,
   registerActivePreview,
+  isActivePreview,
   unregisterActivePreview
 } from '../audio/previewLoop'
+import { pauseArrangementBeforeShelfPreview } from '../audio/shelfPreviewHandoff'
+import { useDispatch, usePlaying } from '../state/StoreContext'
 
 interface LibrarySketchSummary {
   name: string
@@ -115,6 +118,8 @@ export function ProjectLibraryBrowser({
    * so the only thing this needs to branch on is whether to continue. */
   onBeforeReplaceProject: () => Promise<'proceed' | 'cancel'>
 }): React.JSX.Element {
+  const dispatch = useDispatch()
+  const playing = usePlaying()
   const [sketches, setSketches] = useState<LibrarySketchSummary[] | null>(null)
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null)
   const [changingLocation, setChangingLocation] = useState(false)
@@ -174,9 +179,14 @@ export function ProjectLibraryBrowser({
     }
     stopBackupPreview()
     const generation = previewGenerationRef.current
+    const previewToken = registerActivePreview(stopBackupPreview)
+    previewTokenRef.current = previewToken
+    const previewCancelled = (): boolean =>
+      previewGenerationRef.current !== generation || !isActivePreview(previewToken)
     const json = await window.rifffApi.readSketchBackup(name, backupPath)
-    if (previewGenerationRef.current !== generation) return
+    if (previewCancelled()) return
     if (!json) {
+      stopBackupPreview()
       window.alert("Couldn't preview that version.")
       return
     }
@@ -185,6 +195,7 @@ export function ProjectLibraryBrowser({
       ;({ state } = deserializeProject(JSON.parse(json)))
     } catch (err) {
       console.error('ProjectLibraryBrowser: failed to parse backup for preview:', err)
+      stopBackupPreview()
       window.alert("Couldn't preview that version.")
       return
     }
@@ -200,17 +211,27 @@ export function ProjectLibraryBrowser({
         }))
       )
     if (stems.length === 0) {
+      stopBackupPreview()
       window.alert('Nothing to preview -- no stems were placed on the timeline in that version.')
       return
     }
-    if (previewGenerationRef.current !== generation) return
+    if (previewCancelled()) return
+    try {
+      await pauseArrangementBeforeShelfPreview({
+        playing,
+        pauseArrangement: () => dispatch({ type: 'PAUSE' }),
+        stopEngine: () => window.rifffApi.engineStop()
+      })
+    } catch (err) {
+      if (!isActivePreview(previewToken)) return
+      console.error('ProjectLibraryBrowser: failed to stop arrangement before preview:', err)
+      stopBackupPreview()
+      return
+    }
+    if (previewCancelled()) return
     setPreviewingPath(backupPath)
-    const sources = await startPreviewLoop(
-      getAudioContext(),
-      stems,
-      () => previewGenerationRef.current !== generation
-    )
-    if (previewGenerationRef.current !== generation) {
+    const sources = await startPreviewLoop(getAudioContext(), stems, previewCancelled)
+    if (previewCancelled()) {
       stopPreviewSources(sources)
       return
     }
@@ -219,7 +240,6 @@ export function ProjectLibraryBrowser({
       return
     }
     previewSourcesRef.current = sources
-    previewTokenRef.current = registerActivePreview(stopBackupPreview)
   }
 
   async function handleToggleFavourite(name: string): Promise<void> {
