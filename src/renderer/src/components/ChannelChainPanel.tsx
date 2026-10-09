@@ -124,7 +124,7 @@ export function ChannelChainPanel({
           }}
         >
           <span style={{ color: 'var(--ra-text-2)' }}>channel chain</span>
-          <button onClick={onClose} aria-label="Close channel chain panel" style={buttonStyle()}>
+          <button onClick={onClose} aria-label="close channel chain panel" style={buttonStyle()}>
             ×
           </button>
         </div>

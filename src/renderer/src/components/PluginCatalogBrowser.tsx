@@ -92,7 +92,7 @@ export function PluginCatalogBrowser({
           }}
         >
           <span style={{ color: 'var(--ra-text-2)' }}>all scanned plugins</span>
-          <button onClick={onClose} aria-label="Close plugin catalog browser" style={buttonStyle()}>
+          <button onClick={onClose} aria-label="close plugin catalog browser" style={buttonStyle()}>
             ×
           </button>
         </div>

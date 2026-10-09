@@ -387,7 +387,7 @@ export function ProjectLibraryBrowser({
             <button onClick={onOpenFromDisk} style={buttonStyle()}>
               open from disk…
             </button>
-            <button onClick={onClose} aria-label="Close project library" style={buttonStyle()}>
+            <button onClick={onClose} aria-label="close project library" style={buttonStyle()}>
               ×
             </button>
           </div>
