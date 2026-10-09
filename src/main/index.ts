@@ -1597,6 +1597,8 @@ app.whenReady().then(async () => {
     .then((handle) => {
       playbackEngine = handle
       subscribeEngineRelays(handle)
+      // A metronome change made while the engine was starting (metronomeSetting.ts).
+      metronomeSetting.resend((type, payload) => handle.client.send(type, payload))
     })
     .catch((err) => {
       // Same handling as before this became non-blocking -- a failed spawn
@@ -2397,9 +2399,13 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('engine-set-metronome', (_event, enabled: boolean, volume: number) => {
+    // Recorded even before the engine is up, which sends it once it is (startPlaybackEngine).
     const client = playbackEngine?.client
-    if (client)
-      metronomeSetting.apply((type, payload) => client.send(type, payload), enabled, volume)
+    metronomeSetting.apply(
+      client ? (type, payload) => client.send(type, payload) : undefined,
+      enabled,
+      volume
+    )
   })
 
   ipcMain.handle('engine-set-link-enabled', (_event, enabled: boolean) => {

@@ -20,6 +20,17 @@ describe('createMetronomeSetting', () => {
     })
   })
 
+  it('keeps a change made before the engine is up, and sends it once the engine starts', () => {
+    const setting = createMetronomeSetting()
+    setting.apply(undefined, true, 0.8)
+    const started = vi.fn()
+    setting.resend(started)
+    expect(started).toHaveBeenCalledExactlyOnceWith('set-metronome', {
+      enabled: true,
+      volume: 0.8
+    })
+  })
+
   it('sends nothing on respawn before the renderer has set it', () => {
     const respawned = vi.fn()
     createMetronomeSetting().resend(respawned)
