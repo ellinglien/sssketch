@@ -167,22 +167,31 @@ export class EngineClient {
     timeoutMs = 30000
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingWaiters = this.pendingWaiters.filter((w) => w.resolve !== resolve)
-        reject(new Error(`timed out waiting for "${responseType}" after ${timeoutMs}ms`))
-      }, timeoutMs)
-      this.pendingWaiters.push({
+      // The list holds this wrapper, not the promise's own resolve, so the
+      // timeout has to remove the wrapper by identity. Leaving a dead waiter
+      // in place would let it swallow the next reply of its type.
+      const waiter = {
         type: responseType,
-        resolve: (payload) => {
+        resolve: (payload: unknown): void => {
           clearTimeout(timer)
           resolve(payload)
         },
-        reject: (err) => {
+        reject: (err: Error): void => {
           clearTimeout(timer)
           reject(err)
         }
-      })
-      this.send(type, payload)
+      }
+      const timer = setTimeout(() => {
+        this.pendingWaiters = this.pendingWaiters.filter((w) => w !== waiter)
+        reject(new Error(`timed out waiting for "${responseType}" after ${timeoutMs}ms`))
+      }, timeoutMs)
+      this.pendingWaiters.push(waiter)
+      try {
+        this.send(type, payload)
+      } catch (err) {
+        this.pendingWaiters = this.pendingWaiters.filter((w) => w !== waiter)
+        waiter.reject(err instanceof Error ? err : new Error(String(err)))
+      }
     })
   }
 }

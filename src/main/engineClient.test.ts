@@ -135,6 +135,34 @@ function startPushServer(): Promise<number> {
   })
 }
 
+// Replies to "ping" with a "pong" carrying the request's own payload, but
+// only when that payload asks for a reply -- a request with reply:false is
+// left unanswered so its waiter times out.
+function startPingServer(): Promise<number> {
+  return new Promise((resolve) => {
+    server = createServer((socket: Socket) => {
+      let buf = Buffer.alloc(0)
+      socket.on('data', (chunk) => {
+        buf = Buffer.concat([buf, chunk])
+        while (buf.length >= 8) {
+          const len = buf.readUInt32LE(4)
+          if (buf.length < 8 + len) break
+          const parsed = JSON.parse(buf.subarray(8, 8 + len).toString('utf8'))
+          buf = buf.subarray(8 + len)
+          if (parsed.type === 'ping' && parsed.payload?.reply) {
+            socket.write(encodeMessage(JSON.stringify({ type: 'pong', payload: parsed.payload })))
+          }
+        }
+      })
+    })
+    server!.listen(0, '127.0.0.1', () => {
+      const address = server!.address()
+      if (address === null || typeof address === 'string') throw new Error('unexpected address')
+      resolve(address.port)
+    })
+  })
+}
+
 describe('encodeMessage', () => {
   it('writes an 8-byte header (magic + length, both little-endian) followed by the UTF-8 payload', () => {
     const encoded = encodeMessage('{"type":"quit"}')
@@ -334,6 +362,26 @@ describe('EngineClient', () => {
     expect(received).toEqual([{ success: true }])
 
     unsubscribe()
+    client.disconnect()
+  })
+  it('drops a timed-out waiter, so a later request of the same type gets its own reply', async () => {
+    // The waiter list stores a wrapper around the promise's resolve, so the
+    // timeout's old `w.resolve !== resolve` filter never matched and the dead
+    // waiter stayed first in line, swallowing the next reply of its type.
+    const port = await startPingServer()
+    const client = new EngineClient()
+    await client.connect(port)
+
+    await expect(client.sendAndAwaitType('ping', { reply: false }, 'pong', 30)).rejects.toThrow(
+      /timed out/
+    )
+    await expect(
+      client.sendAndAwaitType('ping', { reply: true, n: 2 }, 'pong', 2000)
+    ).resolves.toEqual({
+      reply: true,
+      n: 2
+    })
+
     client.disconnect()
   })
 })
