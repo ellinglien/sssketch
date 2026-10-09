@@ -49,6 +49,13 @@ export function libraryRootPath(): string {
   }
 }
 
+/** True when the library is at its default location. That folder may not exist yet (a fresh
+ * install creates it on its first save), so a missing default root is made, while a missing
+ * custom root means its drive is unplugged or the folder moved (see bakeOffset's BakeOptions). */
+export function isDefaultLibraryRoot(): boolean {
+  return libraryRootPath() === defaultLibraryRoot()
+}
+
 export function setLibraryRootPath(newRoot: string): void {
   try {
     writeFileSync(libraryPrefsPath(), JSON.stringify({ root: newRoot }, null, 2), 'utf-8')

@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
-import { writeFileSync, mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from 'node:fs'
+import {
+  writeFileSync,
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  statSync,
+  mkdirSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 // Same mock as nativeExport.test.ts (see its own doc comment for why this is
 // a faithful stand-in, not a workaround) — bakeOffset's native-routed path
@@ -10,6 +19,8 @@ import { join } from 'node:path'
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
 
 import { bakeOffset } from './bakeOffset'
+import { recipeName } from './reonedRecipe'
+import { rotationSecForBars } from '@shared/reonedRotation'
 
 /** A 16-bit mono WAV ramping linearly from 0 to just under full scale, so a
  * rotation can be verified by checking which sample value now sits at
@@ -205,6 +216,243 @@ describe('bakeOffset', () => {
         ])
       ).toEqual([])
       expect(readdirSync(join(dir, '.sssketch-bakes'))).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('bakeOffset recipes', () => {
+  // 4 bars of 1 s at 1000 Hz: bar-aligned rotations are whole frames, and every seam lands far
+  // from the edges, where blendSeamInt16 skips its 128-frame blend (a seam frame within 256 of
+  // the start). The plan's scratch check found the chain and a direct bake differ only when an
+  // earlier re-one put its seam there, so the chain never blended it.
+  const stemShape = { barLength: 4, durationSec: 4 }
+
+  it('names a copy by its recipe, and re-oning twice to the same spot writes one file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const out = join(dir, 'bakes')
+      const first = await bakeOffset([{ path: source, rotationSec: 1 }], out)
+      const info = statSync(source)
+      expect(first[0].bakedPath).toBe(
+        join(
+          out,
+          recipeName({ path: source, size: info.size, mtimeMs: info.mtimeMs }, { samples: 1000 })
+        )
+      )
+      const before = statSync(first[0].bakedPath).mtimeMs
+      const second = await bakeOffset([{ path: source, rotationSec: 1.0000001 }], out)
+      expect(second).toEqual(first)
+      expect(readdirSync(out)).toEqual([basename(first[0].bakedPath)])
+      expect(statSync(first[0].bakedPath).mtimeMs).toBe(before) // reused, not rewritten
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('PIN: two chained re-ones and a bake from the original at the total phaseBars give the same bytes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const legacy = join(dir, 'legacy') // today's behaviour: chain, no recipe
+      const a = await bakeOffset(
+        [{ path: source, rotationSec: rotationSecForBars(1, stemShape) }],
+        legacy
+      )
+      const chained = await bakeOffset(
+        [{ path: a[0].bakedPath, rotationSec: rotationSecForBars(0.5, stemShape) }],
+        legacy
+      )
+      // phaseBars after the two re-ones: 0 + 1 + 0.5 (nextPhaseBars). A rebuild bakes the
+      // original by rotationSecForBars(phaseBars).
+      const out = join(dir, 'bakes')
+      const rebuilt = await bakeOffset(
+        [
+          {
+            path: '/missing/copy.baked.wav',
+            rotationSec: 0,
+            recipe: { sourcePath: source, rotationSec: rotationSecForBars(1.5, stemShape) }
+          }
+        ],
+        out
+      )
+      expect(readFileSync(rebuilt[0].bakedPath)).toEqual(readFileSync(chained[0].bakedPath))
+      expect(rebuilt[0].path).toBe('/missing/copy.baked.wav')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a re-one of an already re-oned stem bakes from the original when it is there, and chains when it is not', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const out = join(dir, 'bakes')
+      const [copy] = await bakeOffset([{ path: source, rotationSec: 1 }], out)
+      const job = {
+        path: copy.bakedPath,
+        rotationSec: 0.5,
+        recipe: { sourcePath: source, rotationSec: 1.5 }
+      }
+      const [fromOriginal] = await bakeOffset([job], out)
+      expect(fromOriginal.path).toBe(copy.bakedPath) // results stay keyed by the job's path
+      const [direct] = await bakeOffset([{ path: source, rotationSec: 1.5 }], out)
+      expect(fromOriginal.bakedPath).toBe(direct.bakedPath) // reuse: same recipe, one file
+      rmSync(source)
+      const [chained] = await bakeOffset([job], out)
+      expect(chained.bakedPath).not.toBe(fromOriginal.bakedPath) // named from the copy it came from
+      expect(readFileSync(chained.bakedPath)).toEqual(readFileSync(fromOriginal.bakedPath))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns one result per job in job order, sharing one render for two jobs on one recipe', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const out = join(dir, 'bakes')
+      const results = await bakeOffset(
+        [
+          { path: source, rotationSec: 2 },
+          { path: source, rotationSec: 1 },
+          { path: source, rotationSec: 2 }
+        ],
+        out
+      )
+      expect(results.map((r) => r.path)).toEqual([source, source, source])
+      expect(results[0].bakedPath).toBe(results[2].bakedPath)
+      expect(results[1].bakedPath).not.toBe(results[0].bakedPath)
+      expect(readdirSync(out).sort()).toEqual(
+        [basename(results[0].bakedPath), basename(results[1].bakedPath)].sort()
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a failed batch deletes nothing it did not create, even a copy it was about to reuse', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const bad = join(dir, 'bad.wav')
+      writeFileSync(bad, Buffer.from('not a wav'))
+      const out = join(dir, 'bakes')
+      const [shared] = await bakeOffset([{ path: source, rotationSec: 1 }], out)
+      for (const failing of [join(dir, 'gone.wav'), bad]) {
+        const results = await bakeOffset(
+          [
+            { path: source, rotationSec: 1 }, // reuses `shared`
+            { path: source, rotationSec: 2 }, // would be new
+            { path: failing, rotationSec: 1 } // fails the batch: unreadable, or won't render
+          ],
+          out
+        )
+        expect(results).toEqual([])
+        expect(readdirSync(out)).toEqual([basename(shared.bakedPath)])
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reuses a native (LORE-style) copy too: the second bake of the same recipe spawns nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const path = join(dir, 'abcdef0123456789')
+      writeRampWav(path, 1000, 1000)
+      const out = join(dir, 'bakes')
+      const first = await bakeOffset([{ path, rotationSec: 0.25 }], out)
+      expect(first).toHaveLength(1)
+      const before = statSync(first[0].bakedPath).mtimeMs
+      const second = await bakeOffset([{ path, rotationSec: 0.25 }], out)
+      expect(second).toEqual(first)
+      expect(readdirSync(out)).toEqual([basename(first[0].bakedPath)])
+      expect(statSync(first[0].bakedPath).mtimeMs).toBe(before)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 45000)
+
+  it('refuses to recreate a library root that is not there (an unplugged drive, a moved folder)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const out = join(dir, 'unplugged-root', '.bakes')
+      expect(await bakeOffset([{ path: source, rotationSec: 1 }], out)).toEqual([])
+      expect(existsSync(join(dir, 'unplugged-root'))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('creates the default library root when asked (a fresh install that has never saved)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const out = join(dir, 'Music', 'sssketch', 'projects', '.bakes')
+      const results = await bakeOffset([{ path: source, rotationSec: 1 }], out, {
+        mayCreateRoot: true
+      })
+      expect(results).toHaveLength(1)
+      expect(existsSync(results[0].bakedPath)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a copy cut short is not reused: it is rendered again, whole', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const out = join(dir, 'bakes')
+      const [first] = await bakeOffset([{ path: source, rotationSec: 1 }], out)
+      const whole = readFileSync(first.bakedPath)
+      writeFileSync(first.bakedPath, whole.subarray(0, 2000))
+      const [second] = await bakeOffset([{ path: source, rotationSec: 1 }], out)
+      expect(second.bakedPath).toBe(first.bakedPath)
+      expect(second.durationSec).toBeCloseTo(4, 5)
+      expect(readFileSync(second.bakedPath)).toEqual(whole)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a failed batch never deletes a file that was at a final name before it, even one it rendered over', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const out = join(dir, 'bakes')
+      mkdirSync(out)
+      const info = statSync(source)
+      const identity = { path: source, size: info.size, mtimeMs: info.mtimeMs }
+      // A's final is there but unreadable (rendered over); B's final name is taken by a folder,
+      // so publishing B fails after A was already renamed into place.
+      const finalA = join(out, recipeName(identity, { samples: 1000 }))
+      const finalB = join(out, recipeName(identity, { samples: 2000 }))
+      writeFileSync(finalA, 'garbage')
+      mkdirSync(finalB)
+      const results = await bakeOffset(
+        [
+          { path: source, rotationSec: 1 },
+          { path: source, rotationSec: 2 }
+        ],
+        out
+      )
+      expect(results).toEqual([])
+      expect(existsSync(finalA)).toBe(true)
+      expect(readdirSync(out).sort()).toEqual([basename(finalA), basename(finalB)].sort())
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -284,6 +284,7 @@ import {
   listLibrarySketches,
   libraryRootPath,
   bakeAssetsDir,
+  isDefaultLibraryRoot,
   setLibraryRootPath,
   shouldWarnBeforeOverwrite,
   renameSketch,
@@ -1359,7 +1360,9 @@ app.whenReady().then(async () => {
     renderStretched(stemPath, ratio)
   )
 
-  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs, bakeAssetsDir()))
+  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) =>
+    bakeOffset(jobs, bakeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
+  )
 
   ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!

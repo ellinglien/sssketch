@@ -50,6 +50,15 @@ describe('projectLibrary', () => {
       setLibraryRootPath(customRoot)
       expect(libraryRootPath()).toBe(customRoot)
     })
+
+    it('knows whether the root is the default one (a fresh install may not have made it yet)', async () => {
+      const { isDefaultLibraryRoot, setLibraryRootPath } = await import('./projectLibrary')
+      expect(isDefaultLibraryRoot()).toBe(true)
+      setLibraryRootPath(join(musicDir, 'elsewhere'))
+      expect(isDefaultLibraryRoot()).toBe(false)
+      setLibraryRootPath(join(musicDir, 'sssketch', 'projects'))
+      expect(isDefaultLibraryRoot()).toBe(true)
+    })
   })
 
   describe('sketch path helpers', () => {
