@@ -183,6 +183,20 @@ Auditioning never adopts a bake: Cross (`components/crossFromSketch.ts`) and a D
 render a riff's live offset to `.bakes` and use those files without dispatching `APPLY_BAKE`, so
 the project isn't edited or marked unsaved.
 
+Two more places bake to a riff's rotation (`bakeToPhaseJob` in `reonedRotation.ts`, recipe-named
+like every copy):
+- **Late stems.** Importing a riff again merges stems that finished downloading since. When the
+  riff was re-oned in between, they are baked to its rotation first (`rotateJoiningStems`,
+  `audio/importResolvedRiff.ts`), all or nothing; if that fails they aren't added, and
+  `ReoneNotice.tsx` says so. It also names the riffs of a batch import whose re-one failed.
+- **Discover candidates from the seed's jam.** Seeding Discover from a project riff looks up each
+  seed original's jam (`riff-library-stem-jams`, `src/main/stemJams.ts`) and keeps the rotation
+  per jam (`discoverSeedPhase`, `src/shared/discoverSeedPhase.ts`; App's `discoverSeedPhase`
+  state). A candidate from that jam, or one of the seed's own stems, resolves to a copy at the
+  seed's rotation (`resolveCandidateStem(candidate, seedPhase)`), rendered, never adopted. Every
+  Discover caller passes the phase, so rows, radio's warm-up and add share one cache entry.
+  Candidates from other jams keep their own phase.
+
 `.bakes` is a rebuildable cache. A copy is named by its recipe (`src/main/reonedRecipe.ts`: the
 original's path, size and mtime, the rotation in samples, `BAKER_VERSION`), and a re-one bakes
 from the stem's original (`phaseSourcePath`) by the total rotation (`phaseBars`), falling back to

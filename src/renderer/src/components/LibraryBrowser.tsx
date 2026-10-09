@@ -34,6 +34,7 @@ import {
 import { evictStemAnalysis } from '../audio/evictStemAnalysis'
 import { showReoneNotice } from '../state/reoneNotice'
 import { lateStemsNotAddedText } from '@shared/reoneNotices'
+import type { DiscoverSeedPhase } from '@shared/discoverSeedPhase'
 import {
   usePlaying,
   useDispatch,
@@ -175,6 +176,8 @@ export function LibraryBrowser({
   setDiscoverRedoStack,
   discoverSeedBpm,
   setDiscoverSeedBpm,
+  discoverSeedPhase,
+  setDiscoverSeedPhase,
   onCoachSlotsChange,
   initialMode
 }: {
@@ -236,6 +239,10 @@ export function LibraryBrowser({
   setDiscoverRedoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
   discoverSeedBpm: number | null
   setDiscoverSeedBpm: React.Dispatch<React.SetStateAction<number | null>>
+  /** App.tsx's discoverSeedPhase: the seed's rotation, for candidates from its own jam. A Browse
+   * seed is the library riff at its raw phase, so it clears it. */
+  discoverSeedPhase: DiscoverSeedPhase | null
+  setDiscoverSeedPhase: (phase: DiscoverSeedPhase | null) => void
   /** Passed straight through to DiscoverPanel -- see its own doc comments. */
   onCoachSlotsChange?: (slots: CoachSlotSnapshot[]) => void
   /** Which half to open on. Required, and always honoured: the shelf now has
@@ -1722,6 +1729,7 @@ export function LibraryBrowser({
       setDiscoverRedoStack([])
       setDiscoverSlots(buildSeedSlotsFromCandidates(candidates))
       setDiscoverSeedBpm(resolvedRiff.bpm)
+      setDiscoverSeedPhase(null)
       setLibraryMode('discover')
     } finally {
       setBusy(null)
@@ -2776,6 +2784,7 @@ export function LibraryBrowser({
             onRadioViewChange={onRadioViewChange}
             setDiscoverConsented={setDiscoverConsented}
             seedBpm={discoverSeedBpm}
+            seedPhase={discoverSeedPhase}
             onCoachSlotsChange={onCoachSlotsChange}
           />
         )}

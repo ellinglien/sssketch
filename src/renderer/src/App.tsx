@@ -103,6 +103,11 @@ import { ReonedCopiesNotice } from './components/ReonedCopiesNotice'
 import { ReoneNotice } from './components/ReoneNotice'
 import { showReoneNotice } from './state/reoneNotice'
 import { reoneSiblings, siblingsNotReonedText } from '@shared/reoneNotices'
+import {
+  discoverSeedPhase as seedPhaseOfStems,
+  type DiscoverSeedPhase
+} from '@shared/discoverSeedPhase'
+import { phaseLineage } from '@shared/reonedRotation'
 import { StartupGate } from './components/StartupGate'
 import { OwnUsernameReporter } from './components/OwnUsernameReporter'
 import { markManualSeek } from './state/manualSeek'
@@ -1941,6 +1946,10 @@ function Frame(): React.JSX.Element {
     [discoverUndoStack, discoverRedoStack]
   )
   const [discoverSeedBpm, setDiscoverSeedBpm] = useState<number | null>(null)
+  // The open Discover seed's rotation, per jam: a candidate from the seed's own jam is baked by
+  // it (discoverCandidateStem.ts), so it plays in phase with the seed. Set with the seed, like
+  // discoverSeedBpm; null for a seed at its raw phase.
+  const [discoverSeedPhase, setDiscoverSeedPhase] = useState<DiscoverSeedPhase | null>(null)
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
   // welcome modal (suppresses it below while this is up), since knowing
   // where your work lives is more foundational than a feature tour. Never
@@ -2347,6 +2356,19 @@ function Frame(): React.JSX.Element {
       window.alert('could not prepare every stem for discover. nothing was changed; try again.')
       return
     }
+    // Which jam each seed stem's original is from, so candidates rolled from the same jam can be
+    // baked by the seed's rotation. If the lookup fails, only the seed's own stems are known.
+    let seedPhase: DiscoverSeedPhase | null = null
+    try {
+      const originals = seedRifff.stems.map((stem) => phaseLineage(stem).sourcePath)
+      seedPhase = seedPhaseOfStems(
+        seedRifff.stems,
+        await window.rifffApi.riffLibraryStemJams(originals)
+      )
+    } catch (err) {
+      console.error("App: couldn't look up the Discover seed's jams:", err)
+      seedPhase = seedPhaseOfStems(seedRifff.stems, {})
+    }
 
     setLibraryBrowserOpen(false)
     // Says 'discover' outright rather than leaving the browser to infer it
@@ -2361,6 +2383,7 @@ function Frame(): React.JSX.Element {
     setDiscoverUndoStack([[]])
     setDiscoverRedoStack([])
     setDiscoverSeedBpm(rifff.bpm)
+    setDiscoverSeedPhase(seedPhase)
     setRiffLibraryOpen(true)
   }
 
@@ -3381,6 +3404,8 @@ function Frame(): React.JSX.Element {
             setDiscoverRedoStack={setDiscoverRedoStack}
             discoverSeedBpm={discoverSeedBpm}
             setDiscoverSeedBpm={setDiscoverSeedBpm}
+            discoverSeedPhase={discoverSeedPhase}
+            setDiscoverSeedPhase={setDiscoverSeedPhase}
             initialMode={riffLibraryInitialMode}
             onCoachSlotsChange={handleCoachSlotsChange}
           />

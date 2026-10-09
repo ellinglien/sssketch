@@ -485,6 +485,7 @@ import {
 import { DiscoverSlotRow } from './DiscoverSlotRow'
 import { radioRowPlates } from '@shared/radioRowPlates'
 import { resolveCandidateStem, type ResolvedCandidateStem } from './discoverCandidateStem'
+import type { DiscoverSeedPhase } from '@shared/discoverSeedPhase'
 import {
   DISCOVER_ROW_GRID_COLUMNS,
   DISCOVER_ROW_COLUMN_GAP,
@@ -911,6 +912,7 @@ export function DiscoverPanel({
   onRadioViewChange,
   setDiscoverConsented,
   seedBpm,
+  seedPhase,
   onCoachSlotsChange
 }: {
   currentSketch: ProjectRef
@@ -988,6 +990,10 @@ export function DiscoverPanel({
    * seed tempo" button below, direct request 2026-09-16: "maybe a button
    * next to the tempo adjust to set it to the original rifff tempo?" */
   seedBpm: number | null
+  /** The seed's rotation per jam (App.tsx's discoverSeedPhase): a candidate from the seed's own
+   * jam resolves baked by it, so it plays in phase with the seed's jam-mates. Passed to every
+   * resolveCandidateStem here and to each row. */
+  seedPhase: DiscoverSeedPhase | null
   /** The kinds sssketchy's current step pre-arms in the add row -- "each
    * step pre-arms the matching kinds in Discover's add row" (spec, phase 1
    * step 3). Declarative on purpose: this panel unmounts on every
@@ -10557,7 +10563,7 @@ export function DiscoverPanel({
    * today costs. */
   async function resolveAndWarmPick(pick: SlotPick): Promise<ResolvedCandidateStem | null> {
     if (pick.candidate === null) return null
-    const stem = await resolveCandidateStem(pick.candidate)
+    const stem = await resolveCandidateStem(pick.candidate, seedPhase)
     if (stem === null) return null
     // Three warms, one call. The preview always stretches (previewState
     // sets stretch true for its one rifff) and a Discover candidate is
@@ -12999,7 +13005,7 @@ export function DiscoverPanel({
         // own cache entry; the pick still commits and that one row simply
         // shows as unresolved, the same soft degradation every other
         // Discover path takes.
-        await resolveCandidateStem(pick.candidate)
+        await resolveCandidateStem(pick.candidate, seedPhase)
         return { slotId: id, pick }
       })
     )
@@ -13063,7 +13069,9 @@ export function DiscoverPanel({
           seedStem,
           gain
         }): Promise<{ stem: ResolvedCandidateStem; gain: number; disabled: boolean } | null> => {
-          const stem = candidate ? await resolveCandidateStem(candidate) : (seedStem ?? null)
+          const stem = candidate
+            ? await resolveCandidateStem(candidate, seedPhase)
+            : (seedStem ?? null)
           const disabled = discoverRowDisabledOnAdd(id, previewingSlotIds, soloed)
           return stem ? { stem, gain, disabled } : null
         }
@@ -14260,6 +14268,7 @@ export function DiscoverPanel({
               soloed={soloedSlotId === slot.id}
               favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
               maxBarLength={maxBarLength}
+              seedPhase={seedPhase}
               onToggleLock={() => toggleLock(slot.id)}
               radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
               radioOn={radioOn}

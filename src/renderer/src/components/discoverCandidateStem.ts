@@ -3,6 +3,14 @@ import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { type SoundType } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
+import { candidatePhaseBars, type DiscoverSeedPhase } from '@shared/discoverSeedPhase'
+import {
+  bakeToPhaseJob,
+  matchBakeResults,
+  phaseLineage,
+  rotationSecForBars,
+  type ReoneBakeJob
+} from '@shared/reonedRotation'
 
 export interface ResolvedCandidateStem {
   author: string
@@ -46,10 +54,70 @@ const resolvedCandidateCache = new Map<string, Promise<ResolvedCandidateStem | n
  * lifetime: written when the promise settles non-null, dropped with it. */
 const settledCandidateStems = new Map<string, ResolvedCandidateStem>()
 
+/** The cache key: the candidate, and the rotation it is resolved at when the seed's phase
+ * reaches it (candidatePhaseBars). A rotated candidate is a different file from the raw one. */
+function candidateKey(candidate: DiscoverCandidate, phase: DiscoverSeedPhase | null): string {
+  const bars = candidatePhaseBars(phase, candidate)
+  const key = `${candidate.riffCID}:${candidate.stemCID}`
+  return bars === null ? key : `${key}@${bars}`
+}
+
 export function peekResolvedCandidateStem(
-  candidate: DiscoverCandidate
+  candidate: DiscoverCandidate,
+  phase: DiscoverSeedPhase | null = null
 ): ResolvedCandidateStem | null {
-  return settledCandidateStems.get(`${candidate.riffCID}:${candidate.stemCID}`) ?? null
+  return settledCandidateStems.get(candidateKey(candidate, phase)) ?? null
+}
+
+/** Caches `make()`'s promise under `key`, the settled stem alongside, and drops both on null. */
+function cachedResolve(
+  key: string,
+  make: () => Promise<ResolvedCandidateStem | null>
+): Promise<ResolvedCandidateStem | null> {
+  const cached = resolvedCandidateCache.get(key)
+  if (cached) return cached
+  const promise = make()
+  resolvedCandidateCache.set(key, promise)
+  void promise.then((result) => {
+    if (result === null) resolvedCandidateCache.delete(key)
+    else settledCandidateStems.set(key, result)
+  })
+  return promise
+}
+
+export type CandidateBake = (
+  jobs: ReoneBakeJob[]
+) => Promise<{ path: string; bakedPath: string; durationSec: number }[]>
+
+/** A resolved candidate baked to `bars` in total from its original, for a candidate from the
+ * seed's own jam (src/shared/discoverSeedPhase.ts). Through the re-oned copies path: the copy is
+ * named by its recipe, so the same stem at the same phase, in any later roll, audition or
+ * project, is one file, and baking it again only finds that file. Rendered, never adopted: like
+ * a Cross parent or a Discover seed, nothing in the project changes. null when the bake fails:
+ * the row reads as unresolved (rerolling picks another) rather than playing at the wrong phase.
+ * A rotation that wraps to nothing (whole loops) needs no copy. */
+export async function alignCandidateStem(
+  stem: ResolvedCandidateStem,
+  bars: number,
+  bake: CandidateBake
+): Promise<ResolvedCandidateStem | null> {
+  if (rotationSecForBars(bars, stem) === 0) return stem
+  let results: Awaited<ReturnType<CandidateBake>>
+  try {
+    results = await bake([bakeToPhaseJob({ slot: 1, ...stem }, bars)])
+  } catch (err) {
+    console.error('alignCandidateStem: bake failed:', err)
+    return null
+  }
+  const matched = matchBakeResults([stem.path], results)
+  if (!matched) return null
+  return {
+    ...stem,
+    path: matched[0].bakedPath,
+    durationSec: matched[0].durationSec,
+    phaseSourcePath: phaseLineage(stem).sourcePath,
+    phaseBars: bars
+  }
 }
 
 /** Resolves one Discover candidate down to a real, locally-downloaded
@@ -65,15 +133,30 @@ export function peekResolvedCandidateStem(
  * Returns null (never throws) for a riff that fails to resolve/download
  * (network hiccup, since-deleted riff) -- callers treat that the same as
  * "no candidate yet" rather than surfacing an error for what's ultimately
- * a soft, retryable failure (reroll picks something else regardless). */
+ * a soft, retryable failure (reroll picks something else regardless).
+ *
+ * `phase` is the open Discover seed's (App's discoverSeedPhase): a candidate
+ * from the seed's own jam resolves to a copy baked by the seed's rotation
+ * (alignCandidateStem), so it plays in phase with the seed's jam-mates. Every
+ * caller that resolves for Discover passes it, so a row, radio's warm-up and
+ * add all land on one cache entry. */
 export function resolveCandidateStem(
+  candidate: DiscoverCandidate,
+  phase: DiscoverSeedPhase | null = null
+): Promise<ResolvedCandidateStem | null> {
+  const bars = candidatePhaseBars(phase, candidate)
+  if (bars === null) return resolveRawCandidateStem(candidate)
+  return cachedResolve(candidateKey(candidate, phase), async () => {
+    const raw = await resolveRawCandidateStem(candidate)
+    if (!raw) return null
+    return alignCandidateStem(raw, bars, (jobs) => window.rifffApi.bakeOffset(jobs))
+  })
+}
+
+function resolveRawCandidateStem(
   candidate: DiscoverCandidate
 ): Promise<ResolvedCandidateStem | null> {
-  const key = `${candidate.riffCID}:${candidate.stemCID}`
-  const cached = resolvedCandidateCache.get(key)
-  if (cached) return cached
-
-  const promise = (async (): Promise<ResolvedCandidateStem | null> => {
+  return cachedResolve(candidateKey(candidate, null), async () => {
     try {
       const resolved = await window.rifffApi.riffLibraryResolveRiff(candidate.riffCID)
       if (!resolved) return null
@@ -98,12 +181,5 @@ export function resolveCandidateStem(
       console.error('resolveCandidateStem: failed to resolve candidate', candidate.riffCID, err)
       return null
     }
-  })()
-
-  resolvedCandidateCache.set(key, promise)
-  void promise.then((result) => {
-    if (result === null) resolvedCandidateCache.delete(key)
-    else settledCandidateStems.set(key, result)
   })
-  return promise
 }
