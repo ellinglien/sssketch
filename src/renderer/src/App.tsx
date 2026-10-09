@@ -104,6 +104,7 @@ import { ReoneNotice } from './components/ReoneNotice'
 import { showReoneNotice } from './state/reoneNotice'
 import { reoneSiblings, siblingsNotReonedText } from '@shared/reoneNotices'
 import {
+  activeSeedPhase,
   discoverSeedPhase as seedPhaseOfStems,
   type DiscoverSeedPhase
 } from '@shared/discoverSeedPhase'
@@ -1950,6 +1951,12 @@ function Frame(): React.JSX.Element {
   // it (discoverCandidateStem.ts), so it plays in phase with the seed. Set with the seed, like
   // discoverSeedBpm; null for a seed at its raw phase.
   const [discoverSeedPhase, setDiscoverSeedPhase] = useState<DiscoverSeedPhase | null>(null)
+  // What Discover resolves with: the seed's phase only while a seed row is there
+  // (activeSeedPhase), so it lapses with the seed rows and comes back with them on undo.
+  const activeDiscoverSeedPhase = useMemo(
+    () => activeSeedPhase(discoverSeedPhase, discoverSlots),
+    [discoverSeedPhase, discoverSlots]
+  )
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
   // welcome modal (suppresses it below while this is up), since knowing
   // where your work lives is more foundational than a feature tour. Never
@@ -3402,7 +3409,7 @@ function Frame(): React.JSX.Element {
             setDiscoverRedoStack={setDiscoverRedoStack}
             discoverSeedBpm={discoverSeedBpm}
             setDiscoverSeedBpm={setDiscoverSeedBpm}
-            discoverSeedPhase={discoverSeedPhase}
+            discoverSeedPhase={activeDiscoverSeedPhase}
             setDiscoverSeedPhase={setDiscoverSeedPhase}
             initialMode={riffLibraryInitialMode}
             onCoachSlotsChange={handleCoachSlotsChange}

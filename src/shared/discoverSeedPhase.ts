@@ -80,3 +80,16 @@ export function candidatePhaseBars(
   const bars = phase.byStem[candidate.stemCID] ?? phase.byJam[candidate.jamCID]
   return bars === undefined || bars === 0 ? null : bars
 }
+
+/** The seed phase while it still describes something in Discover: a row holding one of the
+ * seed's stems (`seedStem`). Once every seed row is removed or rerolled, nothing heard carries
+ * the seed's rotation, and candidates from its jam come in at their own phase again; undo brings
+ * a seed row back, and the phase with it. Not reset when a project opens: Discover's rows,
+ * the seed's among them, stay through an open, and a phase dropped under them would put the
+ * next candidates from the seed's jam out of phase with them. */
+export function activeSeedPhase(
+  phase: DiscoverSeedPhase | null,
+  rows: readonly { seedStem?: unknown }[]
+): DiscoverSeedPhase | null {
+  return phase !== null && rows.some((row) => row.seedStem !== undefined) ? phase : null
+}

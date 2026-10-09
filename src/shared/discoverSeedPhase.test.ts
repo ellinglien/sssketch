@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { candidatePhaseBars, discoverSeedPhase } from './discoverSeedPhase'
+import { activeSeedPhase, candidatePhaseBars, discoverSeedPhase } from './discoverSeedPhase'
 
 // A seed's stems, as App seeds Discover from a project riff: re-oned copies with their lineage.
 const copy = (
@@ -122,5 +122,25 @@ describe('candidatePhaseBars', () => {
 
   it('is null without a seed phase', () => {
     expect(candidatePhaseBars(null, { stemCID: 's1', jamCID: 'jamA' })).toBeNull()
+  })
+})
+
+describe('activeSeedPhase', () => {
+  const phase = discoverSeedPhase([copy('s1', 1.5)], { '/lib/stems/x/s1': 'jamA' })
+  const seedRow = { seedStem: { path: '/lib/.bakes/s1.baked.wav' } }
+  const rolledRow = { candidate: { stemCID: 'c1' } }
+
+  it('holds while a seed row is there', () => {
+    expect(activeSeedPhase(phase, [rolledRow, seedRow])).toBe(phase)
+  })
+
+  it('lapses once the seed rows are gone (removed or rerolled), and returns with them on undo', () => {
+    expect(activeSeedPhase(phase, [rolledRow])).toBeNull()
+    expect(activeSeedPhase(phase, [])).toBeNull()
+    expect(activeSeedPhase(phase, [seedRow])).toBe(phase)
+  })
+
+  it('is null without a phase', () => {
+    expect(activeSeedPhase(null, [seedRow])).toBeNull()
   })
 })
