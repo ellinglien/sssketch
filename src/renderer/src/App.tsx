@@ -20,6 +20,7 @@ import {
   useRestoreState,
   useZoom
 } from './state/StoreContext'
+import { setReonedSessionRoot } from './state/reonedInUse'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
 import { Ruler, PPB } from './components/Ruler'
@@ -1848,6 +1849,9 @@ function Frame(): React.JSX.Element {
   // draft, so opening another pair never needs a discard confirmation.
   const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
   const [crossOpen, setCrossOpen] = useState(false)
+  // The re-oned copies cleanup counts what Cross and Discover hold as in use (reonedInUse.ts).
+  useEffect(() => setReonedSessionRoot('cross', crossDraft), [crossDraft])
+  useEffect(() => setReonedSessionRoot('discover', discoverSlots), [discoverSlots])
   // One shared, session-only riff selection for both Sketch and Shelf.
   // Keeping this above the fullscreen Cross/Discover workspaces means the
   // exact working set remains highlighted when either workspace closes;
