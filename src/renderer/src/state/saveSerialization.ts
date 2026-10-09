@@ -138,3 +138,17 @@ export function autosaveAction(
   if (unsaved) return 'write'
   return wroteSinceClear ? 'clear' : 'skip'
 }
+
+/** Whether the autosave holds off for a previous session's crash snapshot: only while the
+ * welcome is offering it (Recover / Discard). Writing then would overwrite the snapshot with a
+ * session that hasn't started. Once the welcome is closed with its x (neither recovered nor
+ * discarded), the snapshot stays on disk until this session has unsaved work of its own, and the
+ * autosave's first write replaces it: from then on the recovery file protects the new work, as it
+ * must whenever work is unsaved (AGENTS.md). Holding off for the rest of the session instead left
+ * that work with no crash protection at all. */
+export function autosaveWaitsOnRecoveryOffer(offer: {
+  recoveryPending: boolean
+  offerDismissed: boolean
+}): boolean {
+  return offer.recoveryPending && !offer.offerDismissed
+}

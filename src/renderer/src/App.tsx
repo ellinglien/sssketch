@@ -143,6 +143,7 @@ import {
 } from './state/pendingPluginStates'
 import {
   autosaveAction,
+  autosaveWaitsOnRecoveryOffer,
   autosaveDelayMs,
   createAutosaveGate,
   dirtyCheckJson,
@@ -1562,6 +1563,10 @@ function Frame(): React.JSX.Element {
   // normal new/open welcome -- see its own doc comment for why the view is
   // derived from this prop rather than mirrored into local state there.
   const [recoverableAutosave, setRecoverableAutosave] = useState<{ json: string } | null>(null)
+  // The welcome's x (hideOnboardingForSession, below): closed for this session
+  // without recovering or discarding. Declared here because the autosave
+  // effect below keys off it (autosaveWaitsOnRecoveryOffer).
+  const [onboardingDismissedForSession, setOnboardingDismissedForSession] = useState(false)
 
   // Once, on mount: check for a crash-recovery snapshot and, if real,
   // surface it via recoverableAutosave for OnboardingModal to offer --
@@ -1688,7 +1693,10 @@ function Frame(): React.JSX.Element {
   // touched yet -- destroying the exact safety net crash recovery exists
   // to provide. Resumes normally as soon as recoverableAutosave flips back
   // to null (Recover or Discard, both in handleRecoverAutosave/
-  // handleDiscardRecovery above).
+  // handleDiscardRecovery above), or the welcome is closed with its x
+  // (autosaveWaitsOnRecoveryOffer): the snapshot is then kept until this
+  // session has unsaved work, whose first write replaces it. Waiting for the
+  // rest of the session left that work with no crash protection.
   //
   // Also restarted by a plugin being touched (pluginsTouched.version: a knob
   // turned in an open editor), so a plugin-only change is autosaved too --
@@ -1703,7 +1711,13 @@ function Frame(): React.JSX.Element {
   // checkPluginEdits): one marks the plugins touched, which restarts this
   // effect, and its next tick writes.
   useEffect(() => {
-    if (recoverableAutosave !== null) return
+    if (
+      autosaveWaitsOnRecoveryOffer({
+        recoveryPending: recoverableAutosave !== null,
+        offerDismissed: onboardingDismissedForSession
+      })
+    )
+      return
     const now = Date.now()
     autosaveUnsavedSinceRef.current ??= now
     const delay = autosaveDelayMs(
@@ -1740,6 +1754,10 @@ function Frame(): React.JSX.Element {
           autosaveWrittenRef.current = true
           await window.rifffApi.autosaveProject(json)
           await window.rifffApi.autosaveProjectSketch(sketchJson)
+          // A previous session's snapshot, left by the welcome's x, is now
+          // replaced on disk: nothing is left to offer, and a later Discard
+          // would delete this session's file instead.
+          setRecoverableAutosave(null)
         })
         .catch((err) => console.error('Frame: crash-recovery autosave failed:', err))
     }, delay)
@@ -1748,7 +1766,13 @@ function Frame(): React.JSX.Element {
       window.clearTimeout(id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- serializeForSave is a fresh closure every render over this render's `state`, the one persistedJson was made from; keyed on persistedJson (not state) so a transient UI change doesn't restart the debounce (see above)
-  }, [persistedJson, currentSketch, recoverableAutosave, pluginsTouched.version])
+  }, [
+    persistedJson,
+    currentSketch,
+    recoverableAutosave,
+    onboardingDismissedForSession,
+    pluginsTouched.version
+  ])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [riffLibraryOpen, setRiffLibraryOpen] = useState(false)
   // Direct request, 2026-09-17: "i've had to close discover occasionally
@@ -1878,8 +1902,6 @@ function Frame(): React.JSX.Element {
       return true
     }
   })
-  const [onboardingDismissedForSession, setOnboardingDismissedForSession] = useState(false)
-
   function hideOnboardingForSession(): void {
     setShowOnboarding(false)
     setOnboardingDismissedForSession(true)

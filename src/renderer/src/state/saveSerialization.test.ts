@@ -3,6 +3,7 @@ import { initialState, reducer, type AppState } from './store'
 import { deserializeProject } from './serialize'
 import {
   autosaveAction,
+  autosaveWaitsOnRecoveryOffer,
   autosaveDelayMs,
   createAutosaveGate,
   dirtyCheckJson,
@@ -180,6 +181,32 @@ describe('autosaveAction', () => {
     // Never wrote one (just opened, just saved): leave the disk alone -- a file there may be a
     // previous session's crash recovery, still waiting on the user.
     expect(autosaveAction(false, false)).toBe('skip')
+  })
+})
+
+describe('autosaveWaitsOnRecoveryOffer', () => {
+  it('waits while a previous crash snapshot is offered on screen, so it is not overwritten', () => {
+    expect(autosaveWaitsOnRecoveryOffer({ recoveryPending: true, offerDismissed: false })).toBe(
+      true
+    )
+  })
+
+  it('runs again once the offer is closed with the x: the work in this session needs it', () => {
+    // The x hides the welcome without recovering or discarding. Crash protection for what is
+    // made next must not stay off for the rest of the session.
+    expect(autosaveWaitsOnRecoveryOffer({ recoveryPending: true, offerDismissed: true })).toBe(
+      false
+    )
+    expect(autosaveAction(true, false)).toBe('write')
+  })
+
+  it('runs with no snapshot to offer', () => {
+    expect(autosaveWaitsOnRecoveryOffer({ recoveryPending: false, offerDismissed: false })).toBe(
+      false
+    )
+    expect(autosaveWaitsOnRecoveryOffer({ recoveryPending: false, offerDismissed: true })).toBe(
+      false
+    )
   })
 })
 
