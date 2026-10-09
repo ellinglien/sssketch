@@ -64,10 +64,18 @@ export function bakeTargetGroupIds(
 ): string[] {
   const source = rifffs[groupId]
   if (!source) return []
+  if (source.phaseLinkId !== undefined) {
+    return Object.entries(rifffs)
+      .filter(([, candidate]) => candidate.phaseLinkId === source.phaseLinkId)
+      .map(([candidateId]) => candidateId)
+  }
   const sourcePaths = new Set(source.stems.map((stem) => stem.path))
   const targets = [groupId]
   for (const [candidateId, candidate] of Object.entries(rifffs)) {
     if (candidateId === groupId || candidate.startBar === undefined) continue
+    // An explicitly-owned child is independent even when it currently
+    // references one of this legacy source's materialized files.
+    if (candidate.phaseLinkId !== undefined) continue
     if (candidate.stems.length > 0 && candidate.stems.every((stem) => sourcePaths.has(stem.path))) {
       targets.push(candidateId)
     }
