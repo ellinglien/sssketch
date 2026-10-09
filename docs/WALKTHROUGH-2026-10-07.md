@@ -299,6 +299,10 @@ Advanced features must be on (they should already be on for you, see the next se
   running). Click sssketch in the Dock. **You should see:** the offer to recover unsaved work.
   Don't answer it: press Cmd+Q, then relaunch. **You should see:** the same offer, with your edit
   in it. (Before this fix, that Cmd+Q deleted the only copy.)
+- [ ] Same again, but after Cmd+W press Cmd+Q straight away, without clicking the Dock. **You
+  should see:** no save prompt; the app just quits. Relaunch. **You should see:** the offer to
+  recover, with your edit in it. (Before this fix, the prompt's Save couldn't save from a closed
+  window and told you to choose Don't Save, which deleted that copy.)
 - [ ] With tweaked plugins loaded, run `pkill sssketch-engine` in a terminal, which forces the audio
   engine to restart. **You should see:**
   - the plugins reload with your tweaks;
@@ -484,6 +488,14 @@ Advanced features must be on (they should already be on for you, see the next se
   work at the next launch, although it's the same as what's saved. A clean quit now deletes the
   recovery copy only when a save came after the last time it was written: an extra offer is the
   safe side.
+- **DAW exports of a project outside the library** (opened from a `.sssketchproj` file anywhere
+  else) now go into a folder of their own, named after the project, next to the file:
+  `Ableton/<name>/`, `Reaper/<name>/` and `Stems/<name>/`. Before, every project in that folder
+  shared one `Ableton/`, `Reaper/` or `Stems/`, and a stems export emptied `Stems/` first, taking
+  other projects' stems (and anything of yours in there) with it. Exports made before this version
+  stay where they were, directly in `Ableton/`, `Reaper/` or `Stems/`; nothing moves or deletes
+  them, so clear them out yourself when you no longer need them. Library projects' exports are
+  unchanged.
 - **"plugins still loaded" (top right)** appears only if you turn advanced features off and the
   plugins' settings can't be read back. It retries for about three minutes, then stops and says
   to turn advanced features back on. There's no way to force this on purpose.
