@@ -12,6 +12,7 @@ import {
   rowMuteToggleActions
 } from './selectors'
 import { risersOnChannel } from '@shared/riser'
+import { createHistoryState, historyReducer } from './history'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import { lockClimaxFromArrangeRoles, type CoachSlotSnapshot } from '@shared/coachClimax'
 import { startCoach } from '@shared/coach'
@@ -3477,10 +3478,57 @@ describe('a riser on its own row', () => {
       allMuted,
       risersOnChannel(state.risers, 'ch-r1')
     ))
-      state = reducer(state, action)
+      state = historyReducer(createHistoryState(state), action).present
     expect(state.risers['r1'].muted).toBe(false)
     expect(state.mixerMute['r1']).toBe(false)
     expect(channelAllMuted({ rifffs: [], channelRisers: rowRisers(), mute: {} })).toBe(false)
+  })
+
+  it('unmuting a row with several old saved riser mutes is one undo step, and undo brings them all back', () => {
+    let present = withRiser('r1', 'ch-r1')
+    for (const [id, startBar] of [
+      ['r2', 8],
+      ['r3', 16]
+    ] as const)
+      present = reducer(present, {
+        type: 'ADD_RISER',
+        riser: createRiser({ id, channelId: 'ch-r1', startBar })
+      })
+    for (const id of ['r1', 'r2', 'r3'])
+      present = reducer(present, { type: 'SET_RISER_MUTE', id, muted: true })
+    expect(risersOnChannel(present.risers, 'ch-r1')).toHaveLength(3)
+
+    let history = createHistoryState(present)
+    for (const action of rowMuteToggleActions(
+      'ch-r1',
+      true,
+      risersOnChannel(history.present.risers, 'ch-r1')
+    ))
+      history = historyReducer(history, action)
+    expect(history.past).toHaveLength(1)
+    expect(['r1', 'r2', 'r3'].map((id) => history.present.risers[id].muted)).toEqual([
+      false,
+      false,
+      false
+    ])
+
+    history = historyReducer(history, { type: 'UNDO' })
+    expect(['r1', 'r2', 'r3'].map((id) => history.present.risers[id].muted)).toEqual([
+      true,
+      true,
+      true
+    ])
+  })
+
+  it('unmuting a row with no old saved riser mute adds no undo step', () => {
+    let history = createHistoryState(withRiser('r1', 'ch-r1'))
+    for (const action of rowMuteToggleActions(
+      'ch-r1',
+      true,
+      risersOnChannel(history.present.risers, 'ch-r1')
+    ))
+      history = historyReducer(history, action)
+    expect(history.past).toHaveLength(0)
   })
 
   it('a new row mute stays temporary: it never writes the saved riser mute', () => {
@@ -3490,7 +3538,7 @@ describe('a riser on its own row', () => {
       false,
       risersOnChannel(state.risers, 'ch-r1')
     ))
-      state = reducer(state, action)
+      state = historyReducer(createHistoryState(state), action).present
     expect(state.mixerMute['r1']).toBe(true)
     expect(state.risers['r1'].muted).toBe(false)
   })

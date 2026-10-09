@@ -12,6 +12,7 @@ import { clipLengthBars } from '@shared/automationEdit'
 import type { SoundSettings } from '@shared/radioSound'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 import { appSoundDefaultsNow } from './appSoundDefaults'
+import type { HistoryAction } from './history'
 
 /** The sound settings the project plays with, as the sound panel shows them (native radio sound
  * plan, Task 13): its own, or -- for the pre-project startup state, which has none -- the
@@ -990,19 +991,23 @@ export function risersForRowMute(
 /** What pressing a row's `m` dispatches. Muting is temporary
  * (SET_CHANNEL_MUTE: not saved, not exported, not undoable). Unmuting also
  * clears a riser's saved mute from before the temporary layers
- * (SET_RISER_MUTE, an ordinary undoable edit, since it changes the saved
- * project and its exports), which is otherwise unreachable. */
+ * (SET_RISER_MUTE, an undoable edit, since it changes the saved project and
+ * its exports), which is otherwise unreachable. Those go in one BATCH, so
+ * however many risers the row has, one press is one undo step. */
 export function rowMuteToggleActions(
   channelId: string,
   allMuted: boolean,
   channelRisers: RiserClip[]
-): Action[] {
+): HistoryAction[] {
   if (!allMuted) return [{ type: 'SET_CHANNEL_MUTE', channelId, muted: true }]
+  const savedMuteClears = channelRisers
+    .filter((riser) => riser.muted)
+    .map((riser): Action => ({ type: 'SET_RISER_MUTE', id: riser.id, muted: false }))
   return [
     { type: 'SET_CHANNEL_MUTE', channelId, muted: false },
-    ...channelRisers
-      .filter((riser) => riser.muted)
-      .map((riser): Action => ({ type: 'SET_RISER_MUTE', id: riser.id, muted: false }))
+    ...(savedMuteClears.length > 0
+      ? [{ type: 'BATCH', actions: savedMuteClears } satisfies HistoryAction]
+      : [])
   ]
 }
 
