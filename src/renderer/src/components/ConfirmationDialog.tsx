@@ -48,7 +48,7 @@ export function ConfirmationDialog({
         style={{
           background: 'var(--ra-bg-row-active)',
           border: '1px solid var(--ra-border-strong)',
-          boxShadow: '0 10px 32px rgba(0,0,0,0.48)',
+          boxShadow: 'var(--ra-shadow-popover)',
           padding: 14,
           width: 320,
           fontSize: 11

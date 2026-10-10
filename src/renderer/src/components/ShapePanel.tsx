@@ -245,10 +245,10 @@ function InspectorNumber({
             width: compact ? 42 : 50,
             height: compact ? 19 : 24,
             padding: compact ? '0 3px' : '0 5px',
-            border: `1px solid ${modified ? 'color-mix(in srgb, var(--ra-type-fx) 34%, var(--ra-border))' : 'var(--ra-text-3)'}`,
+            border: '1px solid var(--ra-text-3)',
             outline: 'none',
             background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text-3)',
+            color: modified ? 'var(--ra-text-2)' : 'var(--ra-text-3)',
             fontFamily: 'inherit',
             fontSize: compact ? 9 : 11,
             textAlign: 'right'
@@ -268,11 +268,10 @@ function InspectorNumber({
             width: compact ? 42 : 50,
             height: compact ? 19 : 24,
             padding: compact ? '0 3px' : '0 5px',
-            border: `1px solid ${modified ? 'color-mix(in srgb, var(--ra-type-fx) 34%, var(--ra-border))' : 'var(--ra-border)'}`,
-            background: modified
-              ? 'color-mix(in srgb, var(--ra-type-fx) 6%, var(--ra-bg-row-active))'
-              : 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text-3)',
+            // A value off neutral: monochrome, a brighter edge and ink (no colour on chrome).
+            border: `1px solid ${modified ? 'var(--ra-border-strong)' : 'var(--ra-border)'}`,
+            background: 'var(--ra-bg-row-active)',
+            color: modified ? 'var(--ra-text-2)' : 'var(--ra-text-3)',
             fontFamily: 'inherit',
             fontSize: compact ? 9 : 11,
             textAlign: 'right',
@@ -1562,12 +1561,9 @@ function ShapeClipInspector({
           <span
             style={{
               padding: '2px 3px',
-              border: `1px solid ${rate !== null && rate !== 1 ? 'color-mix(in srgb, var(--ra-type-fx) 34%, var(--ra-border))' : 'transparent'}`,
-              background:
-                rate !== null && rate !== 1
-                  ? 'color-mix(in srgb, var(--ra-type-fx) 6%, transparent)'
-                  : 'transparent',
-              color: 'var(--ra-text-4)',
+              border: `1px solid ${rate !== null && rate !== 1 ? 'var(--ra-border-strong)' : 'transparent'}`,
+              background: 'transparent',
+              color: rate !== null && rate !== 1 ? 'var(--ra-text-2)' : 'var(--ra-text-4)',
               fontSize: 9,
               textAlign: 'right'
             }}
@@ -1690,10 +1686,9 @@ function ShapeClipInspector({
                   <button
                     style={{
                       ...compactStepButton(),
-                      color: 'color-mix(in srgb, var(--ra-type-fx) 58%, var(--ra-text-3))',
-                      borderColor: 'color-mix(in srgb, var(--ra-type-fx) 34%, var(--ra-border))',
-                      background:
-                        'color-mix(in srgb, var(--ra-type-fx) 7%, var(--ra-bg-row-active))'
+                      // The primary action: bright ink and a stronger edge, monochrome.
+                      color: 'var(--ra-text)',
+                      borderColor: 'var(--ra-text-3)'
                     }}
                     onClick={onProcessApply}
                   >
@@ -1993,7 +1988,8 @@ function ShapeDonorTray({
                       bottom: 0,
                       left: `${playheadPct}%`,
                       width: 1,
-                      background: 'color-mix(in srgb, var(--ra-text) 35%, transparent)'
+                      background: 'var(--ra-playhead)',
+                      opacity: 0.42
                     }}
                   />
                 )}
@@ -2008,7 +2004,8 @@ function ShapeDonorTray({
                     whiteSpace: 'nowrap',
                     color: 'var(--ra-text-2)',
                     fontSize: 8,
-                    textShadow: '0 1px 2px var(--ra-bg)'
+                    padding: '0 2px',
+                    background: 'var(--ra-bg-bar)'
                   }}
                 >
                   {row.stem.name || `stem ${row.slot}`}
@@ -4017,8 +4014,8 @@ export function ShapePanel({
           animation: ra-shape-marker-pulse 1.05s steps(2, end) infinite;
         }
         .ra-shape-clip-menu button:hover {
-          background: #4a4a4a !important;
-          color: #ffffff !important;
+          background: var(--ra-bg-row-active) !important;
+          color: var(--ra-text) !important;
         }
         .ra-shape-donor-row-button {
           display: grid;
@@ -4559,7 +4556,8 @@ export function ShapePanel({
                 draft.lanes.length * 72 + (draft.lanes.length < MAX_RIFFF_STEM_SLOTS ? 50 : 0),
               left: `calc(${SHAPE_LEFT_WIDTH}px + (100% - ${SHAPE_LEFT_WIDTH + SHAPE_RIGHT_WIDTH}px) * ${playheadPct / 100})`,
               width: 1,
-              background: `color-mix(in srgb, var(--ra-text) ${shapePlaying ? 38 : 20}%, transparent)`,
+              background: 'var(--ra-playhead)',
+              opacity: shapePlaying ? 1 : 0.5,
               pointerEvents: 'none'
             }}
           />
@@ -4677,7 +4675,7 @@ export function ShapePanel({
                 placeItems: 'center',
                 padding: 14,
                 borderLeft: '1px solid var(--ra-border-strong)',
-                background: 'color-mix(in srgb, var(--ra-type-fx) 10%, var(--ra-bg-bar))'
+                background: 'var(--ra-bg-bar)'
               }}
             >
               <div
@@ -4686,8 +4684,8 @@ export function ShapePanel({
                   height: '100%',
                   display: 'grid',
                   placeItems: 'center',
-                  border: '1px dashed color-mix(in srgb, var(--ra-type-fx) 48%, var(--ra-border))',
-                  color: 'color-mix(in srgb, var(--ra-type-fx) 62%, var(--ra-text-2))',
+                  border: '1px dashed var(--ra-border-strong)',
+                  color: 'var(--ra-text-2)',
                   fontSize: 9,
                   letterSpacing: '0.08em',
                   textAlign: 'center'
@@ -4761,9 +4759,9 @@ export function ShapePanel({
             zIndex: 'var(--ra-z-fullscreen-popover)',
             width: 168,
             padding: '3px 0',
-            border: '1px solid #5a5a5a',
-            background: '#202020',
-            boxShadow: '0 7px 22px rgba(0, 0, 0, 0.72)',
+            border: '1px solid var(--ra-border-strong)',
+            background: 'var(--ra-bg-bar)',
+            boxShadow: 'var(--ra-shadow-popover)',
             display: 'grid',
             gap: 0
           }}
@@ -4808,8 +4806,8 @@ export function ShapePanel({
                 height: 25,
                 padding: '0 14px',
                 border: 'none',
-                borderTop: label === 'delete clip' ? '1px solid #414141' : 'none',
-                background: '#202020',
+                borderTop: label === 'delete clip' ? '1px solid var(--ra-border)' : 'none',
+                background: 'transparent',
                 color: 'var(--ra-text)',
                 textAlign: 'left',
                 fontFamily: 'inherit',

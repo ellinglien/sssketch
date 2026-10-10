@@ -554,7 +554,7 @@ function CenterRow({
           height: 13,
           padding: 0,
           border: 'none',
-          background: 'color-mix(in srgb, var(--ra-bg-bar) 82%, transparent)',
+          background: 'var(--ra-bg-bar)',
           color: 'var(--ra-text-3)',
           fontSize: 9,
           lineHeight: '13px',
@@ -1119,8 +1119,8 @@ export function CrossPanel({
           color: var(--ra-mute-on-ink);
         }
         .ra-cross-row-button[data-control='solo'][data-active='true'] {
-          border-color: color-mix(in srgb, var(--ra-solo-on) 75%, var(--ra-bg-page));
-          background: color-mix(in srgb, var(--ra-solo-on) 75%, var(--ra-bg-page));
+          border-color: var(--ra-solo-on);
+          background: var(--ra-solo-on);
           color: var(--ra-solo-on-ink);
         }
         .ra-cross-row-button:disabled {

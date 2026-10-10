@@ -158,9 +158,8 @@ button:not(:disabled):not([data-tooltip]):active,
  * external stylesheet rule for the SAME CSS property -- `outline` is a
  * separate property (doesn't affect box size, can't be overridden by an
  * inline `border`), so this one rule works everywhere with no inline
- * style touched. Chromium may mark the last-clicked element focus-visible
- * when a Command shortcut starts, so the outline is explicitly suppressed
- * until App marks a real Tab-navigation session. */
+ * style touched. Grey border, no new accent color -- direct decision,
+ * see the design spec. */
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
@@ -168,16 +167,6 @@ textarea:focus-visible,
 [role='button']:focus-visible,
 [role='slider']:focus-visible,
 [data-focus-ring]:focus-visible {
-  outline: none;
-}
-
-.ra-keyboard-navigation button:focus-visible,
-.ra-keyboard-navigation input:focus-visible,
-.ra-keyboard-navigation select:focus-visible,
-.ra-keyboard-navigation textarea:focus-visible,
-.ra-keyboard-navigation [role='button']:focus-visible,
-.ra-keyboard-navigation [role='slider']:focus-visible,
-.ra-keyboard-navigation [data-focus-ring]:focus-visible {
   outline: 1px solid var(--ra-border-strong);
   outline-offset: -1px;
 }
@@ -225,7 +214,7 @@ button.ra-riff-tile:not(:disabled):hover,
 
 /* Shelf availability dimming belongs to the glyph, not the whole tile.
  * Keeping the tile itself fully composited lets the independent hover-
- * correspondence halo remain readable without brightening the riff it
+ * correspondence frame remain readable without brightening the riff it
  * points to. These are the same long-standing idle levels: unused 72%,
  * already placed 40%, and a genuinely interactive lit state 100%. */
 .ra-shelf-riff-tile > .ra-polar-glyph {
@@ -274,7 +263,7 @@ button.ra-riff-tile:not(:disabled):hover,
 }
 
 /* Preserve keyboard focus with the same square geometry. */
-.ra-keyboard-navigation .ra-riff-tile:focus-visible {
+.ra-riff-tile:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--ra-text-2) 42%, transparent);
   outline-offset: 2px;
 }

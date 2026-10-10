@@ -4312,27 +4312,6 @@ function Frame(): React.JSX.Element {
 }
 
 export default function App(): React.JSX.Element {
-  useEffect(() => {
-    const root = document.documentElement
-    function handleKeyDown(event: KeyboardEvent): void {
-      // Chromium can promote the element most recently clicked to
-      // `:focus-visible` when a Command shortcut begins. That produced a
-      // large outline around composite UI instead of communicating useful
-      // focus. Only Tab navigation should opt into the app's focus rings.
-      if (event.key === 'Tab') root.classList.add('ra-keyboard-navigation')
-    }
-    function handlePointerDown(): void {
-      root.classList.remove('ra-keyboard-navigation')
-    }
-    window.addEventListener('keydown', handleKeyDown, true)
-    window.addEventListener('pointerdown', handlePointerDown, true)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, true)
-      window.removeEventListener('pointerdown', handlePointerDown, true)
-      root.classList.remove('ra-keyboard-navigation')
-    }
-  }, [])
-
   return (
     <StoreProvider>
       <BusyProvider>
