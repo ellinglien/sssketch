@@ -2781,26 +2781,32 @@ function Frame(): React.JSX.Element {
   const shapePublishGateRef = useRef(createPublishGate())
   const trackShapePublish = <T,>(work: () => Promise<T>): Promise<T> =>
     shapePublishGateRef.current.track(work)
-  const awaitShapePublish = (): Promise<void> => shapePublishGateRef.current.settled()
 
   async function publishShape(
     draft: ShapeDraft,
     destination: 'keep' | 'shelf' | 'timeline'
   ): Promise<'✓ kept' | 'already kept' | void> {
-    await awaitShapePublish()
-    // A departure save that ran meanwhile already added exactly this draft to the shelf.
-    if (
-      destination === 'shelf' &&
-      shapePublishedRiffIdRef.current !== null &&
-      shapeContentFingerprint(draft) === shapeSavedFingerprintRef.current
-    )
-      return
-    setBusy(destination === 'keep' ? 'keeping the edit…' : 'adding the edit…')
-    try {
-      return await trackShapePublish(() => publishShapeNow(draft, destination))
-    } finally {
-      setBusy(null)
-    }
+    // Queued behind any publish in flight (a departure save's included); the check runs once it
+    // is this one's turn, so it sees everything published before it.
+    return trackShapePublish(async () => {
+      // A departure save that ran meanwhile already added exactly this draft to the shelf, and
+      // that riff is still there: adding it again would duplicate it. If it was deleted since,
+      // add it again.
+      const publishedId = shapePublishedRiffIdRef.current
+      if (
+        destination === 'shelf' &&
+        publishedId !== null &&
+        stateRef.current.rifffs[publishedId] !== undefined &&
+        shapeContentFingerprint(draft) === shapeSavedFingerprintRef.current
+      )
+        return
+      setBusy(destination === 'keep' ? 'keeping the edit…' : 'adding the edit…')
+      try {
+        return await publishShapeNow(draft, destination)
+      } finally {
+        setBusy(null)
+      }
+    })
   }
 
   async function publishShapeNow(
@@ -2883,8 +2889,7 @@ function Frame(): React.JSX.Element {
     if (shapeDepartureSaveRef.current) return { kind: 'busy' }
     shapeDepartureSaveRef.current = true
     try {
-      // An add to shelf already running finishes first; this save then finds the draft published.
-      await awaitShapePublish()
+      // Queued behind an add to shelf already running; this save then finds the draft published.
       return await trackShapePublish(departureSaveNow)
     } finally {
       shapeDepartureSaveRef.current = false
