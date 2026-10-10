@@ -4,6 +4,7 @@
 
 ### Added
 
+- EEEDIT is one of the advanced features: with the gear menu's switch off its inspector button is hidden, and turning the switch off while it's open closes it (asking first about unsaved edits). Riffs it made are ordinary riffs and keep playing either way.
 - Added an EEEDIT metronome with the same toggle and drag-to-adjust volume behavior as the main transport.
 - Added non-destructive per-stem Rotate controls in EEEDIT, from 1/32 note through 8 bars, with an independent phase reset, project persistence, and one-step undo.
 - Added grouped EEEDIT clip operations: adjacent selections move together, Command-drag bypasses snap, Option-drag copies the group, Command-D duplicates it, and Command-C/Command-V copy and paste at the insertion cursor while cropping cleanly at the riff boundary.

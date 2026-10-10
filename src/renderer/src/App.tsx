@@ -158,6 +158,7 @@ import {
   assembleShapeRifff,
   createShapeDraft,
   shapeContentFingerprint,
+  eeeditSwitchAction,
   shapeRenderSegments,
   type ShapeAssembly,
   type ShapeDraft
@@ -2126,6 +2127,8 @@ function Frame(): React.JSX.Element {
     const right = state.rifffs[rightId]
     return left && right ? [left, right] : null
   }, [selectedRiffIds, state.rifffs])
+  // EEEDIT is behind the advanced features switch (@shared/features).
+  const eeeditEnabled = useFeatureEnabled('eeedit')
   const inspectorEditRifff = useMemo<Rifff | null>(() => {
     // The Inspector already has one concrete riff (`state.sel`). Use that as
     // Edit's source instead of making the button depend on the separate
@@ -2134,9 +2137,9 @@ function Frame(): React.JSX.Element {
     // which made Edit disappear even though the Inspector showed a riff.
     // Exactly two selected riffs still belong to Cross, so keep Edit out of
     // that deliberately multi-riff state.
-    if (inspectorCrossPair) return null
+    if (inspectorCrossPair || !eeeditEnabled) return null
     return state.sel ? (state.rifffs[state.sel] ?? null) : null
-  }, [inspectorCrossPair, state.rifffs, state.sel])
+  }, [eeeditEnabled, inspectorCrossPair, state.rifffs, state.sel])
   useEffect(() => {
     if (!shapeDraft) return
     if (shapeDraft.projectKey === shapeProjectKey(projectSessionEpochRef.current)) return
@@ -2687,6 +2690,7 @@ function Frame(): React.JSX.Element {
   }
 
   async function openShapeFromRifff(rifff: Rifff): Promise<void> {
+    if (!eeeditEnabledRef.current) return
     const generation = ++shapeOpenGenerationRef.current
     const projectKey = shapeProjectKey(projectSessionEpochRef.current)
     shapeOpeningSelectionRef.current = {
@@ -2914,6 +2918,22 @@ function Frame(): React.JSX.Element {
       setBusy(null)
     }
   }
+
+  // The switch turned off while EEEDIT is open: close it as its own close does, asking first
+  // about unsaved edits (eeeditSwitchAction).
+  const eeeditEnabledRef = useRef(eeeditEnabled)
+  eeeditEnabledRef.current = eeeditEnabled
+  useEffect(() => {
+    const draft = shapeDraftRef.current
+    const action = eeeditSwitchAction({
+      enabled: eeeditEnabled,
+      open: shapeOpenRef.current,
+      dirty: draft !== null && shapeContentFingerprint(draft) !== shapeSavedFingerprintRef.current
+    })
+    if (action === 'ask') setShapeDiscardPromptOpen(true)
+    else if (action === 'close') finishCloseShape()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs on the switch alone; the refs above are current.
+  }, [eeeditEnabled])
 
   function closeShape(): void {
     const currentDraft = shapeDraftRef.current

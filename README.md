@@ -58,6 +58,7 @@ sssketch has a few extras most people won't need, so they start switched off. Tu
 - **phone remote** — control discover and radio from your phone's browser. Your phone and Mac need to be on the same Wi-Fi; the Mac shows an address, a QR code and a four-character pairing code. macOS may ask whether to allow incoming connections: say yes. Playback stays on the Mac; the paired phone is sent the stems of the loop that's playing, and nothing else. Some routers (especially guest and mesh networks) stop devices on the same Wi-Fi from talking to each other; if the phone can't connect, a VPN like [Tailscale](https://tailscale.com/) on both works around it.
 - **sound defaults** — the starting sound settings for new projects.
 - **hearts key** — only for the web radio at ell.ing, so you can ignore this one.
+- **EEEDIT** — edit inside one riff: cut, move, repitch and process its stems, then add the result to the shelf as a new riff. Open it from the inspector with one riff selected. Riffs it made keep playing with the switch off.
 
 ## Where your stuff lives
 
