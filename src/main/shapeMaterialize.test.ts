@@ -113,6 +113,7 @@ import {
   cleanupShapePreview,
   cleanupUncommittedShapeAssets,
   createSpawnLimiter,
+  setShapePreviewCacheLimitForTest,
   materializeShape,
   safeJobName,
   shapeJobStateSizeForTest,
@@ -158,7 +159,9 @@ describe('materializeShape', () => {
     durableRoot = mkdtempSync(join(tmpdir(), 'sssketch-shape-test-'))
   })
 
-  afterEach(() => cleanupShapePreview([]))
+  afterEach(() => {
+    setShapePreviewCacheLimitForTest(null)
+  })
 
   it('publishes a complete commit batch under immutable final names', async () => {
     const result = await materializeShape(request('commit', 2), durableRoot)
@@ -186,11 +189,29 @@ describe('materializeShape', () => {
     expect(readdirSync(durableRoot).filter((name) => name.endsWith('.shape.wav'))).toEqual([])
   })
 
+  it("cleans only staging folders inside this library's preview cache", async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'sssketch-shape-elsewhere-'))
+    const foreign = join(elsewhere, '.preview-cache', '.job-x')
+    mkdirSync(foreign, { recursive: true })
+    writeFloatWav(join(foreign, 'a.wav'))
+    await cleanupShapePreview([join(foreign, 'a.wav')], durableRoot)
+    expect(existsSync(foreign)).toBe(true)
+  })
+
+  it("never evicts a running job's own renders, however small the cache", async () => {
+    setShapePreviewCacheLimitForTest(1)
+    const result = await materializeShape(request('preview', 3), durableRoot)
+    for (const stem of result.stems) expect(existsSync(stem.path)).toBe(true)
+  })
+
   it('keeps completed preview lanes in the bounded shared cache', async () => {
     const result = await materializeShape(request('preview'), durableRoot)
     expect(result.stems[0].path).toContain('.preview-cache')
     expect(existsSync(result.stems[0].path)).toBe(true)
-    cleanupShapePreview(result.stems.map((stem) => stem.path))
+    await cleanupShapePreview(
+      result.stems.map((stem) => stem.path),
+      durableRoot
+    )
     expect(existsSync(result.stems[0].path)).toBe(true)
   })
 
@@ -247,12 +268,15 @@ describe('materializeShape', () => {
     mkdirSync(staging, { recursive: true })
     writeFloatWav(join(staging, '1.rendering.wav'))
     writeFloatWav(join(cache, 'kept.shape-preview.wav'))
-    await cleanupShapePreview([
-      join(cache, 'kept.shape-preview.wav'),
-      join(cache, 'missing.shape-preview.wav'),
-      join(staging, '1.rendering.wav'),
-      join(durableRoot, 'outside.wav')
-    ])
+    await cleanupShapePreview(
+      [
+        join(cache, 'kept.shape-preview.wav'),
+        join(cache, 'missing.shape-preview.wav'),
+        join(staging, '1.rendering.wav'),
+        join(durableRoot, 'outside.wav')
+      ],
+      durableRoot
+    )
     expect(existsSync(staging)).toBe(false)
     expect(existsSync(join(cache, 'kept.shape-preview.wav'))).toBe(true)
     expect(existsSync(durableRoot)).toBe(true)

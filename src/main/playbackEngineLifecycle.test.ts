@@ -86,6 +86,16 @@ describe('startPlaybackEngine', () => {
     expect(handle.getLastProject()).toEqual(plain)
   }, 30000)
 
+  it('an acknowledged load answered after a newer load never becomes the project a respawn resends', async () => {
+    handle = await startPlaybackEngine()
+    const preview = { bpm: 120, snapDiv: 8, rifffs: [] }
+    const real = { bpm: 121, snapDiv: 8, rifffs: [] }
+    const acked = handle.sendLoadProjectAcked(preview, { fadeSwap: true })
+    handle.sendLoadProject(real)
+    await acked
+    expect(handle.getLastProject()).toEqual(real)
+  }, 30000)
+
   it('detects a crashed engine process, respawns, reconnects, resends the last project, and notifies onRestarted', async () => {
     handle = await startPlaybackEngine()
     const project = { bpm: 90, snapDiv: 4, rifffs: [] }

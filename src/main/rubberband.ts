@@ -5,15 +5,16 @@ import {
   readdirSync,
   readFileSync,
   statSync,
-  renameSync,
   unlinkSync,
   utimesSync
 } from 'fs'
+import { rename, stat } from 'fs/promises'
 import { join } from 'path'
 import { createHash, randomUUID } from 'crypto'
 import { app } from 'electron'
 import { promisify } from 'util'
 import { readWavDurationSeconds } from '../shared/wavDuration'
+import { wavDurationSeconds } from './wavHeader'
 import type { StretchedStem } from '../shared/buildEngineProject'
 import { StemNotDownloadedError } from '../shared/stemNotDownloaded'
 import { isUsableStemFile } from './stemFile'
@@ -134,10 +135,19 @@ function throwIfAborted(signal?: AbortSignal): void {
 /** Publish only complete, readable WAVs under shared cache names. Every
  * renderer owns its unique temporary path, so cancellation can never unlink
  * another concurrent render's finished result. */
-function publishCacheWav(temporaryPath: string, outPath: string, signal?: AbortSignal): number {
-  const durationSec = readWavDurationSeconds(readFileSync(temporaryPath))
+async function publishCacheWav(
+  temporaryPath: string,
+  outPath: string,
+  signal?: AbortSignal
+): Promise<number> {
+  // From the header alone, asynchronously: never a whole WAV read on main's thread.
+  const durationSec = await wavDurationSeconds(temporaryPath)
   throwIfAborted(signal)
-  if (!existsSync(outPath)) renameSync(temporaryPath, outPath)
+  try {
+    await stat(outPath)
+  } catch {
+    await rename(temporaryPath, outPath)
+  }
   return durationSec
 }
 
@@ -229,7 +239,7 @@ export async function renderStretched(
         ['-q', '--tempo', ratio.toFixed(6), stemPath, temporaryPath],
         signal ? { signal } : {}
       )
-      publishCacheWav(temporaryPath, outPath, signal)
+      await publishCacheWav(temporaryPath, outPath, signal)
     } finally {
       if (existsSync(temporaryPath)) unlinkSync(temporaryPath)
     }
@@ -282,7 +292,7 @@ export async function renderShapePitch(
         )
         inputPath = stagePath
       }
-      publishCacheWav(inputPath, outPath, signal)
+      await publishCacheWav(inputPath, outPath, signal)
     } finally {
       for (const path of temporaryStages) {
         if (existsSync(path)) unlinkSync(path)
@@ -290,7 +300,7 @@ export async function renderShapePitch(
     }
     enforceStretchCacheLimit(dir)
   }
-  return { path: outPath, durationSec: readWavDurationSeconds(readFileSync(outPath)) }
+  return { path: outPath, durationSec: await wavDurationSeconds(outPath) }
 }
 
 /** Shifts only the spectral envelope while retaining pitch and duration.
@@ -308,7 +318,7 @@ export async function renderShapeFormant(
     throw new Error('invalid EEEDIT formant settings.')
   }
   if (Math.abs(formantSemitones) < 0.0001) {
-    return { path: stemPath, durationSec: readWavDurationSeconds(readFileSync(stemPath)) }
+    return { path: stemPath, durationSec: await wavDurationSeconds(stemPath) }
   }
 
   const dir = cacheDir()
@@ -339,12 +349,12 @@ export async function renderShapeFormant(
         ],
         signal ? { signal } : {}
       )
-      publishCacheWav(completedPath, outPath, signal)
+      await publishCacheWav(completedPath, outPath, signal)
       enforceStretchCacheLimit(dir)
     } finally {
       if (existsSync(shiftedPath)) unlinkSync(shiftedPath)
       if (existsSync(completedPath)) unlinkSync(completedPath)
     }
   }
-  return { path: outPath, durationSec: readWavDurationSeconds(readFileSync(outPath)) }
+  return { path: outPath, durationSec: await wavDurationSeconds(outPath) }
 }

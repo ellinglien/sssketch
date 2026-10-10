@@ -1406,7 +1406,9 @@ app.whenReady().then(async () => {
     bakeShapeProcess(request, shapeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
   )
   ipcMain.handle('shape-cancel', (_event, jobId: string) => cancelShapeMaterialization(jobId))
-  ipcMain.handle('shape-cleanup-preview', (_event, paths: string[]) => cleanupShapePreview(paths))
+  ipcMain.handle('shape-cleanup-preview', (_event, paths: string[]) =>
+    cleanupShapePreview(paths, shapeAssetsDir())
+  )
   ipcMain.handle('shape-cleanup-uncommitted', (_event, paths: string[]) =>
     cleanupUncommittedShapeAssets(paths, shapeAssetsDir())
   )
@@ -2980,8 +2982,9 @@ app.on('before-quit', (event) => {
       defaultId: 0,
       cancelId: 2,
       message: 'This project has unsaved changes.',
-      detail:
-        'Do you want to save before quitting? Any unpublished EEEDIT riff will be added to the shelf.'
+      detail: rendererEeeditUnpublished
+        ? 'Do you want to save before quitting? The open EEEDIT riff will be added to the shelf.'
+        : 'Do you want to save before quitting?'
     })
     if (choice === 2) {
       // Cancel -- stay open; the next quit checks for plugin edits again.

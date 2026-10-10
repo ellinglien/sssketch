@@ -1,4 +1,4 @@
-import { mkdir, open, readdir, rename, rm, stat, unlink, utimes } from 'node:fs/promises'
+import { mkdir, readdir, rename, rm, stat, unlink, utimes } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { stretchRatioForStem, STRETCH_RATIO_EPSILON } from '@shared/stretchRatio'
@@ -13,7 +13,7 @@ import type { ShapeClipProcessV1 } from '@shared/types'
 import { pathsToEvict, renderShapeFormant, renderShapePitch } from './rubberband'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
-import { findWavChunks } from '@shared/wavChunks'
+import { readWavHeader } from './wavHeader'
 
 interface NativeShapeReply {
   success?: boolean
@@ -344,10 +344,43 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
   }
 }
 
-async function shapePreviewCacheDir(durableRoot: string): Promise<string> {
-  const path = join(durableRoot, '.preview-cache')
+/** mkdir -p under `.shapes`, never recreating a custom library root that is away: checked at
+ * every mkdir, since a drive can be unplugged mid-render. */
+async function ensureShapeDir(
+  path: string,
+  durableRoot: string,
+  mayCreateRoot: boolean
+): Promise<void> {
+  await assertLibraryReachable(durableRoot, mayCreateRoot)
   await mkdir(path, { recursive: true })
+}
+
+async function shapePreviewCacheDir(durableRoot: string, mayCreateRoot: boolean): Promise<string> {
+  const path = join(durableRoot, '.preview-cache')
+  await ensureShapeDir(path, durableRoot, mayCreateRoot)
   return path
+}
+
+// Preview cache files a running job reads or wrote: eviction leaves them alone until it ends.
+const pinnedCachePaths = new Map<string, number>()
+function pinCachePath(pins: Set<string>, path: string): void {
+  if (pins.has(path)) return
+  pins.add(path)
+  pinnedCachePaths.set(path, (pinnedCachePaths.get(path) ?? 0) + 1)
+}
+function unpinCachePaths(pins: Set<string>): void {
+  for (const path of pins) {
+    const count = (pinnedCachePaths.get(path) ?? 1) - 1
+    if (count <= 0) pinnedCachePaths.delete(path)
+    else pinnedCachePaths.set(path, count)
+  }
+  pins.clear()
+}
+
+let previewCacheLimitBytes = MAX_SHAPE_PREVIEW_CACHE_BYTES
+/** For tests: a small preview cache, so eviction runs. */
+export function setShapePreviewCacheLimitForTest(bytes: number | null): void {
+  previewCacheLimitBytes = bytes ?? MAX_SHAPE_PREVIEW_CACHE_BYTES
 }
 
 async function touchCacheEntry(path: string): Promise<void> {
@@ -366,12 +399,13 @@ async function enforceShapePreviewCacheLimit(dir: string): Promise<void> {
       const path = join(dir, name)
       try {
         const info = await stat(path)
-        if (info.isFile()) entries.push({ path, size: info.size, mtimeMs: info.mtimeMs })
+        if (info.isFile() && !pinnedCachePaths.has(path))
+          entries.push({ path, size: info.size, mtimeMs: info.mtimeMs })
       } catch {
         // gone meanwhile
       }
     }
-    for (const path of pathsToEvict(entries, MAX_SHAPE_PREVIEW_CACHE_BYTES)) {
+    for (const path of pathsToEvict(entries, previewCacheLimitBytes)) {
       previewMetadata.delete(path)
       try {
         await unlink(path)
@@ -381,39 +415,6 @@ async function enforceShapePreviewCacheLimit(dir: string): Promise<void> {
     }
   } catch (error) {
     console.error('shapeMaterialize: preview cache eviction failed:', error)
-  }
-}
-
-/** A WAV's format and data size from its header (the first 64 KB) and its size on disk, so a
- * cache hit never reads a whole float file on the main thread. */
-async function readWavHeader(
-  path: string,
-  missing: string
-): Promise<{
-  audioFormat: number
-  bitsPerSample: number
-  sampleRate: number
-  numChannels: number
-  dataSize: number
-}> {
-  let handle: Awaited<ReturnType<typeof open>>
-  try {
-    handle = await open(path, 'r')
-  } catch {
-    throw new Error(missing)
-  }
-  try {
-    const size = (await handle.stat()).size
-    if (size === 0) throw new Error(missing)
-    const head = Buffer.alloc(Math.min(size, 64 * 1024))
-    await handle.read(head, 0, head.length, 0)
-    const wav = findWavChunks(new Uint8Array(head.buffer, head.byteOffset, head.length))
-    if (wav.dataOffset < 8) return { ...wav, dataSize: 0 }
-    // The header read is clamped to 64 KB: take the data size it declares, bounded by the file.
-    const declared = head.readUInt32LE(wav.dataOffset - 4)
-    return { ...wav, dataSize: Math.min(declared, Math.max(0, size - wav.dataOffset)) }
-  } finally {
-    await handle.close()
   }
 }
 
@@ -494,11 +495,20 @@ export function shapeJobStateSizeForTest(): number {
 /** Removes preview staging folders (a dot-named folder directly inside a
  * `.preview-cache`) that hold any of `paths`. Never the cache itself or its
  * shared, LRU-evicted renders: those outlive any one preview. */
-export async function cleanupShapePreview(paths: readonly string[]): Promise<void> {
+export async function cleanupShapePreview(
+  paths: readonly string[],
+  durableRoot: string
+): Promise<void> {
+  const cache = join(durableRoot, '.preview-cache')
   const stagingRoots = new Set<string>()
   for (const path of paths) {
     const parent = dirname(resolve(path))
-    if (basename(parent).startsWith('.') && basename(dirname(parent)) === '.preview-cache')
+    // Paths come from the renderer: only a staging folder directly inside this library's cache.
+    if (
+      inside(cache, parent) &&
+      resolve(dirname(parent)) === resolve(cache) &&
+      basename(parent).startsWith('.')
+    )
       stagingRoots.add(parent)
   }
   for (const stagingRoot of stagingRoots) await removePath(stagingRoot)
@@ -528,9 +538,9 @@ export async function bakeShapeProcess(
   options: { mayCreateRoot?: boolean } = {}
 ): Promise<ShapeBakeProcessResult> {
   if (!request.jobId || request.items.length === 0) throw new Error('nothing to bake.')
-  await assertLibraryReachable(durableRoot, options.mayCreateRoot ?? true)
+  const mayCreateRoot = options.mayCreateRoot ?? true
   const batchRoot = join(durableRoot, `.${safeJobName(request.jobId)}-${randomUUID()}`)
-  await mkdir(batchRoot, { recursive: true })
+  await ensureShapeDir(batchRoot, durableRoot, mayCreateRoot)
   const releaseEngine = await renderEngines.acquire()
   let engine: Awaited<ReturnType<typeof spawnEngine>> | null = null
   let client: EngineClient | null = null
@@ -629,16 +639,18 @@ export async function materializeShape(
   if (previousNativeSession) stopNativeSession(previousNativeSession)
   const abortController = new AbortController()
   materializeAbortControllers.set(request.jobId, abortController)
-  await assertLibraryReachable(durableRoot, options.mayCreateRoot ?? true)
+  const mayCreateRoot = options.mayCreateRoot ?? true
+  await assertLibraryReachable(durableRoot, mayCreateRoot)
+  const pins = new Set<string>()
   const batchId = `${safeJobName(request.jobId)}-${randomUUID()}`
   // Staged beside where the results are renamed to (the preview cache, or the
   // library's .shapes for a commit), never in the system temp folder: a rename
   // across volumes fails (EXDEV), and the library is often on a USB drive.
   const batchRoot =
     request.mode === 'preview'
-      ? join(await shapePreviewCacheDir(durableRoot), `.${batchId}`)
+      ? join(await shapePreviewCacheDir(durableRoot, mayCreateRoot), `.${batchId}`)
       : join(durableRoot, `.${batchId}`)
-  await mkdir(batchRoot, { recursive: true })
+  await ensureShapeDir(batchRoot, durableRoot, mayCreateRoot)
   if (request.mode === 'preview') previewRoots.set(request.jobId, batchRoot)
 
   const nativeSession: MaterializeNativeSession = { engine: null, client: null }
@@ -672,10 +684,11 @@ export async function materializeShape(
       const previewCachePath =
         request.mode === 'preview'
           ? join(
-              await shapePreviewCacheDir(durableRoot),
+              await shapePreviewCacheDir(durableRoot, mayCreateRoot),
               shapeLanePreviewCacheKey(lane, request.targetBpm, request.loopBars)
             )
           : null
+      if (previewCachePath) pinCachePath(pins, previewCachePath)
       if (previewCachePath && (await exists(previewCachePath))) {
         try {
           const cached =
@@ -755,11 +768,12 @@ export async function materializeShape(
           durationSec: base.durationSec
         }
         if (process) {
-          const cacheDir = await shapePreviewCacheDir(durableRoot)
+          const cacheDir = await shapePreviewCacheDir(durableRoot, mayCreateRoot)
           const processPath = join(
             cacheDir,
             shapeProcessSourceCacheKey(processPrepared.path, process)
           )
+          pinCachePath(pins, processPath)
           let processed: ShapeMaterializedStem | null = null
           if (await exists(processPath)) {
             try {
@@ -834,8 +848,9 @@ export async function materializeShape(
           const rawRate = 2 ** (renderedPitch / 12)
           let rawPrepared = tempoResolved
           if (Math.abs(rawRate - 1) >= STRETCH_RATIO_EPSILON) {
-            const cacheDir = await shapePreviewCacheDir(durableRoot)
+            const cacheDir = await shapePreviewCacheDir(durableRoot, mayCreateRoot)
             const rawPath = join(cacheDir, shapeRawSourceCacheKey(tempoResolved.path, rawRate))
+            pinCachePath(pins, rawPath)
             if (await exists(rawPath)) {
               try {
                 rawPrepared = await inspectShapeSourceWav(rawPath)
@@ -990,7 +1005,7 @@ export async function materializeShape(
         const stem = { ...inspected, path: finalPath }
         previewMetadata.set(finalPath, stem)
         stems.push(stem)
-        await enforceShapePreviewCacheLimit(await shapePreviewCacheDir(durableRoot))
+        await enforceShapePreviewCacheLimit(await shapePreviewCacheDir(durableRoot, mayCreateRoot))
         continue
       }
       pending.push({
@@ -1007,7 +1022,7 @@ export async function materializeShape(
     }
     throwIfCancelled(request.jobId)
     if (request.mode === 'commit') {
-      await mkdir(durableRoot, { recursive: true })
+      await ensureShapeDir(durableRoot, durableRoot, mayCreateRoot)
       for (const item of pending) {
         await rename(item.temporaryPath, item.finalPath)
         stems.push(item.stem)
@@ -1021,6 +1036,7 @@ export async function materializeShape(
     }
     throw error
   } finally {
+    unpinCachePaths(pins)
     stopNativeSession(nativeSession)
     await removePath(batchRoot)
     previewRoots.delete(request.jobId)

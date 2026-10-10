@@ -109,6 +109,9 @@ export async function startPlaybackEngine(
   let client: EngineClient
   let lastProject: unknown = null
   let loadToken = 0
+  // Bumped by every load and promoted stage: an acknowledged load answered after a newer one
+  // must not become the project a respawn resends (only the latest load wins).
+  let loadSequence = 0
   // Staged projects the engine has been handed but has not yet said it
   // applied, by token. Normally holds at most one -- the engine supersedes
   // an older stage with a newer one -- but it is a Map rather than a
@@ -193,6 +196,7 @@ export async function startPlaybackEngine(
       return client
     },
     sendLoadProject(project: unknown) {
+      loadSequence += 1
       lastProject = project
       // A load-project makes the engine drop whatever is staged
       // (resolveStagedBefore("load-project")), so nothing here can still
@@ -204,6 +208,7 @@ export async function startPlaybackEngine(
       // As sendLoadProject: the engine drops whatever is staged.
       stagedProjects.clear()
       const token = ++loadToken
+      const sequence = ++loadSequence
       const result = await client.sendAndAwaitType(
         'load-project',
         { token, project, fadeSwap: options?.fadeSwap === true },
@@ -226,8 +231,8 @@ export async function startPlaybackEngine(
         throw new Error(typeof error === 'string' ? error : 'native engine rejected project')
       }
       // Crash recovery must only resurrect a snapshot the native process
-      // confirmed it actually published.
-      lastProject = project
+      // confirmed it actually published, and only if no newer load came since.
+      if (sequence === loadSequence) lastProject = project
     },
     sendStageProject(token: number, project: unknown, atBars?: number) {
       stagedProjects.set(token, project)
@@ -245,6 +250,7 @@ export async function startPlaybackEngine(
     },
     promoteStagedProject(token: number) {
       if (!stagedProjects.has(token)) return
+      loadSequence += 1
       lastProject = stagedProjects.get(token)
       stagedProjects.clear()
     },
