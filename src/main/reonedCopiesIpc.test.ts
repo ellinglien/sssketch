@@ -66,25 +66,23 @@ describe('reoned-copies-clean', () => {
 })
 
 describe('EEEDIT renders in .shapes', () => {
-  it('the survey counts and the clean deletes an unused old render, keeping one a project names', async () => {
+  it('are never counted or cleaned; only an old preview cache file is', async () => {
     const lib = join(dir, 'L')
     const shapes = join(lib, '.shapes')
-    mkdirSync(join(lib, 's'), { recursive: true })
-    mkdirSync(shapes)
-    const kept = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.shape.wav'
-    const unused = 'ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee.shape-base.wav'
-    writeFileSync(join(lib, 's', 's.sssketchproj'), JSON.stringify({ path: `/x/.shapes/${kept}` }))
+    mkdirSync(join(shapes, '.preview-cache'), { recursive: true })
+    const render = 'ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee.shape.wav'
+    const cached = join(shapes, '.preview-cache', 'abc.shape-preview.wav')
     const old = (Date.now() - 3 * 24 * 60 * 60 * 1000) / 1000
-    for (const name of [kept, unused]) {
-      writeFileSync(join(shapes, name), Buffer.alloc(100))
-      utimesSync(join(shapes, name), old, old)
-    }
+    writeFileSync(join(shapes, render), Buffer.alloc(100))
+    writeFileSync(cached, Buffer.alloc(40))
+    utimesSync(join(shapes, render), old, old)
+    utimesSync(cached, old, old)
     rootReads.roots = [lib]
     const survey = await handlers.get('reoned-copies-survey')!({}, { inMemoryNames: [] })
-    expect(survey).toMatchObject({ status: 'ok', unusedBytes: 100, unusedCount: 1 })
+    expect(survey).toMatchObject({ status: 'ok', unusedBytes: 40, unusedCount: 1 })
     const result = await handlers.get('reoned-copies-clean')!({}, [])
-    expect(result).toMatchObject({ status: 'ok', freedBytes: 100, deletedCount: 1 })
-    expect(existsSync(join(shapes, kept))).toBe(true)
-    expect(existsSync(join(shapes, unused))).toBe(false)
+    expect(result).toMatchObject({ status: 'ok', freedBytes: 40, deletedCount: 1 })
+    expect(existsSync(join(shapes, render))).toBe(true)
+    expect(existsSync(cached)).toBe(false)
   })
 })

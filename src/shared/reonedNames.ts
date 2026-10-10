@@ -1,8 +1,6 @@
 // What counts as naming a re-oned stem copy (decision D7 in the plan): its basename, anywhere.
 // Copy names are 32-hex recipe names or legacy uuids, so a plain regex over raw JSON text needs
 // no unescaping, and a project that names a copy under an old library root still protects it.
-// EEEDIT's renders in `<library>/.shapes` follow the same rules (a lane render `<uuid>.shape.wav`,
-// an intervention bake `<uuid>.shape-base.wav`): the cleanup's used set holds both kinds.
 
 const NAME_SOURCE = '[0-9A-Za-z_-]+\\.baked\\.wav'
 const COPY_FILE = new RegExp(`^${NAME_SOURCE}$`)
@@ -17,15 +15,7 @@ export function isStaleTempFileName(name: string): boolean {
   return TEMP_FILE.test(name)
 }
 
-const SHAPE_FILE = /^[0-9A-Za-z_-]+\.shape(-base)?\.wav$/
-
-/** An EEEDIT render the cleanup may remove from `.shapes` when unused. Not the preview cache's
- * own entries (`.shape-preview.wav` and kin), which that cache bounds by itself. */
-export function isShapeAssetFileName(name: string): boolean {
-  return SHAPE_FILE.test(name)
-}
-
-const SUFFIXES = ['.baked.wav', '.shape.wav', '.shape-base.wav']
+const SUFFIX = '.baked.wav'
 /** Longer than any copy name's stem (32 hex, or a 36-character legacy uuid). */
 const MAX_STEM_CHARS = 96
 
@@ -39,19 +29,17 @@ function isNameChar(code: number): boolean {
   )
 }
 
-/** Every copy name in `text`. Finds each suffix (`.baked.wav`, and EEEDIT's) and walks back over name characters, so
+/** Every copy name in `text`. Finds each `.baked.wav` and walks back over name characters, so
  * it stays linear in the text's length: a regex like NAME_SOURCE, run over a long run of name
  * characters (a base64 plugin state of zeros), backtracks quadratically and would block the
  * main thread for minutes on one project. */
 export function reonedNamesInText(text: string, into: Set<string> = new Set()): Set<string> {
-  for (const suffix of SUFFIXES) {
-    for (let at = text.indexOf(suffix); at !== -1; at = text.indexOf(suffix, at + suffix.length)) {
-      let start = at
-      while (start > 0 && at - start < MAX_STEM_CHARS && isNameChar(text.charCodeAt(start - 1))) {
-        start--
-      }
-      if (start < at) into.add(text.slice(start, at + suffix.length))
+  for (let at = text.indexOf(SUFFIX); at !== -1; at = text.indexOf(SUFFIX, at + SUFFIX.length)) {
+    let start = at
+    while (start > 0 && at - start < MAX_STEM_CHARS && isNameChar(text.charCodeAt(start - 1))) {
+      start--
     }
+    if (start < at) into.add(text.slice(start, at + SUFFIX.length))
   }
   return into
 }
@@ -67,7 +55,7 @@ export function collectReonedNames(
   while (stack.length > 0) {
     const value = stack.pop()
     if (typeof value === 'string') {
-      if (value.includes('.baked.wav') || value.includes('.shape')) reonedNamesInText(value, into)
+      if (value.includes('.baked.wav')) reonedNamesInText(value, into)
       continue
     }
     if (value === null || typeof value !== 'object') continue

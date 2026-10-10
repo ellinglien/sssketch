@@ -7,12 +7,7 @@ import type { Dirent } from 'node:fs'
 import { readdir, readFile, realpath, rm, stat, unlink } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { CLEANUP_GRACE_MS } from '@shared/reonedCleanup'
-import {
-  isReonedCopyFileName,
-  isShapeAssetFileName,
-  isStaleTempFileName,
-  reonedNamesInText
-} from '@shared/reonedNames'
+import { isReonedCopyFileName, isStaleTempFileName, reonedNamesInText } from '@shared/reonedNames'
 import { sessionKeptNames, withReonedCopiesLock } from './reonedCopiesSession'
 import type { KnownProject } from './reonedCopiesStore'
 
@@ -248,11 +243,12 @@ export function cleanBakes(
   })
 }
 
-/** What can go from `.shapes` (EEEDIT, projectLibrary.ts's shapeAssetsDir): a lane render or an
- * intervention bake no one names, and a render's staging folder (a dot-named folder in `.shapes`
- * or its `.preview-cache`) left behind by a crash, each more than a day old. `path` is relative to
- * `.shapes`. The preview cache's own renders are bounded by that cache (shapeMaterialize.ts), and
- * anything else in the folder is left alone. */
+/** What can go from `.shapes` (EEEDIT, projectLibrary.ts's shapeAssetsDir): only leftovers that
+ * nothing can need, each more than a day old. A crashed render's staging folder (a dot-named folder
+ * in `.shapes` or its `.preview-cache`), and a preview cache file (any render there is rebuilt on
+ * demand). Never a committed lane render (`.shape.wav`) or intervention bake (`.shape-base.wav`):
+ * unlike a re-oned copy, those can't be rebuilt, so they are kept whether or not a project still
+ * names them. `path` is relative to `.shapes`. Anything else in the folder is left alone. */
 export interface ShapesEntry {
   path: string
   size: number
@@ -277,7 +273,6 @@ async function folderBytes(path: string): Promise<number> {
 
 export async function surveyShapes(
   shapesDir: string,
-  used: ReadonlySet<string>,
   now: number
 ): Promise<{ unused: ShapesEntry[]; unusedBytes: number }> {
   const unused: ShapesEntry[] = []
@@ -293,12 +288,8 @@ export async function surveyShapes(
       const rel = relFolder === '' ? entry.name : join(relFolder, entry.name)
       const staging =
         entry.isDirectory() && entry.name.startsWith('.') && entry.name !== PREVIEW_CACHE
-      const render =
-        relFolder === '' &&
-        entry.isFile() &&
-        isShapeAssetFileName(entry.name) &&
-        !used.has(entry.name)
-      if (!staging && !render) continue
+      const cached = relFolder === PREVIEW_CACHE && entry.isFile()
+      if (!staging && !cached) continue
       try {
         const path = join(shapesDir, rel)
         const info = await stat(path)
@@ -319,18 +310,15 @@ export async function surveyShapes(
   return { unused, unusedBytes: unused.reduce((sum, f) => sum + f.size, 0) }
 }
 
-/** cleanBakes for `.shapes`, under the same lock and with the same rules: this session's names
- * are read inside the lock, and the folder is surveyed again there, so age is checked right
- * before each delete. Never deletes outside `.shapes`. */
+/** Deletes surveyShapes' leftovers, under the `.bakes` lock (renders publish outside it, but a
+ * file a running render touches is younger than the grace day), surveying again inside it so age
+ * is checked right before each delete. Never deletes outside `.shapes`, and never a render. */
 export function cleanShapes(
   shapesDir: string,
-  used: ReadonlySet<string>,
-  now: number,
-  sessionNames: () => Iterable<string> = sessionKeptNames
+  now: number
 ): Promise<{ freedBytes: number; deletedCount: number; failedCount: number }> {
   return withReonedCopiesLock(async () => {
-    const keep = new Set([...used, ...sessionNames()])
-    const { unused } = await surveyShapes(shapesDir, keep, now)
+    const { unused } = await surveyShapes(shapesDir, now)
     let freedBytes = 0
     let deletedCount = 0
     let failedCount = 0

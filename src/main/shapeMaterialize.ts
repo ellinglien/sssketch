@@ -14,7 +14,6 @@ import { pathsToEvict, renderShapeFormant, renderShapePitch } from './rubberband
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { findWavChunks } from '@shared/wavChunks'
-import { noteIssuedCopy } from './reonedCopiesSession'
 
 interface NativeShapeReply {
   success?: boolean
@@ -587,8 +586,6 @@ export async function bakeShapeProcess(
     }
     for (const item of pending) {
       await rename(item.temporaryPath, item.finalPath)
-      // Handed to the renderer: the cleanup keeps it this session (reonedCopiesSession.ts).
-      noteIssuedCopy(item.finalPath)
     }
     return {
       jobId: request.jobId,
@@ -1013,7 +1010,6 @@ export async function materializeShape(
       await mkdir(durableRoot, { recursive: true })
       for (const item of pending) {
         await rename(item.temporaryPath, item.finalPath)
-        noteIssuedCopy(item.finalPath)
         stems.push(item.stem)
       }
     }

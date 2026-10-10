@@ -1,6 +1,7 @@
 // Part 3 of the re-oned copies spec, the pure half: when the launch notice offers a cleanup, how
 // long "not now" lasts, how old an unused copy must be, how sizes read, and every word the
-// cleanup shows. The cleanup covers EEEDIT's renders (`.shapes`) too, so its words name both. See docs/superpowers/specs/2026-10-09-reoned-copies-cleanup-design.md. All UI
+// cleanup shows. The leftovers are EEEDIT's crashed render folders and old preview cache files
+// (`.shapes`); the words don't name EEEDIT, which most people never see. See docs/superpowers/specs/2026-10-09-reoned-copies-cleanup-design.md. All UI
 // copy lives here, lowercase (AGENTS.md section 2).
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -32,7 +33,7 @@ export function formatCopySize(bytes: number): string {
 
 export function cleanupOfferText(bytes: number): string {
   const size = bytes >= 1e6 ? `about ${formatCopySize(bytes)}` : formatCopySize(bytes)
-  return `${size} of re-oned and EEEDIT stem copies aren't used by any project. your rifffs, stems and projects aren't touched, and any re-oned copy needed later is rebuilt automatically.`
+  return `${size} of re-oned stem copies and leftover render files aren't used by any project. your rifffs, stems and projects aren't touched, and anything needed later is rebuilt automatically.`
 }
 
 export function clearedText(bytes: number): string {
@@ -43,9 +44,8 @@ export const CLEAN_UP_BUTTON = 'clean up'
 export const NOT_NOW_BUTTON = 'not now'
 export const OK_BUTTON = 'ok'
 export const MISSING_COPY_TEXT = 're-oned copy missing · rebuilds when its original is back'
-export const NOTHING_TO_CLEAN_TEXT =
-  'every re-oned and EEEDIT stem copy is in use. nothing to clean up.'
-export const CLEANUP_MENU_LABEL = 'clean up unused stem copies…'
+export const NOTHING_TO_CLEAN_TEXT = 'every re-oned stem copy is in use. nothing to clean up.'
+export const CLEANUP_MENU_LABEL = 'clean up re-oned stem copies…'
 export const LIBRARY_MISSING_TITLE = 'project library not found'
 export const COULD_NOT_CHECK_TEXT = "couldn't read every project, so nothing was cleaned."
 export const LOOKING_TEXT = 'looking…'

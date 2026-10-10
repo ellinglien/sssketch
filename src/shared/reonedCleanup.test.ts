@@ -27,7 +27,7 @@ describe('the offer', () => {
 describe('words', () => {
   it("the spec's message, word for word", () => {
     expect(cleanupOfferText(1_200_000_000)).toBe(
-      "about 1.2 GB of re-oned and EEEDIT stem copies aren't used by any project. your rifffs, stems and projects aren't touched, and any re-oned copy needed later is rebuilt automatically."
+      "about 1.2 GB of re-oned stem copies and leftover render files aren't used by any project. your rifffs, stems and projects aren't touched, and anything needed later is rebuilt automatically."
     )
     expect(clearedText(1_200_000_000)).toBe('cleared 1.2 GB')
     expect(MISSING_COPY_TEXT).toBe('re-oned copy missing · rebuilds when its original is back')
@@ -39,8 +39,6 @@ describe('words', () => {
     expect(formatCopySize(12_345_000_000)).toBe('12.3 GB')
     expect(formatCopySize(400_000)).toBe('less than 1 MB')
     expect(cleanupOfferText(400_000).startsWith('less than 1 MB of re-oned')).toBe(true)
-    expect(NOTHING_TO_CLEAN_TEXT).toBe(
-      'every re-oned and EEEDIT stem copy is in use. nothing to clean up.'
-    )
+    expect(NOTHING_TO_CLEAN_TEXT).toBe('every re-oned stem copy is in use. nothing to clean up.')
   })
 })
