@@ -4061,8 +4061,8 @@ export function ShapePanel({
           color: var(--ra-mute-on-ink);
         }
         .ra-shape-donor-row-button[data-control='solo'][data-active='true'] {
-          border-color: color-mix(in srgb, var(--ra-solo-on) 75%, var(--ra-bg-page));
-          background: color-mix(in srgb, var(--ra-solo-on) 75%, var(--ra-bg-page));
+          border-color: var(--ra-solo-on);
+          background: var(--ra-solo-on);
           color: var(--ra-solo-on-ink);
         }
         .ra-shape-clip-edge {

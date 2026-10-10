@@ -174,7 +174,7 @@ import { DEFAULT_RADIO_SETTINGS, radioSourceOf, type RadioSettings } from '@shar
 import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
 import { mergeLatestSettings, nestedPatchFromLatest } from '@shared/latestSettings'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
-import { useFeatureEnabled } from './state/appFeatures'
+import { setAdvancedFeatures, useFeatureEnabled } from './state/appFeatures'
 import {
   pendingPluginStatesGeneration,
   pendingPluginStatesRef,
@@ -1566,11 +1566,6 @@ function Frame(): React.JSX.Element {
     return projectJsonForSave(stateToSave, live, pending, fallback)
   }
 
-  /** Returns whether the save actually succeeded, so every discard-guard
-   * call site (New, opening/restoring a library sketch, opening from disk,
-   * quit-time save) can tell a real failure (disk full, permission denied,
-   * etc.) apart from a resolved promise and avoid proceeding to discard/
-   * replace the live project on top of a save that never landed. */
   /** Writes the live project (or `stateToSave`, the exact state a departure
    * save publishes an EEEDIT draft into first) and says how it went, without
    * telling the user anything itself (saveOutcomeNotice decides that): the quit
@@ -2968,6 +2963,9 @@ function Frame(): React.JSX.Element {
   // The switch turned off while EEEDIT is open: close it as its own close does, asking first
   // about unsaved edits (eeeditSwitchAction).
   const eeeditEnabledRef = useRef(eeeditEnabled)
+  // The discard prompt was opened by switching the advanced features off: cancelling it keeps
+  // EEEDIT, so the switch goes back on rather than leaving EEEDIT open with its feature off.
+  const shapeDiscardBySwitchRef = useRef(false)
   eeeditEnabledRef.current = eeeditEnabled
   useEffect(() => {
     const draft = shapeDraftRef.current
@@ -2976,8 +2974,10 @@ function Frame(): React.JSX.Element {
       open: shapeOpenRef.current,
       dirty: draft !== null && shapeContentFingerprint(draft) !== shapeSavedFingerprintRef.current
     })
-    if (action === 'ask') setShapeDiscardPromptOpen(true)
-    else if (action === 'close') finishCloseShape()
+    if (action === 'ask') {
+      shapeDiscardBySwitchRef.current = true
+      setShapeDiscardPromptOpen(true)
+    } else if (action === 'close') finishCloseShape()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs on the switch alone; the refs above are current.
   }, [eeeditEnabled])
 
@@ -2994,6 +2994,7 @@ function Frame(): React.JSX.Element {
   }
 
   function finishCloseShape(): void {
+    shapeDiscardBySwitchRef.current = false
     setShapeDiscardPromptOpen(false)
     shapeOpenGenerationRef.current += 1
     shapePreviewStopRef.current?.()
@@ -4275,7 +4276,16 @@ function Frame(): React.JSX.Element {
             message="discard your EEEDIT changes?"
             detail="anything not kept or added to the shelf is lost."
             actions={[
-              { label: 'cancel', onClick: () => setShapeDiscardPromptOpen(false) },
+              {
+                label: 'cancel',
+                onClick: () => {
+                  setShapeDiscardPromptOpen(false)
+                  if (shapeDiscardBySwitchRef.current) {
+                    shapeDiscardBySwitchRef.current = false
+                    void setAdvancedFeatures(true)
+                  }
+                }
+              },
               { label: 'discard', onClick: finishCloseShape, danger: true, primary: true }
             ]}
           />
