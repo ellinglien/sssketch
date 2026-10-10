@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ShapeMaterializeRequest } from '@shared/shape'
 
@@ -189,6 +189,43 @@ describe('materializeShape', () => {
     expect(existsSync(result.stems[0].path)).toBe(true)
     cleanupShapePreview(result.stems.map((stem) => stem.path))
     expect(existsSync(result.stems[0].path)).toBe(true)
+  })
+
+  // A rename across volumes fails (EXDEV), and the library is often on a USB
+  // drive: every render is staged in a folder beside where it is published.
+  it('stages every preview render beside the cache it is renamed into', async () => {
+    const lanes = request('preview', 2)
+    lanes.lanes[1].segments[0].rate = 2
+    lanes.lanes[1].segments[0].character = 'raw'
+    lanes.lanes[0].segments[0].process = { type: 'wavefold', drive: 2, bias: 0, mix: 1 }
+    await materializeShape(lanes, durableRoot)
+    const outputs = sentPayloads.map((payload) => (payload as { outputPath: string }).outputPath)
+    expect(outputs.length).toBeGreaterThan(2)
+    for (const output of outputs)
+      expect(dirname(dirname(output))).toBe(join(durableRoot, '.preview-cache'))
+  })
+
+  it('stages every commit render beside the library folder it is renamed into', async () => {
+    await materializeShape(request('commit', 2), durableRoot)
+    const outputs = sentPayloads.map((payload) => (payload as { outputPath: string }).outputPath)
+    for (const output of outputs) expect(dirname(dirname(output))).toBe(durableRoot)
+  })
+
+  it('cleans a preview staging folder but never the preview cache or its renders', () => {
+    const cache = join(durableRoot, '.preview-cache')
+    const staging = join(cache, '.job-preview-1')
+    mkdirSync(staging, { recursive: true })
+    writeFloatWav(join(staging, '1.rendering.wav'))
+    writeFloatWav(join(cache, 'kept.shape-preview.wav'))
+    cleanupShapePreview([
+      join(cache, 'kept.shape-preview.wav'),
+      join(cache, 'missing.shape-preview.wav'),
+      join(staging, '1.rendering.wav'),
+      join(durableRoot, 'outside.wav')
+    ])
+    expect(existsSync(staging)).toBe(false)
+    expect(existsSync(join(cache, 'kept.shape-preview.wav'))).toBe(true)
+    expect(existsSync(durableRoot)).toBe(true)
   })
 
   it('reuses unchanged lane renders and renders only the edited lane', async () => {

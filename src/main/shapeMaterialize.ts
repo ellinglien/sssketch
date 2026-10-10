@@ -11,7 +11,6 @@ import {
 } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, join, resolve, sep } from 'node:path'
-import { tmpdir } from 'node:os'
 import { stretchRatioForStem, STRETCH_RATIO_EPSILON } from '@shared/stretchRatio'
 import type {
   ShapeBakeProcessRequest,
@@ -380,13 +379,17 @@ export function cancelShapeMaterialization(jobId: string): void {
   }
 }
 
+/** Removes preview staging folders (a dot-named folder directly inside a
+ * `.preview-cache`) that hold any of `paths`. Never the cache itself or its
+ * shared, LRU-evicted renders: those outlive any one preview. */
 export function cleanupShapePreview(paths: readonly string[]): void {
-  const root = join(tmpdir(), 'sssketch-shape-preview')
-  const jobRoots = new Set<string>()
+  const stagingRoots = new Set<string>()
   for (const path of paths) {
-    if (inside(root, path)) jobRoots.add(dirname(path))
+    const parent = dirname(resolve(path))
+    if (basename(parent).startsWith('.') && basename(dirname(parent)) === '.preview-cache')
+      stagingRoots.add(parent)
   }
-  for (const jobRoot of jobRoots) if (inside(root, jobRoot)) removePath(jobRoot)
+  for (const stagingRoot of stagingRoots) removePath(stagingRoot)
 }
 
 export function cleanupUncommittedShapeAssets(paths: readonly string[], durableRoot: string): void {
@@ -505,9 +508,13 @@ export async function materializeShape(
   const abortController = new AbortController()
   materializeAbortControllers.set(request.jobId, abortController)
   const batchId = `${request.jobId}-${randomUUID()}`
-  const previewBase = join(tmpdir(), 'sssketch-shape-preview')
+  // Staged beside where the results are renamed to (the preview cache, or the
+  // library's .shapes for a commit), never in the system temp folder: a rename
+  // across volumes fails (EXDEV), and the library is often on a USB drive.
   const batchRoot =
-    request.mode === 'preview' ? join(previewBase, batchId) : join(durableRoot, `.${batchId}`)
+    request.mode === 'preview'
+      ? join(shapePreviewCacheDir(durableRoot), `.${batchId}`)
+      : join(durableRoot, `.${batchId}`)
   mkdirSync(batchRoot, { recursive: true })
   if (request.mode === 'preview') previewRoots.set(request.jobId, batchRoot)
 
