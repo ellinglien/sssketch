@@ -52,6 +52,7 @@ import {
   afterSaveBeforeQuit,
   awaitSaveBeforeQuit,
   beforeQuitPlan,
+  saveBeforeQuitTimeoutMs,
   type SaveBeforeQuitResult
 } from './saveBeforeQuit'
 import { jamNamesFor, stemJamsForPaths } from './stemJams'
@@ -445,6 +446,9 @@ let engineStartupDone = false
 // every keystroke) -- read from the before-quit handler to decide whether
 // Cmd+Q needs to ask before discarding real unsaved work.
 let rendererHasUnsavedChanges = false
+// An open EEEDIT draft with unpublished edits: the quit prompt's Save renders it onto the shelf
+// first, so it waits longer (saveBeforeQuitTimeoutMs).
+let rendererEeeditUnpublished = false
 
 // What main knows of the crash-recovery file: whether a save landed in this
 // window and whether an autosave was written since (recoveryFileTracker.ts).
@@ -723,7 +727,10 @@ function createWindow(): BrowserWindow {
     windowNotices.windowGone(win)
     // Its unsaved work goes with it: what survives is the recovery file, which
     // a later quit must neither ask about nor delete (beforeQuitPlan).
-    if (win === mainWindow) rendererHasUnsavedChanges = false
+    if (win === mainWindow) {
+      rendererHasUnsavedChanges = false
+      rendererEeeditUnpublished = false
+    }
   })
 
   win.webContents.setWindowOpenHandler((details) => {
@@ -1447,8 +1454,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('load-autosave-sketch', () => loadAutosaveSketchInfo())
 
-  ipcMain.handle('set-dirty-state', (_event, dirty: boolean) => {
+  ipcMain.handle('set-dirty-state', (_event, dirty: boolean, eeeditUnpublished = false) => {
     rendererHasUnsavedChanges = dirty
+    rendererEeeditUnpublished = dirty && eeeditUnpublished === true
   })
 
   ipcMain.handle('export-mix', (event, bytes: Uint8Array, defaultName?: string) => {
@@ -2920,7 +2928,8 @@ function requestSaveBeforeQuit(): Promise<SaveBeforeQuitResult> {
       }
       ipcMain.on('save-before-quit-complete', listener)
       return () => ipcMain.removeListener('save-before-quit-complete', listener)
-    }
+    },
+    saveBeforeQuitTimeoutMs(rendererEeeditUnpublished)
   )
 }
 

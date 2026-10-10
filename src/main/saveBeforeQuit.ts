@@ -77,6 +77,13 @@ export function beforeQuitPlan(
   }
 }
 
+/** How long the quit prompt's Save waits for the renderer. A timeout keeps the app open with
+ * "still saving", so a plain save gets 5 s; one that must first render an unpublished EEEDIT
+ * draft onto the shelf (every lane through the engine) gets two minutes. */
+export function saveBeforeQuitTimeoutMs(eeeditPublishNeeded: boolean): number {
+  return eeeditPublishNeeded ? 120_000 : 5000
+}
+
 /**
  * Waits for the renderer's save result without treating silence as success.
  * The subscription is installed before the request is sent so even an
@@ -86,7 +93,7 @@ export function awaitSaveBeforeQuit(
   requestId: string,
   sendRequest: (requestId: string) => void,
   subscribe: (complete: (requestId: string, success: boolean) => void) => () => void,
-  timeoutMs = 120000
+  timeoutMs = 5000
 ): Promise<SaveBeforeQuitResult> {
   return new Promise((resolve) => {
     let settled = false

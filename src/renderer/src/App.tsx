@@ -1603,13 +1603,18 @@ function Frame(): React.JSX.Element {
     }
   }
 
-  /** The Save button and Cmd+S: true when the write landed. Newer edits made
-   * while it was in flight just leave the project marked unsaved. */
+  /** The Save menu item and Cmd+S: true when the write landed. Newer edits made
+   * while it was in flight just leave the project marked unsaved. With EEEDIT
+   * open, it saves as a departure save does: an unpublished draft is added to
+   * the shelf first, so the saved project holds it (EEEDIT's own Cmd+S adds to
+   * the shelf without saving). */
   async function handleSave(): Promise<boolean> {
-    const outcome = await saveProjectNow()
+    const outcome = shapeDraftRef.current
+      ? await saveProjectBeforeLeavingNow()
+      : await saveProjectNow()
     const notice = saveOutcomeNotice(outcome, 'save')
     if (notice) window.alert(notice)
-    return outcome.kind !== 'failed'
+    return outcome.kind !== 'failed' && outcome.kind !== 'busy'
   }
 
   /** Saving before something that closes or replaces the live project
@@ -2842,8 +2847,8 @@ function Frame(): React.JSX.Element {
   }
 
   /** The save before something that closes or replaces the live project (quit's
-   * Save, and Save in the discard guard before New or opening another), without
-   * telling the user anything itself. An unpublished EEEDIT draft is first
+   * Save, and Save in the discard guard before New or opening another), and the
+   * Save item while EEEDIT is open, without telling the user anything itself. An unpublished EEEDIT draft is first
    * materialized onto the shelf, and that exact reducer result is what gets
    * written. 'saved' only when the write holds the newest edits, the draft's
    * included; a draft that changed meanwhile reads as 'changed'. */
@@ -3452,7 +3457,7 @@ function Frame(): React.JSX.Element {
   // its own declaration above), so this effect only fires then, not on
   // every keystroke.
   useEffect(() => {
-    void window.rifffApi.setDirtyState(dirty || shapeDirty)
+    void window.rifffApi.setDirtyState(dirty || shapeDirty, shapeDirty)
   }, [dirty, shapeDirty])
 
   // Main pushes 'request-save-before-quit' when the user picks "Save" on

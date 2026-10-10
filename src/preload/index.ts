@@ -192,7 +192,8 @@ const api = {
   // One-way: main just stores the boolean, no reply expected. Fired from
   // App.tsx's Frame whenever hasUnsavedChanges's own value transitions, not
   // on every keystroke -- see index.ts's rendererHasUnsavedChanges.
-  setDirtyState: (dirty: boolean): Promise<void> => ipcRenderer.invoke('set-dirty-state', dirty),
+  setDirtyState: (dirty: boolean, eeeditUnpublished = false): Promise<void> =>
+    ipcRenderer.invoke('set-dirty-state', dirty, eeeditUnpublished),
   // Main pushes this when the quit dialog's "Save" choice is picked (see
   // index.ts's requestSaveBeforeQuit) -- the renderer's own listener (Frame)
   // runs handleSave() and reports its boolean result. Main quits only after
