@@ -108,3 +108,16 @@ export function shapeClipResizeDestination({
     Math.max(clipStart + minimumLength, snapped)
   )
 }
+
+/** The selection after a lane's m or s is clicked: monitoring a lane also makes it the one being
+ * edited, so treatments and transforms never go to a selected lane that is now silent. A
+ * selection already inside that lane is kept as it is; anything else becomes the whole lane.
+ * Selection isn't an undo step. */
+export function selectionForLaneMonitor(
+  current: Set<string>,
+  laneFragmentIds: readonly string[]
+): Set<string> {
+  const lane = new Set(laneFragmentIds)
+  if (current.size > 0 && [...current].every((id) => lane.has(id))) return current
+  return lane
+}

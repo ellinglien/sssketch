@@ -78,6 +78,7 @@ import {
   shapeGridSizePct,
   SHAPE_OVERLAY_SELECTOR,
   shapeOwnsKey,
+  selectionForLaneMonitor,
   shapePlaybackStartBar
 } from './shapeKeyboard'
 import { resolveCandidateStem } from './discoverCandidateStem'
@@ -3991,6 +3992,23 @@ export function ShapePanel({
     }
   )
 
+  // A lane's m or s also makes it the lane being edited (selectionForLaneMonitor), so treatments
+  // and transforms never land on a selected lane that is now silent. Not while a treatment is
+  // auditioning or baking: that session holds its own clips.
+  const selectLaneForMonitor = (lane: ShapeLane): void => {
+    if (processSession !== null || processBaking) return
+    // A region already drawn in this lane is a selection inside it too.
+    if (rangeSelection?.laneId === lane.id) return
+    const next = selectionForLaneMonitor(
+      selected,
+      lane.fragments.map((fragment) => fragment.id)
+    )
+    if (next === selected) return
+    setSelected(next)
+    setRangeSelection(null)
+    setCursorTarget(null)
+  }
+
   const shapePlaying = playing && playbackIntent && owns()
   const shownPosition = shapePlaying ? pos % draft.loopBars : cursorBar
   const playheadPct = (shownPosition / draft.loopBars) * 100
@@ -4373,15 +4391,19 @@ export function ShapePanel({
                 setRangeSelection(null)
                 setClipMenu({ kind: 'clip', laneId, clipId, x, y })
               }}
-              onMute={() =>
+              onMute={() => {
+                selectLaneForMonitor(lane)
                 setMuted((current) => {
                   const next = new Set(current)
                   if (next.has(lane.id)) next.delete(lane.id)
                   else next.add(lane.id)
                   return next
                 })
-              }
-              onSolo={() => setSoloed((current) => (current === lane.id ? null : lane.id))}
+              }}
+              onSolo={() => {
+                selectLaneForMonitor(lane)
+                setSoloed((current) => (current === lane.id ? null : lane.id))
+              }}
               onGainPreview={(gain) =>
                 setDraft((current) =>
                   current ? previewShapeLaneGain(current, lane.id, gain) : current

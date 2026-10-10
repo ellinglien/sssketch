@@ -5,7 +5,8 @@ import {
   shapeClipResizeDestination,
   shapeGridSizePct,
   shapeOwnsKey,
-  shapePlaybackStartBar
+  shapePlaybackStartBar,
+  selectionForLaneMonitor
 } from './shapeKeyboard'
 
 describe('Shape keyboard ownership', () => {
@@ -158,5 +159,23 @@ describe('Shape keyboard ownership', () => {
         loopBars: 8
       })
     ).toBe(5)
+  })
+})
+
+describe('selectionForLaneMonitor (m or s also selects its lane)', () => {
+  const lane = ['b1', 'b2']
+  it('selects the whole lane when the selection is elsewhere or empty', () => {
+    expect([...selectionForLaneMonitor(new Set(['a1']), lane)]).toEqual(['b1', 'b2'])
+    expect([...selectionForLaneMonitor(new Set(), lane)]).toEqual(['b1', 'b2'])
+    expect([...selectionForLaneMonitor(new Set(['a1', 'b1']), lane)]).toEqual(['b1', 'b2'])
+  })
+
+  it('keeps a selection already inside that lane (the same set, so nothing re-renders)', () => {
+    const current = new Set(['b2'])
+    expect(selectionForLaneMonitor(current, lane)).toBe(current)
+  })
+
+  it('an empty lane selects nothing', () => {
+    expect([...selectionForLaneMonitor(new Set(['a1']), [])]).toEqual([])
   })
 })
