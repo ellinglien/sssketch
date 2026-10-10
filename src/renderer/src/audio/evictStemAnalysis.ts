@@ -2,6 +2,7 @@ import { evictWaveform } from './peakCache'
 import { evictBandEnergy } from './bandEnergyCache'
 import { evictPitchContour } from './pitchCache'
 import { evictWaveformMask } from './waveformMaskCache'
+import { evictDetailWaveform } from './detailPeakCache'
 
 /**
  * Drops every path-keyed analysis this app memoizes for these files.
@@ -32,6 +33,7 @@ export function evictStemAnalysis(paths: Iterable<string>): void {
   for (const path of paths) {
     evictWaveform(path)
     evictWaveformMask(path)
+    evictDetailWaveform(path)
     evictBandEnergy(path)
     evictPitchContour(path)
   }

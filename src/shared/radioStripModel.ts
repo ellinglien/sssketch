@@ -48,6 +48,15 @@ import {
 } from './radioTurnaround'
 import { RADIO_TRANSITIONS_OPTIONS } from './radioTransition'
 import { FAVES_LABEL, FAVES_TOOLTIP } from './discoverFaves'
+import {
+  RADIO_ADD_TO_SHELF_TOOLTIP,
+  RADIO_ADD_TO_TIMELINE_TOOLTIP,
+  RADIO_KEEP_TOOLTIP,
+  RADIO_TURN_TOOLTIP,
+  SOURCE_DIAL_LEFT_LABEL,
+  SOURCE_DIAL_RIGHT_LABEL,
+  SOURCE_DIAL_TOOLTIP
+} from './radioControlCopy'
 import { soundPanelModel, type SoundSliderControl } from './soundPanelModel'
 import type { DeepReadonly, SoundSettings } from './radioSound'
 
@@ -287,9 +296,9 @@ export function radioStripMixControls(): RadioStripControl[] {
     // advanced features switch on (heartsButtonShown, @shared/features): RadioMixActions skips
     // it when DiscoverPanel's bundle carries no `hearts`.
     panel('fetch-hearts', 'fetch hearts', { tooltip: 'fetch radio hearts' }),
-    panel('add-to-shelf', 'add to shelf'),
-    panel('add-to-timeline', 'add to timeline'),
-    panel('keep', 'keep', { tooltip: 'keep this group' })
+    panel('add-to-shelf', 'add to shelf', { tooltip: RADIO_ADD_TO_SHELF_TOOLTIP }),
+    panel('add-to-timeline', 'add to timeline', { tooltip: RADIO_ADD_TO_TIMELINE_TOOLTIP }),
+    panel('keep', 'keep', { tooltip: RADIO_KEEP_TOOLTIP })
   ]
 }
 
@@ -320,7 +329,7 @@ export function radioStripModel(
     },
     panel('skip', 'skip', { tooltip: 'skip a row' }),
     panel('new-bed', 'new bed', { tooltip: RADIO_NEW_BED_TOOLTIP }),
-    panel('turn', 'turn', { tooltip: 'turn at the top' }),
+    panel('turn', 'turn', { tooltip: RADIO_TURN_TOOLTIP }),
     panel('build', 'build', { tooltip: withIntensity(RADIO_BUILD_TOOLTIP), disabled: !intensity }),
     panel('drop', 'drop', { tooltip: withIntensity(RADIO_DROP_TOOLTIP), disabled: !intensity }),
     panel('level', 'level', { tooltip: 'whole mix level', disabled: !ctx.sounding })
@@ -332,8 +341,8 @@ export function radioStripModel(
       sets: ['faves'],
       dimmed: ctx.artistMode && ctx.artistsIncludeMe !== true
     }),
-    panel('source', 'source · endlesss - other', {
-      tooltip: 'right for other, left for endlesss',
+    panel('source', `source · ${SOURCE_DIAL_LEFT_LABEL} - ${SOURCE_DIAL_RIGHT_LABEL}`, {
+      tooltip: SOURCE_DIAL_TOOLTIP,
       sets: ['source']
     }),
     panel('matching', 'matching', { tooltip: 'right for more matching' }),

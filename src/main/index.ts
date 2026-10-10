@@ -30,6 +30,9 @@ import {
   writeAutosave,
   loadAutosave,
   clearAutosave,
+  discardAutosave,
+  loadPreviousAutosave,
+  discardPreviousAutosave,
   writeAutosaveSketchInfo,
   loadAutosaveSketchInfo,
   saveProjectToLibrary,
@@ -42,12 +45,22 @@ import {
 import {
   initialRecoveryFileState,
   recoveryFileStep,
-  shouldClearRecoveryOnCleanQuit,
   type RecoveryFileEvent,
   type RecoveryFileState
 } from './recoveryFileTracker'
-import { awaitSaveBeforeQuit, type SaveBeforeQuitResult } from './saveBeforeQuit'
+import {
+  afterSaveBeforeQuit,
+  awaitSaveBeforeQuit,
+  beforeQuitPlan,
+  type SaveBeforeQuitResult
+} from './saveBeforeQuit'
+import { jamNamesFor, stemJamsForPaths } from './stemJams'
 import { bakeOffset, type BakeJob } from './bakeOffset'
+import { setStemMetadataDurationLookup } from './reonedRebuild'
+import { registerReonedCopiesIpc } from './reonedCopiesIpc'
+import { createEngineStopper } from './engineStop'
+import { createMetronomeSetting } from './metronomeSetting'
+import { claimSingleInstance } from './singleInstance'
 import { exportMixToWav } from './exportMix'
 import type { ToolkitExportMode } from '@shared/toolkit'
 import type { LiveParamField } from '@shared/liveParam'
@@ -96,7 +109,8 @@ import {
   downloadStemForAnalysis,
   candidateDbsForRiff,
   listJamsWithDb,
-  riffLibraryArchiveReachable
+  riffLibraryArchiveReachable,
+  stemMetadataDurationSec
 } from './riffLibraryStore'
 import {
   getDiscoverCandidates,
@@ -178,6 +192,7 @@ import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
+import { loadPreviewLevel, savePreviewLevel } from './previewLevelStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
 import { loadSoundSettings, saveSoundSettings } from './soundSettingsStore'
 import type { SoundMeters, SoundSettings } from '@shared/radioSound'
@@ -283,6 +298,7 @@ import {
   libraryRootPath,
   bakeAssetsDir,
   shapeAssetsDir,
+  isDefaultLibraryRoot,
   setLibraryRootPath,
   shouldWarnBeforeOverwrite,
   renameSketch,
@@ -297,35 +313,10 @@ import {
 // read from the before-quit handler below, which runs in a different
 // closure and can't otherwise reach it.
 let playbackEngine: PlaybackEngineHandle | undefined
-let engineStopToken = 0
-let engineStopInFlight: Promise<void> | null = null
-
-/** Sends one native stop request and resolves only after Transport's audio
- * callback has completed its click-free halt fade. Concurrent renderer
- * callers share the same request, which prevents Shelf's explicit handoff
- * and StoreContext's playing-state effect from sending duplicate stops. */
-function stopPlaybackEngineAndWait(): Promise<void> {
-  if (!playbackEngine) return Promise.resolve()
-  if (engineStopInFlight) return engineStopInFlight
-  const token = ++engineStopToken
-  const request = playbackEngine.client
-    .sendAndAwaitType('stop', { token }, 'transport-stopped', 2000)
-    .then((payload) => {
-      if (
-        typeof payload !== 'object' ||
-        payload === null ||
-        (payload as { token?: unknown }).token !== token ||
-        (payload as { stopped?: unknown }).stopped !== true
-      ) {
-        throw new Error('native engine did not confirm that transport reached silence')
-      }
-    })
-  const shared = request.finally(() => {
-    if (engineStopInFlight === shared) engineStopInFlight = null
-  })
-  engineStopInFlight = shared
-  return shared
-}
+// engine-stop's shared, token-correlated request (engineStop.ts).
+const engineStopper = createEngineStopper(() => playbackEngine?.client)
+// The metronome's last on/off and volume, re-sent to a respawned engine.
+const metronomeSetting = createMetronomeSetting()
 
 /**
  * Best-effort fetch of current plugin state from the PERSISTENT live engine
@@ -728,7 +719,12 @@ function createWindow(): BrowserWindow {
       })
   })
 
-  win.on('closed', () => windowNotices.windowGone(win))
+  win.on('closed', () => {
+    windowNotices.windowGone(win)
+    // Its unsaved work goes with it: what survives is the recovery file, which
+    // a later quit must neither ask about nor delete (beforeQuitPlan).
+    if (win === mainWindow) rendererHasUnsavedChanges = false
+  })
 
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -795,23 +791,23 @@ if (is.dev) {
 // both copies a few milliseconds apart produces comb filtering/phasey
 // "crunch" that is easily mistaken for buffer underruns. A second launch
 // now just brings the existing window forward and exits before it can
-// create another engine.
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
-if (!hasSingleInstanceLock) {
-  app.quit()
-} else {
-  app.on('second-instance', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
-  })
-}
+// create another engine (singleInstance.ts: it exits rather than quits, and
+// the whenReady handler below checks isPrimaryInstance first).
+const isPrimaryInstance = claimSingleInstance(app, () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+})
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
+  // A second launch has already called app.exit(); make sure it opens no
+  // database and starts no engine in the moment before it's gone.
+  if (!isPrimaryInstance) return
+
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.ellinglien.sssketch')
 
@@ -1115,6 +1111,17 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('riff-library-resolve-riff', (_event, riffCID: string) => resolveRiff(riffCID))
 
+  // Which jam each library stem file belongs to, and the jams' names: Discover aligns
+  // candidates from a seed's own jam to the seed's rotation (src/shared/discoverSeedPhase.ts).
+  // The jam is the riff index's, as on every candidate (stemJams.ts); a seed's few stems.
+  ipcMain.handle('riff-library-stem-jams', async (_event, paths: string[]) => {
+    const jams = await stemJamsForPaths(
+      paths,
+      async (path) => (await findRiffForStemPath(path))?.jamCID ?? null
+    )
+    return { jams, names: jamNamesFor(candidateDbsForRiff(), Object.values(jams)) }
+  })
+
   ipcMain.handle('riff-library-resolve-riff-with-context', (_event, riffCID: string) =>
     resolveRiffWithContext(riffCID)
   )
@@ -1378,7 +1385,12 @@ app.whenReady().then(async () => {
     renderStretched(stemPath, ratio)
   )
 
-  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs, bakeAssetsDir()))
+  // A missing re-oned copy's rebuild matches it by the stem's own LORE metadata.
+  setStemMetadataDurationLookup(stemMetadataDurationSec)
+  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) =>
+    bakeOffset(jobs, bakeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
+  )
+  registerReonedCopiesIpc(ipcMain)
 
   ipcMain.handle('shape-materialize', (_event, request: ShapeMaterializeRequest) =>
     materializeShape(request, shapeAssetsDir())
@@ -1394,8 +1406,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
+    // "save a copy to a file…": the open project stays unsaved, so its recovery file stays.
     const path = await saveProjectAs(win, json)
-    if (path !== null) noteRecoveryFile('saved')
+    if (path !== null) noteRecoveryFile('copy-written')
     return path
   })
 
@@ -1415,6 +1428,17 @@ app.whenReady().then(async () => {
     clearAutosave()
     noteRecoveryFile('cleared')
   })
+
+  // The user recovered or discarded the offered snapshot: deleted for good. clear-autosave
+  // (saves, discards of this session's work) moves an undecided one aside instead.
+  ipcMain.handle('discard-autosave', () => {
+    discardAutosave()
+    noteRecoveryFile('cleared')
+  })
+
+  ipcMain.handle('load-previous-autosave', () => loadPreviousAutosave())
+
+  ipcMain.handle('discard-previous-autosave', () => discardPreviousAutosave())
 
   ipcMain.handle('autosave-project-sketch', (_event, json: string) => {
     writeAutosaveSketchInfo(json)
@@ -1617,6 +1641,8 @@ app.whenReady().then(async () => {
     .then((handle) => {
       playbackEngine = handle
       subscribeEngineRelays(handle)
+      // A metronome change made while the engine was starting (metronomeSetting.ts).
+      metronomeSetting.resend((type, payload) => handle.client.send(type, payload))
     })
     .catch((err) => {
       // Same handling as before this became non-blocking -- a failed spawn
@@ -1679,13 +1705,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('engine-play', (_event, fromPos: number, fadeIn = false) => {
     // A new Play deliberately supersedes any halt still fading. Let a
     // subsequent stop create a fresh request rather than inheriting the
-    // superseded handoff promise; the old waiter will either be acked by
-    // that later stop or time out harmlessly.
-    engineStopInFlight = null
+    // superseded handoff promise; the engine answers the old waiter
+    // stopped=false.
+    engineStopper.supersede()
     playbackEngine?.client.send('play', { fromPos, fadeIn })
   })
 
-  ipcMain.handle('engine-stop', () => stopPlaybackEngineAndWait())
+  ipcMain.handle('engine-stop', () => engineStopper.stop())
 
   ipcMain.handle('engine-set-position', (_event, pos: number) => {
     playbackEngine?.client.send('set-position', { pos })
@@ -2050,6 +2076,10 @@ app.whenReady().then(async () => {
   setWarehouseSyncsInFlightListener((count) => {
     mainWindow?.webContents.send('riff-library-sync-active', count)
   })
+
+  // The import view's preview level dial (previewLevelStore.ts).
+  ipcMain.handle('get-preview-level', (): number => loadPreviewLevel())
+  ipcMain.handle('set-preview-level', (_event, level: number): void => savePreviewLevel(level))
 
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
   ipcMain.handle('set-discover-settings', (_event, settings: DiscoverSettings): void =>
@@ -2417,7 +2447,13 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('engine-set-metronome', (_event, enabled: boolean, volume: number) => {
-    playbackEngine?.client.send('set-metronome', { enabled, volume })
+    // Recorded even before the engine is up, which sends it once it is (startPlaybackEngine).
+    const client = playbackEngine?.client
+    metronomeSetting.apply(
+      client ? (type, payload) => client.send(type, payload) : undefined,
+      enabled,
+      volume
+    )
   })
 
   ipcMain.handle('engine-set-link-enabled', (_event, enabled: boolean) => {
@@ -2815,6 +2851,8 @@ app.whenReady().then(async () => {
       subscribeToCaptureLevelUpdates()
       subscribeToGatedRecordingUpdates()
       subscribeToLinkTempoChanged()
+      // Not part of the re-sent project (metronomeSetting.ts).
+      metronomeSetting.resend((type, payload) => engine.client.send(type, payload))
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('engine-restarted')
       }
@@ -2857,7 +2895,7 @@ app.on('will-quit', () => {
 // discard dirty work: the app stays open and the user can retry or explicitly
 // choose Don't Save.
 function requestSaveBeforeQuit(): Promise<SaveBeforeQuitResult> {
-  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve('failed')
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve('unreachable')
   const win = mainWindow
   const requestId = `quit-save-${++saveBeforeQuitRequestCounter}`
   return awaitSaveBeforeQuit(
@@ -2909,7 +2947,15 @@ app.on('before-quit', (event) => {
   // shutdown the window may already be tearing down, and a native
   // quit-prompt matches what every Mac user already expects from Cmd+Q. See
   // docs/superpowers/specs/2026-08-14-explicit-save-model-design.md, §5.
-  if (rendererHasUnsavedChanges) {
+  // Only a live window's: a closed one's edits live on in the recovery file
+  // alone, and this prompt's Don't Save would delete it (beforeQuitPlan).
+  const plan = beforeQuitPlan({
+    rendererDirty: rendererHasUnsavedChanges,
+    windowLive: !!mainWindow && !mainWindow.isDestroyed(),
+    recovery: recoveryFile,
+    quittingAfterSavePrompt
+  })
+  if (plan.kind === 'prompt') {
     event.preventDefault()
     const choice = dialog.showMessageBoxSync({
       type: 'warning',
@@ -2926,23 +2972,18 @@ app.on('before-quit', (event) => {
       return
     }
     if (choice === 0) {
-      // Save -- only re-issue quit after an explicit success reply. Failure
-      // or timeout leaves the dirty project open rather than converting an
+      // Save -- re-issue quit after an explicit success reply, or when there
+      // was no renderer to ask (keeping the recovery file). Failure or
+      // timeout leaves the dirty project open rather than converting an
       // inability to save into an implicit Don't Save.
       saveBeforeQuitPending = true
       void requestSaveBeforeQuit().then((result) => {
         saveBeforeQuitPending = false
-        if (result !== 'saved') {
+        const next = afterSaveBeforeQuit(result)
+        if (next.notice)
+          dialog.showMessageBoxSync({ type: 'error', buttons: ['OK'], ...next.notice })
+        if (next.action === 'stay') {
           pluginEditsCheckedForQuit = false
-          if (result === 'timeout') {
-            dialog.showMessageBoxSync({
-              type: 'error',
-              buttons: ['OK'],
-              message: 'The project is still saving.',
-              detail:
-                'sssketch stayed open so no unsaved work was discarded. Please try Save again.'
-            })
-          }
           return
         }
         rendererHasUnsavedChanges = false
@@ -2968,12 +3009,7 @@ app.on('before-quit', (event) => {
   // next launch's prompt (recoveryFileTracker.ts), even when its edits were
   // undone back to the saved state and the renderer's own clear was not due
   // yet: offering a needless recovery is the safe side.
-  if (
-    shouldClearRecoveryOnCleanQuit(recoveryFile, {
-      rendererDirty: rendererHasUnsavedChanges,
-      quittingAfterSavePrompt
-    })
-  ) {
+  if (plan.clearRecovery) {
     clearAutosave()
     noteRecoveryFile('cleared')
   }

@@ -30,7 +30,8 @@ import {
   discoveredStemPath,
   dbsHaveRiffs,
   setRiffLibraryRootFromPick,
-  returnToOwnRiffLibrary
+  returnToOwnRiffLibrary,
+  stemMetadataDurationSec
 } from './riffLibraryStore'
 import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import { upsertJam, upsertRiffSkeletons, writeRiffDetail } from './riffLibraryWriter'
@@ -877,6 +878,29 @@ describe('listRiffs', () => {
     db.close()
 
     expect(listRiffs('jam_1', {}).riffs[0].stemCount).toBe(12)
+  })
+})
+
+describe('stemMetadataDurationSec', () => {
+  let root: string
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-userdata-meta-test-'))
+  })
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  it("is how resolveRiff set a LORE stem's durationSec: its own Length16s and BPMrnd", () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setRiffLibraryRootForTests(root)
+    const stemB = resolveRiff('riff-1')!.stems.find((s) => s.stemCID === 'stem-b')!
+    expect(stemMetadataDurationSec(resolveStemPath('jam-techno', 'stem-b'))).toBe(stemB.durationSec)
+    expect(stemMetadataDurationSec('/anywhere/stem-b')).toBe(stemB.durationSec)
+    expect(stemMetadataDurationSec('/anywhere/no-such-stem')).toBeNull()
+    expect(stemMetadataDurationSec('/imports/stem-b.wav')).toBeNull() // not a LORE path
   })
 })
 

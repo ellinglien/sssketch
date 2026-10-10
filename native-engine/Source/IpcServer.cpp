@@ -393,6 +393,17 @@ namespace sssketch
         sendMessage(block);
     }
 
+    void IpcConnection::playSupersedingStops(double fromPos, bool fadeIn)
+    {
+        // Play explicitly wins over an in-flight stop fade. Resolve any
+        // silence waiters as cancelled now, rather than leaving them to
+        // time out while the transport keeps playing.
+        stopTimer(kHaltAckTimerId);
+        for (const int token : takeSupersededHaltAcks(pendingHaltAcks))
+            sendTransportStopped(token, false);
+        transport.play(fromPos, fadeIn);
+    }
+
     void IpcConnection::sendTransportStopped(int token, bool stopped)
     {
         juce::DynamicObject::Ptr payload = new juce::DynamicObject();
@@ -419,10 +430,18 @@ namespace sssketch
             // halt callback can briefly publish it while a newer ordered
             // command is still pending. Each waiter is paired to the exact
             // Stop generation the audio thread reports complete.
+            // When the device isn't rendering at all, nothing is audible and
+            // the fade can't run, so silence is acknowledged without it
+            // (HaltAck.h) rather than leaving the renderer to time out.
             const auto completed = transport.completedHaltGeneration();
+            const bool deviceRunning = transport.audioDeviceRunning();
+            const auto rendered = transport.renderedCallbacks();
+            const auto nowMs = juce::Time::getMillisecondCounter();
+            const auto stallMs = haltAckStallMs(transport.currentBlockSize(),
+                                                transport.currentSampleRate());
             for (auto it = pendingHaltAcks.begin(); it != pendingHaltAcks.end();)
             {
-                if (it->commandGeneration <= completed)
+                if (haltAckDue(*it, completed, deviceRunning, rendered, nowMs, stallMs))
                 {
                     sendTransportStopped(it->token, true);
                     it = pendingHaltAcks.erase(it);
@@ -790,16 +809,9 @@ namespace sssketch
         }
         else if (type == "play")
         {
-            // Play explicitly wins over an in-flight stop fade. Resolve any
-            // silence waiters as cancelled now, rather than leaving them to
-            // time out while the transport keeps playing.
-            stopTimer(kHaltAckTimerId);
-            for (const auto& pending : pendingHaltAcks)
-                sendTransportStopped(pending.token, false);
-            pendingHaltAcks.clear();
             const double fromPos = payload.isObject() ? (double) payload.getProperty("fromPos", 0.0) : 0.0;
             const bool fadeIn = payload.isObject() && (bool) payload.getProperty("fadeIn", false);
-            transport.play(fromPos, fadeIn);
+            playSupersedingStops(fromPos, fadeIn);
             // ~33ms (~30Hz) position-update push rate — matches the renderer's
             // existing ~60fps rAF poll closely enough for a smooth playhead
             // without flooding the socket. kLinkPollTimerId is untouched here
@@ -821,12 +833,15 @@ namespace sssketch
             {
                 const auto duplicate = std::find_if(
                     pendingHaltAcks.begin(), pendingHaltAcks.end(),
-                    [token](const PendingHaltAck& pending) { return pending.token == token; });
+                    [token](const HaltAckWait& pending) { return pending.token == token; });
                 if (duplicate == pendingHaltAcks.end())
-                    pendingHaltAcks.push_back({ token, commandGeneration });
-                // Even an already-idle transport uses the timer path so the
-                // reply is consistently asynchronous and the waiter is
-                // installed before it can arrive.
+                    pendingHaltAcks.push_back({ token, commandGeneration,
+                                                transport.renderedCallbacks(),
+                                                juce::Time::getMillisecondCounter() });
+                // Even an already-idle transport (or a stopped device) uses
+                // the timer path so the reply is consistently asynchronous
+                // and the waiter is installed before it can arrive; the first
+                // tick, 2 ms later, answers it.
                 startTimer(kHaltAckTimerId, kHaltAckPollIntervalMs);
             }
         }
@@ -1075,7 +1090,7 @@ namespace sssketch
                 // for "the take starts now." Calling this every arm (even if
                 // already playing) is intentional: it guarantees capture and
                 // the audible backing track are aligned to the same instant.
-                transport.play(startBar);
+                playSupersedingStops(startBar);
                 transport.setLoopRecorder(armedRecorder.get());
                 payloadObj->setProperty("success", true);
             }

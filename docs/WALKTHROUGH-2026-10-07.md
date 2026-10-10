@@ -299,6 +299,10 @@ Advanced features must be on (they should already be on for you, see the next se
   running). Click sssketch in the Dock. **You should see:** the offer to recover unsaved work.
   Don't answer it: press Cmd+Q, then relaunch. **You should see:** the same offer, with your edit
   in it. (Before this fix, that Cmd+Q deleted the only copy.)
+- [ ] Same again, but after Cmd+W press Cmd+Q straight away, without clicking the Dock. **You
+  should see:** no save prompt; the app just quits. Relaunch. **You should see:** the offer to
+  recover, with your edit in it. (Before this fix, the prompt's Save couldn't save from a closed
+  window and told you to choose Don't Save, which deleted that copy.)
 - [ ] With tweaked plugins loaded, run `pkill sssketch-engine` in a terminal, which forces the audio
   engine to restart. **You should see:**
   - the plugins reload with your tweaks;
@@ -359,6 +363,79 @@ Advanced features must be on (they should already be on for you, see the next se
   arm.
 - [ ] Check `fetch hearts`. **You should see:** it shows only with a hearts key set **and** the
   switch on.
+
+### The codex/phase-cache branch (merged 2026-10-09)
+
+Its features, plus the fixes made on top of them at the merge. Rebuild the engine and Cmd+Q
+first: the engine changed.
+
+- [ ] **Cross.** Select exactly two riffs in Sketch (or the Shelf). **You should see:** a `cross`
+  action beside Discover in the inspector; with one or three riffs selected, it's gone.
+  Open it. **You should see:**
+  - the two riffs as columns, and a center column with one empty `drop stem here` slot;
+  - dragging a stem (or using the inward buttons) into the center adds it, and a new empty slot
+    appears below;
+  - clicking a column's stem plays that column; the playhead and the playing column's indicator
+    move;
+  - `undo`, `redo`, `swap sides` and `clear` do what they say;
+  - the selected column's `●` is grey while nothing plays, and the column's meter is red only
+    while it sounds.
+- [ ] **Cross metronome.** In Cross, press the metronome button beside the tempo (or Tab to it and
+  press Enter), then play. **You should hear:** the click at Cross's tempo; press the tempo `+` a
+  few times and the click speeds up with the preview. Drag the button up and down. **You should
+  hear:** the click get louder and softer. Close Cross. **You should see:** the main transport's
+  metronome button in the same on/off state and volume. Play the project. **You should hear:**
+  the click at the project's tempo, not Cross's.
+- [ ] In Cross, press the tempo `+` a few times while it plays. **You should hear:** the preview
+  speed up. Close Cross. **You should see:** the project's tempo unchanged, the project not marked
+  unsaved, and nothing new to undo.
+- [ ] If you have one, re-one a riff whose stems mix LORE audio and a dragged-in WAV, so it has a downbeat offset
+  that isn't baked yet, then open Cross with it. **You should hear:** every stem in time, each
+  with its own sound (none swapped with another).
+- [ ] Build a center, press `add to shelf`, then `add to timeline`. **You should see:**
+  `✓ added to shelf` / `✓ added to timeline`, and the new riff in each place. Close Cross.
+  **You should see:** your riff selection still highlighted, and reopening Cross starts a fresh
+  draft.
+- [ ] Re-one one of the Cross child's parents. **You should see:** the parent's arranged copies
+  move with it, and the Cross child doesn't.
+- [ ] **Discover seed.** Re-one a riff without baking (leave the offset live), save, then open
+  Discover from it. **You should see:** Discover seeded with its stems, in time, and the project
+  still saved (no unsaved mark, nothing new to undo).
+- [ ] **Arrange mixer strip.** Open Arrange. **You should see:** each row's `m`, `s` and gain in a
+  narrow rail beside the inspector, lined up with the rows, and the clips no longer covered by
+  them.
+- [ ] **Mute and solo layers.** Press a row's `m`. **You should hear:** it go silent. Save, close
+  and reopen. **You should see:** it's unmuted again (the row `m` is temporary now). Export a mix
+  with a row's `m` on. **You should hear:** that row in the export.
+- [ ] Mute two rows with `m`, then solo a third with `s`. **You should see:** `s` lit blue, and
+  only the soloed row sounds. Clear the solo. **You should see:** the same two rows still muted.
+  Undo. **You should see:** mute and solo left alone (they aren't undo steps).
+- [ ] Open an older project where you muted a riser's row before this version. **You should see:**
+  that row's `m` lit and the riser silent. Press `m`. **You should hear:** the riser again, and
+  the project is marked unsaved (it changes the saved project); Cmd+Z mutes it again.
+- [ ] **Metronome volume.** Drag the metronome button up and down. **You should hear:** the click
+  get louder and softer; a plain click still turns it on and off. The default is louder than
+  before (1.5), as decided.
+- [ ] Optional: with the metronome on at a non-default volume and the transport playing, run
+  `pkill -x sssketch-engine` in a terminal. **You should hear:** after the engine restarts and you
+  press play, the click at the same volume.
+- [ ] **Import press-to-stop.** In import, click a riff to preview it, then click the same riff
+  again. **You should hear:** it stop, with the riff still selected; a third click plays it again.
+  Switch jams and come back. **You should see:** the jam you had selected.
+- [ ] **Startup and welcome ×.** At launch, press the × on the loading screen. **You should see:**
+  the app, usable as the library finishes loading.
+- [ ] Make a recovery offer: edit a project, wait 10 seconds, then force-quit (Activity Monitor →
+  the `Electron` process in dev → Force Quit). Relaunch and press the welcome's × (not recover or
+  discard). Make some new edits and wait 10 seconds, then force-quit again. Relaunch. **You should see:** a recovery offer
+  of the **new** edits, and under it "older unsaved work was kept too", whose recover older brings
+  back the **first** edits. (Before the fixes, there was no offer at all, then only the new one:
+  the first edits were overwritten.)
+- [ ] With a recovery offered, press the welcome's open (or Endlesss). Relaunch without saving.
+  **You should see:** "older unsaved work was kept", with the snapshot you moved past.
+- [ ] **Selection styling.** Select riffs in Sketch and the Shelf. **You should see:** the
+  selection centred on the circle, a low-contrast texture, and selected and playing looking
+  different: a previewing Shelf tile has a thin red edge, with no glow. The Arrange mixer strip
+  has a plain border on its left, with no shadow.
 
 ---
 
@@ -484,6 +561,14 @@ Advanced features must be on (they should already be on for you, see the next se
   work at the next launch, although it's the same as what's saved. A clean quit now deletes the
   recovery copy only when a save came after the last time it was written: an extra offer is the
   safe side.
+- **DAW exports of a project outside the library** (opened from a `.sssketchproj` file anywhere
+  else) now go into a folder of their own, named after the project, next to the file:
+  `Ableton/<name>/`, `Reaper/<name>/` and `Stems/<name>/`. Before, every project in that folder
+  shared one `Ableton/`, `Reaper/` or `Stems/`, and a stems export emptied `Stems/` first, taking
+  other projects' stems (and anything of yours in there) with it. Exports made before this version
+  stay where they were, directly in `Ableton/`, `Reaper/` or `Stems/`; nothing moves or deletes
+  them, so clear them out yourself when you no longer need them. Library projects' exports are
+  unchanged.
 - **"plugins still loaded" (top right)** appears only if you turn advanced features off and the
   plugins' settings can't be read back. It retries for about three minutes, then stops and says
   to turn advanced features back on. There's no way to force this on purpose.
@@ -510,6 +595,10 @@ Advanced features must be on (they should already be on for you, see the next se
   opens noticeably slower than dev, say so.
 - **Endlesss session expiry** can't be forced on purpose. If it happens, the login form should
   appear instead of a stuck "log in to sync".
+
+- **`.bakes` grows.** Every re-one, and every Cross or Discover opening from a riff with a live
+  offset, writes new audio into `<your library>/.bakes`, and nothing deletes it yet. It's an open
+  item in `TO-DO.md`; deleting it safely needs a check across every saved project first.
 
 ## Decisions still open
 

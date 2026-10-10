@@ -398,7 +398,7 @@ describe('radioStripModel: words', () => {
   ]
   it('labels source with its ends, in words (no arrow glyph)', () => {
     expect(control(radioStripModel(settings(), CTX), 'source')?.label).toBe(
-      'source · endlesss - other'
+      'source · instruments - recorded'
     )
   })
 

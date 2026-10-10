@@ -50,10 +50,9 @@ function hannWindow(size: number): Float64Array {
 
 /**
  * STFT-based spectrogram of a mono PCM signal, binned to a small number of
- * LOG-frequency rows suitable for a compact on-screen display — see
- * BeatPicker.tsx, where this replaces (well, supplements) a plain waveform
- * so note onsets and melodic phrasing are visible directly, not just
- * overall amplitude.
+ * LOG-frequency rows. Read by bandEnergy.ts (the glyph's banded rings and
+ * the waveform's brightness treatments); the re-one picker drew it directly
+ * until 2026-10-09, when its lanes became waveforms.
  */
 export function computeSpectrogram(
   samples: Float32Array,

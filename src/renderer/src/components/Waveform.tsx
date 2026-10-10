@@ -111,8 +111,7 @@ export const Waveform = memo(function Waveform({
       ))}
       {pitchPath && (
         <>
-          {/* Same black-halo/cyan double-stroke BeatPicker.tsx already draws
-              for its own melody contour — a fixed accent here (not the
+          {/* A black halo under a cyan stroke — a fixed accent here (not the
               stem's hue, unlike PolarGlyph's version) since only one stem's
               waveform is ever visible in this box at a time, so there's no
               ambiguity to resolve by color. */}

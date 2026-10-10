@@ -296,6 +296,21 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
     return { past, present, future: [] }
   }
 
+  // A missing re-oned copy rebuilt under a new name: a repair, not an edit, so no undo step. The
+  // new copy is the same audio under another name, so every step of the history is repointed:
+  // otherwise an undo or redo would bring back the missing path.
+  if (action.type === 'REPAIR_REONED_PATHS') {
+    const repoint = (s: AppState): AppState => reducer(s, action)
+    const present = repoint(state.present)
+    const past = state.past.map(repoint)
+    const future = state.future.map(repoint)
+    const unchanged =
+      present === state.present &&
+      past.every((s, i) => s === state.past[i]) &&
+      future.every((s, i) => s === state.future[i])
+    return unchanged ? state : { past, present, future }
+  }
+
   if (TRANSIENT_ACTION_TYPES.has(action.type)) {
     return { ...state, present: reducer(state.present, action) }
   }

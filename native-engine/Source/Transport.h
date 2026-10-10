@@ -67,6 +67,18 @@ namespace sssketch
         {
             return completedHaltCommandGeneration.load();
         }
+        /** How many device callbacks have reached the point where transport
+         * commands are applied. Read from the message thread, which only
+         * compares successive values: a count that stops moving means the
+         * device has stopped calling back (HaltAck.h). */
+        unsigned long long renderedCallbacks() const
+        {
+            return renderedCallbackCount.load(std::memory_order_relaxed);
+        }
+        /** MESSAGE THREAD. True while an audio device is open and started.
+         * False with no device at all (the unit tests' Transport) or after
+         * the device manager has closed or stopped one. */
+        bool audioDeviceRunning() const;
         /** Deterministic regression seam for the cross-thread Play-during-
          * halt-finalization race. Tests install a no-allocation function
          * pointer before driving the callback; production never sets it. */
@@ -424,6 +436,7 @@ namespace sssketch
         std::atomic<unsigned long long> completedHaltCommandGeneration { 0 };
         std::atomic<double> requestedPlayPosition { 0.0 };
         std::atomic<bool> requestedPlayFadeIn { false };
+        std::atomic<unsigned long long> renderedCallbackCount { 0 };
         std::atomic<bool> repositionRequested { false }; // set by setPosition(), consumed by the audio thread
         std::atomic<double> repositionTarget { 0.0 }; // always the latest requested position
         // All audio-thread-only (never touched off that thread) — no atomics needed.

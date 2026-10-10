@@ -14,9 +14,28 @@ import { generateDefaultProjectName, randomAdjectiveNoun } from './projectFile'
 let userDataDir: string
 let musicDir: string
 
+const dialogPick = vi.hoisted(() => ({ path: '' }))
+// A write to a path matching `pattern` puts half its data there, then fails (a crash or a full
+// disk midway). Every other write passes through.
+const tornWrite = vi.hoisted(() => ({ pattern: null as RegExp | null }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const writeFileSync: typeof actual.writeFileSync = (file, data, options) => {
+    if (tornWrite.pattern && typeof file === 'string' && tornWrite.pattern.test(file)) {
+      actual.writeFileSync(file, String(data).slice(0, Math.floor(String(data).length / 2)))
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+    }
+    actual.writeFileSync(file, data, options)
+  }
+  return { ...actual, default: { ...actual, writeFileSync }, writeFileSync }
+})
 vi.mock('electron', () => ({
   app: {
     getPath: (name: string) => (name === 'music' ? musicDir : userDataDir)
+  },
+  dialog: {
+    showOpenDialog: async () => ({ canceled: false, filePaths: [dialogPick.path] }),
+    showSaveDialog: async () => ({ canceled: false, filePath: dialogPick.path })
   }
 }))
 
@@ -180,5 +199,213 @@ describe('renameExternalSketchFile', () => {
     const result = renameExternalSketchFile(oldPath, 'taken-name')
     expect(result.ok).toBe(false)
     expect(existsSync(oldPath)).toBe(true)
+  })
+})
+
+// The crash-recovery snapshot (writeAutosave/loadAutosave/clearAutosave). A previous session's
+// snapshot that has been offered (loadAutosave) and not yet recovered or discarded is never
+// overwritten or deleted by this session: it is moved aside to one kept previous snapshot,
+// offered again at the next launch.
+describe('crash-recovery snapshot', () => {
+  beforeEach(() => {
+    // Fresh module state: whether an offered snapshot is still undecided lives in the module.
+    vi.resetModules()
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-userdata-test-'))
+    musicDir = mkdtempSync(join(tmpdir(), 'sssketch-music-test-'))
+  })
+
+  afterEach(() => {
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(musicDir, { recursive: true, force: true })
+  })
+
+  /** A snapshot a previous session left behind, with its sketch-info sidecar. */
+  function leaveSnapshotFromLastSession(json: string, sketchJson: string): void {
+    writeFileSync(join(userDataDir, 'autosave.sssketchproj'), json)
+    writeFileSync(join(userDataDir, 'autosaveSketch.json'), sketchJson)
+  }
+
+  it('the first autosave after the offer moves the old snapshot aside instead of overwriting it', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{"kind":"library","name":"old"}')
+    expect(pf.loadAutosave()).toBe('{"old":1}')
+    pf.writeAutosave('{"new":1}')
+    pf.writeAutosaveSketchInfo('{"kind":"library","name":"new"}')
+    expect(pf.loadAutosave()).toBe('{"new":1}')
+    expect(pf.loadAutosaveSketchInfo()).toBe('{"kind":"library","name":"new"}')
+    expect(pf.loadPreviousAutosave()).toEqual({
+      json: '{"old":1}',
+      sketchJson: '{"kind":"library","name":"old"}'
+    })
+  })
+
+  it('a save moves an undecided snapshot aside instead of deleting it', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{"kind":"library","name":"old"}')
+    pf.loadAutosave()
+    pf.saveProjectInPlace(join(userDataDir, 'mine.sssketchproj'), '{"mine":1}')
+    expect(pf.loadAutosave()).toBeNull()
+    expect(pf.loadPreviousAutosave()?.json).toBe('{"old":1}')
+  })
+
+  it("once moved aside, this session's own autosaves and saves leave it alone", async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{}')
+    pf.loadAutosave()
+    pf.writeAutosave('{"new":1}')
+    pf.writeAutosave('{"new":2}')
+    pf.clearAutosave()
+    pf.writeAutosave('{"new":3}')
+    pf.saveProjectInPlace(join(userDataDir, 'mine.sssketchproj'), '{"mine":1}')
+    expect(pf.loadAutosave()).toBeNull()
+    expect(pf.loadPreviousAutosave()?.json).toBe('{"old":1}')
+  })
+
+  it('recovering or discarding the offer deletes it: nothing is moved aside afterwards', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{}')
+    pf.loadAutosave()
+    pf.discardAutosave()
+    expect(pf.loadAutosave()).toBeNull()
+    pf.writeAutosave('{"new":1}')
+    pf.clearAutosave()
+    expect(pf.loadPreviousAutosave()).toBeNull()
+  })
+
+  it('keeps one previous snapshot: a second move aside replaces the first', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"first":1}', '{"s":1}')
+    pf.loadAutosave()
+    pf.writeAutosave('{"second":1}')
+    // The next launch offers the second session's file and it is left undecided again.
+    vi.resetModules()
+    const next = await import('./projectFile')
+    expect(next.loadAutosave()).toBe('{"second":1}')
+    next.writeAutosave('{"third":1}')
+    expect(next.loadPreviousAutosave()).toEqual({ json: '{"second":1}', sketchJson: null })
+    expect(
+      readdirSync(userDataDir)
+        .filter((f) => f.startsWith('autosave'))
+        .sort()
+    ).toEqual(['autosave.previous.sssketchproj', 'autosave.sssketchproj'])
+  })
+
+  it('discardPreviousAutosave deletes the kept snapshot and its sidecar, not the current one', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{"s":1}')
+    pf.loadAutosave()
+    pf.writeAutosave('{"new":1}')
+    pf.discardPreviousAutosave()
+    expect(pf.loadPreviousAutosave()).toBeNull()
+    expect(existsSync(join(userDataDir, 'autosaveSketch.previous.json'))).toBe(false)
+    expect(pf.loadAutosave()).toBe('{"new":1}')
+  })
+
+  it('an autosave that fails midway leaves the last one whole, for a recover or a scan to read', async () => {
+    const pf = await import('./projectFile')
+    pf.writeAutosave('{"whole":1}')
+    tornWrite.pattern = /autosave\.sssketchproj/
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      pf.writeAutosave(`{"next":"${'x'.repeat(100)}"}`)
+    } finally {
+      tornWrite.pattern = null
+      log.mockRestore()
+    }
+    expect(readFileSync(join(userDataDir, 'autosave.sssketchproj'), 'utf-8')).toBe('{"whole":1}')
+    expect(readdirSync(userDataDir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+
+  // "save a copy to a file…" leaves you in the open project, unsaved as it was: its recovery
+  // file is still the only copy of that project's unsaved work, so the copy must not touch it.
+  it("saving a copy to a file leaves the open project's autosave and sidecar in place", async () => {
+    const pf = await import('./projectFile')
+    pf.writeAutosave('{"unsaved":1}')
+    pf.writeAutosaveSketchInfo('{"kind":"library","name":"mine"}')
+    dialogPick.path = join(userDataDir, 'copy.sssketchproj')
+    expect(await pf.saveProjectAs({} as never, '{"unsaved":1}')).toBe(dialogPick.path)
+    expect(readFileSync(join(userDataDir, 'autosave.sssketchproj'), 'utf-8')).toBe('{"unsaved":1}')
+    expect(readFileSync(join(userDataDir, 'autosaveSketch.json'), 'utf-8')).toBe(
+      '{"kind":"library","name":"mine"}'
+    )
+  })
+
+  it('saving a copy to a file leaves an undecided snapshot undecided, not moved aside', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{"kind":"library","name":"old"}')
+    pf.loadAutosave()
+    dialogPick.path = join(userDataDir, 'copy.sssketchproj')
+    await pf.saveProjectAs({} as never, '{"mine":1}')
+    expect(pf.loadPreviousAutosave()).toBeNull()
+    expect(readFileSync(join(userDataDir, 'autosave.sssketchproj'), 'utf-8')).toBe('{"old":1}')
+    // Still undecided: this session's first autosave moves it aside, as without the copy.
+    pf.writeAutosave('{"new":1}')
+    expect(pf.loadPreviousAutosave()?.json).toBe('{"old":1}')
+  })
+
+  it('a snapshot this session wrote itself, never offered, is replaced and deleted as before', async () => {
+    const pf = await import('./projectFile')
+    pf.writeAutosave('{"a":1}')
+    pf.writeAutosave('{"a":2}')
+    expect(pf.loadPreviousAutosave()).toBeNull()
+    pf.clearAutosave()
+    expect(pf.loadAutosave()).toBeNull()
+    expect(pf.loadPreviousAutosave()).toBeNull()
+  })
+})
+
+// The re-oned copies cleanup keeps the copies a project outside the library names, even once
+// that project's drive is unplugged (reonedCopiesStore.ts). Library projects are scanned anyway.
+describe('remembering projects outside the library', () => {
+  const paths = (read: { ok: boolean; projects?: { path: string }[] }): string[] =>
+    read.ok ? (read.projects ?? []).map((p) => p.path) : []
+  const COPY = '0123456789abcdef0123456789abcdef.baked.wav'
+  const json = `{"rifffs":{"g":{"stems":[{"path":"/lib/.bakes/${COPY}"}]}}}`
+  let outside: string
+
+  beforeEach(() => {
+    vi.resetModules()
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-userdata-test-'))
+    musicDir = mkdtempSync(join(tmpdir(), 'sssketch-music-test-'))
+    outside = mkdtempSync(join(tmpdir(), 'sssketch-outside-test-'))
+  })
+
+  afterEach(() => {
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(musicDir, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it('a save in place outside the library, then a rename, are remembered with their copies', async () => {
+    const pf = await import('./projectFile')
+    const { knownProjects } = await import('./reonedCopiesStore')
+    const path = join(outside, 'mine.sssketchproj')
+    pf.saveProjectInPlace(path, json)
+    expect(knownProjects()).toEqual({
+      ok: true,
+      projects: [{ path, names: [COPY], at: expect.any(Number) }]
+    })
+    const renamed = pf.renameExternalSketchFile(path, 'yours')
+    expect(renamed.ok).toBe(true)
+    expect(paths(knownProjects())).toEqual([join(outside, 'yours.sssketchproj')])
+  })
+
+  it('save as and open through the dialog are remembered', async () => {
+    const pf = await import('./projectFile')
+    const { knownProjects } = await import('./reonedCopiesStore')
+    dialogPick.path = join(outside, 'saved-as.sssketchproj')
+    await pf.saveProjectAs({} as never, json)
+    const opened = join(outside, 'opened.sssketchproj')
+    writeFileSync(opened, json)
+    dialogPick.path = opened
+    await pf.openProject({} as never)
+    expect(paths(knownProjects())).toEqual([opened, join(outside, 'saved-as.sssketchproj')])
+  })
+
+  it('a library save is not remembered', async () => {
+    const pf = await import('./projectFile')
+    const { knownProjects } = await import('./reonedCopiesStore')
+    pf.saveProjectToLibrary('my-sketch', json)
+    expect(knownProjects()).toEqual({ ok: true, projects: [] })
   })
 })

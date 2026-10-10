@@ -81,6 +81,7 @@ export default defineConfig({
           'src/main/stemEmbeddingCacheStore.test.ts',
           'src/main/stemFeatureCacheStore.test.ts',
           'src/main/stemGlyphCacheStore.test.ts',
+          'src/main/stemJams.test.ts',
           'src/main/stemPeaksCacheStore.test.ts',
           'src/main/startupBackfillGate.test.ts',
           'src/main/stemsTableWalk.test.ts',

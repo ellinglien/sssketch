@@ -43,15 +43,41 @@ export const RepeatedWaveform = memo(function RepeatedWaveform({
   }, [path, url])
 
   if (!url) return null
+  return (
+    <WaveformMaskTiles
+      url={url}
+      color={color}
+      tileWidthPct={tileWidthPct}
+      maskPositionPct={maskPositionPct}
+    />
+  )
+})
 
+/** The painting half of RepeatedWaveform: a mask URL (waveformMaskSvg.ts)
+ * repeated every `tileWidthPct` percent, in `color`. Separate so a view
+ * that builds its own mask -- the re-one picker's finer one
+ * (detailPeakCache.ts) -- draws a stem exactly as Discover does. */
+export function WaveformMaskTiles({
+  url,
+  color,
+  tileWidthPct,
+  maskPositionPct = 0
+}: {
+  url: string
+  color: string
+  tileWidthPct: number
+  /** Shifts the tiling left by this percent of the host (a source offset). */
+  maskPositionPct?: number
+}): React.JSX.Element {
   const mask = `url("${url}")`
   // CSS percentage mask-position is relative to the difference between the
   // container and image widths, so it cannot express a musical source
   // offset. Move and widen the masked element itself instead: both lengths
   // are percentages of the host, and the adjusted mask size preserves the
   // requested tile width in host pixels.
+  // With no offset the element is just the host, as it always was.
   const offset = Math.min(0, maskPositionPct)
-  const widthPct = 100 - offset + tileWidthPct
+  const widthPct = offset === 0 ? 100 : 100 - offset + tileWidthPct
   const size = `${(tileWidthPct / widthPct) * 100}% 100%`
   return (
     <div
@@ -73,4 +99,4 @@ export const RepeatedWaveform = memo(function RepeatedWaveform({
       }}
     />
   )
-})
+}

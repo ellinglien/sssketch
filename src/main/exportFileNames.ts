@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 
 function sanitizeFileNamePart(name: string): string {
@@ -32,7 +33,7 @@ export function createStemExportFileNameAllocator(): StemExportFileNameAllocator
   return allocate
 }
 
-export type ExternalDawFolder = 'Ableton' | 'Reaper'
+export type ExternalDawFolder = 'Ableton' | 'Reaper' | 'Stems'
 
 /** Gives each external sketch its own DAW export directory. The directory
  * may have existed before sssketch, so callers must not recursively clear it
@@ -41,9 +42,32 @@ export function externalDawExportLocation(
   sourcePath: string,
   dawFolder: ExternalDawFolder
 ): { projectName: string; outputDir: string } {
-  const projectName = basename(sourcePath, '.sssketchproj')
+  const projectName = basename(sourcePath).replace(/\.sssketchproj$/i, '')
   return {
     projectName,
     outputDir: join(dirname(sourcePath), dawFolder, projectName)
   }
+}
+
+/** Written into an external sketch's stems folder when sssketch creates it
+ * (or finds it empty): the proof of ownership that lets a later stems export
+ * clear it. */
+export const STEMS_FOLDER_MARKER = '.sssketch-stems'
+
+/** The folder a stems export of an external sketch writes into,
+ * `<source directory>/Stems/<project name>/`, ready to write. It replaces the
+ * previous export (stale files from a removed bus or the other stems variant)
+ * only when sssketch's own marker shows it made the folder: a sibling sketch's
+ * stems, files the user keeps in `Stems/`, and a same-named folder that held
+ * files before sssketch first wrote there are all left alone. */
+export function prepareExternalStemsDir(sourcePath: string): {
+  projectName: string
+  outputDir: string
+} {
+  const location = externalDawExportLocation(sourcePath, 'Stems')
+  const marker = join(location.outputDir, STEMS_FOLDER_MARKER)
+  if (existsSync(marker)) rmSync(location.outputDir, { recursive: true, force: true })
+  mkdirSync(location.outputDir, { recursive: true })
+  if (readdirSync(location.outputDir).length === 0) writeFileSync(marker, '')
+  return location
 }

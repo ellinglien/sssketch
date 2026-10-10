@@ -12,6 +12,9 @@ export interface ContextMenuItem {
   /** Tooltip shown on hover -- the established way this app explains a
    * disabled control (see AudioDeviceModal.tsx, ChannelRow.tsx). */
   title?: string
+  /** One short line under the label saying what the item does, for an item
+   * whose name alone is ambiguous (the save menu's two copy items). */
+  hint?: string
 }
 
 export function ContextMenu({
@@ -138,6 +141,13 @@ export function ContextMenu({
           }}
         >
           {item.label}
+          {item.hint && (
+            <span
+              style={{ display: 'block', marginTop: 2, fontSize: 9, color: 'var(--ra-text-3)' }}
+            >
+              {item.hint}
+            </span>
+          )}
         </button>
       ))}
     </div>

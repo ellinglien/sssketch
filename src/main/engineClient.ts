@@ -37,7 +37,7 @@ export class EngineClient {
   private recvBuf = Buffer.alloc(0)
   private pendingWaiters: {
     type: string
-    matches?: (payload: unknown) => boolean
+    accept?: (payload: unknown) => boolean
     resolve: (payload: unknown) => void
     reject: (err: Error) => void
   }[] = []
@@ -126,7 +126,7 @@ export class EngineClient {
     }
 
     const waiterIdx = this.pendingWaiters.findIndex(
-      (w) => w.type === msg.type && (w.matches === undefined || w.matches(msg.payload))
+      (w) => w.type === msg.type && (w.accept === undefined || w.accept(msg.payload))
     )
     if (waiterIdx === -1) return // not something anyone's waiting for (e.g. a stray position-update)
     const [waiter] = this.pendingWaiters.splice(waiterIdx, 1)
@@ -167,21 +167,28 @@ export class EngineClient {
    * (render-export -> render-export-result). Does not attempt to correlate
    * multiple concurrent requests of the same type; this client is used for
    * one export at a time, matching engineProcess.ts's one-process-per-export
-   * design. */
+   * design.
+   *
+   * `accept` narrows the match for a reply that carries its own correlation
+   * (engine-stop's token): a reply of the right type that it rejects is left
+   * for whichever waiter it belongs to, rather than consumed here. */
   sendAndAwaitType(
     type: string,
     payload: unknown,
     responseType: string,
     timeoutMs = 30000,
-    matches?: (payload: unknown) => boolean
+    accept?: (payload: unknown) => boolean
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
+      // The list holds this wrapper, not the promise's own resolve, so the
+      // timeout has to remove the wrapper by identity. Leaving a dead waiter
+      // in place would let it swallow the next reply of its type.
       const waiter = {
         type: responseType,
-        matches,
-        resolve: (responsePayload: unknown): void => {
+        accept,
+        resolve: (payload: unknown): void => {
           clearTimeout(timer)
-          resolve(responsePayload)
+          resolve(payload)
         },
         reject: (err: Error): void => {
           clearTimeout(timer)
@@ -189,16 +196,15 @@ export class EngineClient {
         }
       }
       const timer = setTimeout(() => {
-        this.pendingWaiters = this.pendingWaiters.filter((candidate) => candidate !== waiter)
+        this.pendingWaiters = this.pendingWaiters.filter((w) => w !== waiter)
         reject(new Error(`timed out waiting for "${responseType}" after ${timeoutMs}ms`))
       }, timeoutMs)
       this.pendingWaiters.push(waiter)
       try {
         this.send(type, payload)
-      } catch (error) {
-        clearTimeout(timer)
-        this.pendingWaiters = this.pendingWaiters.filter((candidate) => candidate !== waiter)
-        reject(error)
+      } catch (err) {
+        this.pendingWaiters = this.pendingWaiters.filter((w) => w !== waiter)
+        waiter.reject(err instanceof Error ? err : new Error(String(err)))
       }
     })
   }

@@ -7,6 +7,7 @@ import { buildRppProject } from './reaper/buildRppProject'
 import { materializeStemsForExport } from './exportAudioMaterialization'
 import { renderToolkitAudio } from './exportToolkitAudio'
 import { sketchReaperDir } from './projectLibrary'
+import { ensureReonedCopiesForState } from './reonedRebuild'
 import type { ToolkitExportMode } from '@shared/toolkit'
 import { createStemExportFileNameAllocator, externalDawExportLocation } from './exportFileNames'
 
@@ -30,6 +31,9 @@ export async function buildAndWriteRppProject(
    * buildAndWriteAlsProject's own note; this path mirrors it exactly. */
   toolkitMode: ToolkitExportMode = 'bake'
 ): Promise<void> {
+  // Rebuild any re-oned copy this project names that has gone missing (cleaned up, or never
+  // made on this machine), so the export renders the riff as it plays.
+  state = await ensureReonedCopiesForState(state)
   // Before materializing, same as the Ableton path: a baked clip gets no dry
   // copy.
   const uniqueFileName = createStemExportFileNameAllocator()

@@ -67,7 +67,7 @@ import {
 import { DEFAULT_DISCOVER_CHAOS, pickReroll, rankCandidates } from '@shared/discoverRanking'
 import { DEFAULT_SOURCE_LEAN, drawSoundSource } from '@shared/discoverSlotModifier'
 import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
-import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
+import { useAppSelector, usePlaying, usePos } from '../state/StoreContext'
 import { useCrossPreview, type CrossPreviewMember } from '../state/useCrossPreview'
 import { RepeatedWaveform } from './RepeatedWaveform'
 import { typeColorVar } from '../theme/typeColor'
@@ -2880,9 +2880,6 @@ export function ShapePanel({
 }): React.JSX.Element {
   const rifffs = useAppSelector((state) => state.rifffs)
   const volumes = useAppSelector((state) => state.vol)
-  const metronomeEnabled = useAppSelector((state) => state.metronomeEnabled)
-  const metronomeVolume = useAppSelector((state) => state.metronomeVolume)
-  const dispatch = useDispatch()
   const playing = usePlaying()
   const pos = usePos()
   const { preview, stop, owns } = useCrossPreview('shape-preview')
@@ -4103,12 +4100,7 @@ export function ShapePanel({
           style={{ width: 1, height: 20, margin: '0 5px', background: 'var(--ra-border)' }}
         />
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MetronomeButton
-            enabled={metronomeEnabled}
-            volume={metronomeVolume}
-            onToggle={() => dispatch({ type: 'TOGGLE_METRONOME' })}
-            onVolumeChange={(volume) => dispatch({ type: 'SET_METRONOME_VOLUME', volume })}
-          />
+          <MetronomeButton />
           <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--ra-text-4)' }}>snap</span>
           <button
             ref={snapButtonRef}

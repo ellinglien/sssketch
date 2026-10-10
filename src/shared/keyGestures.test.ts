@@ -23,8 +23,8 @@ describe('the keys and gestures list', () => {
     // A tripwire, not a spec: if you add or remove a gesture, update these
     // two numbers deliberately. A DROP here means a gesture stopped being
     // documented anywhere in the app at all.
-    expect(groups).toHaveLength(7)
-    expect(rows).toHaveLength(65)
+    expect(groups).toHaveLength(8)
+    expect(rows).toHaveLength(71)
     for (const group of groups) expect(group.gestures.length).toBeGreaterThan(0)
   })
 

@@ -125,6 +125,196 @@ doesn't permanently poison it) rather than decoding inline in a component. `peak
 specifically computes peaks AND zero-crossing brightness from the *same* decode — don't split
 that back into two decodes for two cheap derived values.
 
+### One running app (single-instance lock)
+
+`src/main/singleInstance.ts`'s `claimSingleInstance()` runs at module load in `index.ts`, before
+`app.whenReady()`. Two copies of the app meant two playback engines playing the same project a few
+ms apart (comb filtering that sounds like underruns). A second launch calls `app.exit(0)` (not
+`quit()`: it must never reach `whenReady`, open the databases or spawn an engine), and the first
+instance's `second-instance` handler brings its window forward. The `whenReady` handler also
+returns early when `isPrimaryInstance` is false. Keep that check first if you restructure startup.
+
+### Stopping the engine: the `transport-stopped` handshake
+
+Stop is confirmed, not fire-and-forget, because a Web Audio preview (Shelf tile, import riff,
+loop folder, backup) must not start until the arrangement is actually silent. The renderer's
+`engine-stop` IPC goes through `src/main/engineStop.ts` (one shared, token-correlated request for
+concurrent callers): main sends `stop { token }`, and the engine answers
+`transport-stopped { token, stopped }` once the audio callback has finished its 15 ms halt fade.
+`stopped: false` means a newer Play (or arming a recording) superseded it
+(`playSupersedingStops` in `IpcServer.cpp`). When the audio device isn't rendering at all, the
+engine answers at once instead of waiting for a fade that can't run (`native-engine/Source/
+HaltAck.h`). `EngineClient` removes a waiter that times out, so it can't take a later reply.
+Renderer callers use `pauseArrangementBeforeShelfPreview()` (`audio/shelfPreviewHandoff.ts`),
+which resolves `true`/`false` and never rejects: on `false`, don't start the preview, but don't
+skip unrelated work either (an import riff's stems still download).
+
+### Disable, Mute and Solo: three layers
+
+- **Disable** is `state.mute` (stem keys): saved with the project, in exports, undoable
+  (`TOGGLE_MUTE`, `SET_GROUP_MUTE`).
+- **Mute** is `state.mixerMute` (stem and riser keys): what a row's `m` writes
+  (`SET_CHANNEL_MUTE`). Temporary: not saved (`serializeProject` drops it), not in exports, not
+  an undo step (`history.ts` lists it as transient and pins it across undo/redo).
+- **Solo** is `state.mixerSolo` (the exact keys allowed through, or `null`): temporary like Mute,
+  and separate from both, so clearing Solo restores the exact Mute state underneath. It's drawn
+  blue (`--ra-solo-on`), the one chrome colour Elling accepted outside audio information.
+
+Only the engine snapshot sees Mute and Solo: `stateWithMixerMute()` (`state/mixerMute.ts`)
+overlays them in `StoreContext`'s engine sync. Disable always wins. A riser's own saved `muted`
+is legacy from the old row `m`: nothing sets it now, `risersForRowMute()` lights the row's `m` for
+it, and unmuting the row clears it (`rowMuteToggleActions()` in `selectors.ts`).
+
+### Phase lineage and the `.bakes` folder
+
+A re-one (downbeat correction) is baked into new audio files, never into the source:
+`src/main/bakeOffset.ts` renders a whole riff's stems as one all-or-nothing batch into
+`<library root>/.bakes/<recipe>.baked.wav` (`bakeAssetsDir()` in `projectLibrary.ts`). A published
+copy is never rewritten; a different rotation is a different file. Results don't come back in job order (WAVs render before
+LORE stems), so always match them to stems by `path`. Each stem records where its audio came from
+(`phaseSourcePath`) and how far it has been rotated (`phaseBars`). Each riff can carry a
+`phaseLinkId`: a re-one moves exactly the riffs sharing it (`bakeTargetGroupIds()` in
+`src/shared/bakePropagation.ts`). Auto-arrange's window copies keep their source's id, so they
+follow it; a pasted riff or stem, an ungrouped stem and a Cross child get their own id and stay
+independent, even when they point at the same file. Riffs saved before the field fall back to the
+old path-based rule.
+
+Auditioning never adopts a bake: Cross (`components/crossFromSketch.ts`) and a Discover seed
+render a riff's live offset to `.bakes` and use those files without dispatching `APPLY_BAKE`, so
+the project isn't edited or marked unsaved.
+
+Two more places bake to a riff's rotation (`bakeToPhaseJob` in `reonedRotation.ts`, recipe-named
+like every copy):
+- **Late stems.** Importing a riff again merges stems that finished downloading since. When the
+  riff was re-oned in between, they are baked to its rotation first (`rotateJoiningStems`,
+  `audio/importResolvedRiff.ts`), all or nothing; if that fails they aren't added, and
+  `ReoneNotice.tsx` says so. It also names the riffs of a batch import whose re-one failed.
+- **Discover candidates from the seed's jam.** Seeding Discover from a project riff looks up each
+  seed original's jam (`riff-library-stem-jams`, `src/main/stemJams.ts`) and keeps the rotation
+  per jam (`discoverSeedPhase`, `src/shared/discoverSeedPhase.ts`; App's `discoverSeedPhase`
+  state). A candidate from that jam, or one of the seed's own stems, resolves to a copy at the
+  seed's rotation (`resolveCandidateStem(candidate, seedPhase)`), rendered, never adopted. Every
+  Discover caller passes the phase, so rows, radio's warm-up and add share one cache entry.
+  Candidates from other jams keep their own phase. The rules:
+  - "Jam" is the riff index's on both sides (the jam of the riff a stem is mapped to,
+    `findRiffForStemPath`), which is what every candidate's `jamCID` carries. Never
+    `Stems.OwnerJamCID`: that is whichever jam first wrote the stem's row.
+  - Only real jams carry a rotation (`isClockJam`). The discovered room and the Shared Feed's
+    `shared:` jams collect stems of many jams with no clock between them.
+  - The phase holds only while a seed row is in Discover (`activeSeedPhase`); it isn't reset by a
+    project open, because Discover's rows (the seed's among them) stay through one.
+  - Alignments are gathered into shared bakes (`createBakeBatcher`, `src/shared/bakeBatcher.ts`):
+    each `bakeOffset` call with a LORE stem spawns an engine (about 0.4 s), so 8 rows rolled at
+    once are one or two calls, not eight. A failed batch is baked again one job at a time. A
+    failed alignment leaves its row unresolved and shows "couldn't line up a stem from <jam> ·
+    skipped" (throttled to once a minute per jam).
+  - An aligned candidate kept with Keep is a `.bakes` file with no Stems row, so the discovered
+    room gives it a new `discovered-<uuid>` StemCID and copies the rotated audio. Its analysis,
+    categories and favourite (all keyed by StemCID) don't carry over from the original.
+- **A riff's rotation** (`sharedPhaseBars`) is the rotation most stems sound at, compared within
+  each stem's own loop: a stem the rotation wraps to nothing for (a 1-bar stem in a riff re-oned
+  by whole bars) joins as it is, with no copy and no lineage, and still counts as agreeing.
+
+`.bakes` is a rebuildable cache. A copy is named by its recipe (`src/main/reonedRecipe.ts`: the
+original's path, size and mtime, the rotation in samples, `BAKER_VERSION`), and a re-one bakes
+from the stem's original (`phaseSourcePath`) by the total rotation (`phaseBars`), falling back to
+the current file only while the original is away. So the same riff at the same phase, whether
+re-oned, crossed or seeded into Discover, reuses one file. A saved lineage counts only while the
+stem's file is a `.baked.wav` copy (`phaseLineage()` in `src/shared/reonedRotation.ts`); a stretched
+one-shot drops it. A riff's first re-one gives it a `phaseLinkId`, so two riffs that merely reuse
+one copy never move together. A copy a project names but that is missing is rebuilt from that
+lineage when the project opens (`state/reonedRepairOnOpen.ts`) and before any export
+(`ensureReonedCopiesForState`, `reonedRebuild.ts`, placed riffs only). It lands on the same name,
+so the project isn't marked unsaved. One that can't be rebuilt shows "re-oned copy missing ·
+rebuilds when its original is back" (`ReonedCopyMissingNotice.tsx`, the Inspector) and is retried
+every 15 s while its original is unreachable. Each round first drops entries no stem in the open
+project names any more (`reconcileReonedMissing`, also run when an open fails after its repair),
+so the timer stops once nothing is left to retry. A copy rebuilt under a new name is repointed by
+`REPAIR_REONED_PATHS` in the present and every undo and redo step (`history.ts`): it is the same
+audio, and no undo step is added. Unused copies are cleaned by the launch notice
+(`ReonedCopiesNotice.tsx`, from 200 MB, "not now" for 7 days) and the gear menu's "clean up
+re-oned stem copies…". Their IPC (rebuild, library check, survey, clean, not now) is in
+`src/main/reonedCopiesIpc.ts`, registered from `index.ts`.
+
+"Used" means named by:
+- the autosave or its aside snapshot, read first (a recover deletes the autosave; it is written to
+  a temporary and renamed over, so it is never read half-written);
+- any project file under the library root: the scan walks the whole tree (`reonedUsage.ts`), every
+  `.sssketchproj` at any depth, dot-named and symlinked folders included (each real folder once),
+  and every file in any `.backups` folder. It skips only `.bakes`, `.samples-cache` and macOS's
+  volume folders (`.Trashes`, `.Spotlight-V100`, ...), and stops at a folder it can't list or a
+  symlink whose target is away. `isInsideLibrary` (`projectFile.ts`) uses the walk's own rule
+  (`isReadByLibraryWalk`), so a project the walk doesn't read is remembered instead;
+- a remembered outside project (`reonedCopiesStore.ts`, 50 kept). A store that can't be read is
+  never written over; a corrupt one is moved aside to `reonedCopies.corrupt-<time>.json`, and the
+  survey and the clean stop until that file is deleted;
+- the open project, its undo history, Cross, Discover and Discover's undo and redo
+  (`state/reonedInUse.ts`);
+- this session (`reonedCopiesSession.ts`, read again inside the `.bakes` lock at delete time):
+  copies handed out, and copies named by any project text main handed to the renderer or wrote
+  (open, library open, backup read or restore, autosave offer, save, autosave). That covers a
+  project opened, recovered or saved while a clean's scan runs.
+
+The survey and the clean read the library root once, for the scan and the delete alike.
+
+A copy is deleted only if it is unused and more than a day old (`reonedUsage.ts`). Rules:
+- Bump `BAKER_VERSION` whenever the baker's bytes change (rotation, seam blend, `BakeStem.cpp`).
+  `bakeOffset.test.ts`'s golden hashes fail with "baker output changed: bump BAKER_VERSION".
+- Anything new that can hold a stem path, such as a new session type or a new saved file, must
+  join the used set.
+- A failed bake never deletes a copy it didn't create.
+- Never delete outside `.bakes`, and leave the legacy `.sssketch-bakes/` folders alone.
+- `bakeOffset` and the scans are async and yield between stems and slices: the library is often
+  on a USB drive.
+
+Known limit: the scan finds a copy name only as plain text. A name inside a plugin's base64
+state (or any other encoded blob in a project) isn't seen, so a plugin that stored a `.bakes` path
+in its own state doesn't keep that copy. No shipped feature puts one there.
+
+Costs, known and accepted:
+- **The `.bakes` lock is held for the whole delete phase** (`cleanBakes`: the re-survey and every
+  unlink). The scan runs outside it, but while the delete runs, every bake waits: a re-one, a
+  Cross or Discover-seed audition, an export's rebuild and the missing-copy retry.
+- **A rebuild spawns one engine per riff** (`rebuildReonedCopies` runs riffs one at a time, and
+  each riff with Ogg/LORE stems to render gets its own engine process via `bakeNativeJobs`). A
+  project with many missing LORE copies opens slowly; WAV stems are rotated in-process.
+- **The missing-copy retry has no cap.** It runs every 15 s for as long as a copy is unreachable,
+  but each round only sends the riffs that name a retryable copy, and main fails fast with an
+  `access` check while the original or library is away, so a round costs a few file checks.
+
+### Cross
+
+Cross combines two selected riffs into a new one. Open it from exactly two riffs selected in
+Sketch or the Shelf (`openCrossFromRiffs` in `App.tsx`); it's a full-window workspace like
+Discover. The draft model is pure, in `src/shared/cross.ts`: the two parents, the center rows,
+gains, mute/solo, undo/redo, and `assembleCrossRifff()`, which builds the committed riff (with
+`phaseLinkId` set to its own id). `components/CrossPanel.tsx` is the UI. `state/useCrossPreview.ts`
+plays a throwaway engine project under an engine-ownership token and restores the real project on
+stop, Back or unmount. The draft is session-only and disposable (closing discards it), and nothing
+in Cross touches the project until "add to shelf" / "add to timeline". That includes its tempo
+control, which changes only `draft.targetBpm`.
+
+### Metronome
+
+On/off and volume (`metronomeVolume`, drag the metronome button up/down) are app state, not saved
+with the project. Main keeps the last `set-metronome` it sent (`src/main/metronomeSetting.ts`) and
+re-sends it to a respawned engine, which otherwise starts at its own defaults. The button is one
+component, `components/MetronomeButton.tsx`, used by the main transport and by Cross. The click has
+no tempo of its own: the engine clicks at the loaded project's bpm, so during a Cross preview it
+follows `draft.targetBpm` and after it the project's tempo (`PlaybackEngineTests`).
+
+### Previews, Cmd+Z and the mixer rail (renderer conventions)
+
+- **Web Audio previews** connect to `previewOutput(ctx)` (`audio/previewOutput.ts`), never to
+  `ctx.destination`: that's the import view's "preview level" dial (saved in `previewLevel.json`,
+  `src/main/previewLevelStore.ts`). A new preview that skips it ignores the dial.
+- **Cmd+Z** goes to the project's history unless an overlay with its own undo has claimed it with
+  `useClaimUndo` (`state/undoRouting.ts`; Discover/radio and Cross do). A new overlay with an undo
+  should claim it too, or Cmd+Z silently undoes arrangement edits hidden under it.
+- **Arrange's row controls** (m/s/fx, gain) hang off `MixerRailAnchor`: a zero-width sticky box at
+  the row's end. A full-width sticky box can't move inside a timeline-wide row, which is how they
+  once ended up at the timeline's far end.
+
 ## Why the engine is a GUI app, and why its plugin editor windows are `setAlwaysOnTop`
 
 The engine started as a `juce_add_console_app` and was converted to `juce_add_gui_app`

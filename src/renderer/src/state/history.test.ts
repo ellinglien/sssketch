@@ -677,4 +677,70 @@ describe('the arrangement map', () => {
     expect(history.present.mode).toBe('map')
     expect(history.present.automationLanes).toBe(true)
   })
+
+  it('a re-oned copy repair is not an undo step (REPAIR_REONED_PATHS is transient)', () => {
+    const onCopy: Rifff = {
+      ...rifff,
+      stems: [{ ...rifff.stems[0], path: '/b/0123456789abcdef0123456789abcdef.baked.wav' }]
+    }
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff: onCopy })
+    const before = h.past.length
+    h = historyReducer(h, {
+      type: 'REPAIR_REONED_PATHS',
+      results: [
+        {
+          path: '/b/0123456789abcdef0123456789abcdef.baked.wav',
+          bakedPath: '/b/ffffffffffffffffffffffffffffffff.baked.wav',
+          durationSec: 1
+        }
+      ]
+    })
+    expect(h.present.rifffs.r1.stems[0].path).toBe('/b/ffffffffffffffffffffffffffffffff.baked.wav')
+    expect(h.past).toHaveLength(before)
+  })
+})
+
+// Review finding M3: a repair is a pure alias for the same audio, so it applies to the whole
+// history; otherwise an undo or redo brings back the path that is missing.
+describe('REPAIR_REONED_PATHS', () => {
+  const COPY = '/lib/.bakes/0123456789abcdef0123456789abcdef.baked.wav'
+  const NEW = '/lib/.bakes/ffffffffffffffffffffffffffffffff.baked.wav'
+  const onCopy: Rifff = {
+    ...rifff,
+    stems: [{ ...rifff.stems[0], path: COPY, phaseSourcePath: '/x/1.wav', phaseBars: 1 }]
+  }
+  const repair = {
+    type: 'REPAIR_REONED_PATHS' as const,
+    results: [{ path: COPY, bakedPath: NEW, durationSec: 1 }]
+  }
+
+  it('repoints past, present and future, and adds no undo step', () => {
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff: onCopy })
+    h = historyReducer(h, { type: 'RENAME_RIFFF', groupId: 'r1', name: 'one' })
+    h = historyReducer(h, { type: 'RENAME_RIFFF', groupId: 'r1', name: 'two' })
+    h = historyReducer(h, { type: 'UNDO' })
+    const steps = h.past.length
+    h = historyReducer(h, repair)
+    expect(h.past).toHaveLength(steps)
+    expect(h.present.rifffs.r1.stems[0].path).toBe(NEW)
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(h.present.rifffs.r1.stems[0].path).toBe(NEW)
+    h = historyReducer(h, { type: 'REDO' })
+    h = historyReducer(h, { type: 'REDO' })
+    expect(h.present.rifffs.r1.name).toBe('two')
+    expect(h.present.rifffs.r1.stems[0].path).toBe(NEW)
+  })
+
+  it('keeps the very same history when nothing names the path', () => {
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    expect(
+      historyReducer(h, {
+        type: 'REPAIR_REONED_PATHS',
+        results: [{ path: '/elsewhere.baked.wav', bakedPath: NEW, durationSec: 1 }]
+      })
+    ).toBe(h)
+  })
 })

@@ -29,6 +29,7 @@ export function Shelf({
   onImported,
   onOpenLibrary,
   onSeedDiscover,
+  sketchSoundingId,
   selectedRiffIds,
   selectionAnchorId,
   onSelectionChange,
@@ -58,6 +59,10 @@ export function Shelf({
    * live drag onto Discover isn't possible (Discover's own full-screen
    * modal covers Shelf entirely), so this is triggered explicitly instead. */
   onSeedDiscover: (rifff: Rifff) => void
+  /** The riff Sketch is playing right now, or null (sketchSoundingGroupId).
+   * Its tile gets the same playhead-coloured edge as a previewing tile:
+   * it's the one you're hearing. */
+  sketchSoundingId: string | null
   /** Shared with Sketch so both surfaces render one persistent working set. */
   selectedRiffIds: ReadonlySet<string>
   selectionAnchorId: string | null
@@ -204,22 +209,19 @@ export function Shelf({
     const previewToken = registerActivePreview(stopTilePreview)
     previewTokenRef.current = previewToken
     void (async () => {
-      try {
-        await pauseArrangementBeforeShelfPreview({
-          playing,
-          pauseArrangement: () => dispatch({ type: 'PAUSE' }),
-          stopEngine: () => window.rifffApi.engineStop()
-        })
-      } catch (err) {
-        // Do not start Web Audio when native silence could not be confirmed;
-        // that would recreate the exact two-playback overlap this handoff
-        // exists to prevent.
-        if (!isActivePreview(previewToken)) return
-        console.error('Shelf: failed to stop arrangement before preview:', err)
+      const stopped = await pauseArrangementBeforeShelfPreview({
+        playing,
+        pauseArrangement: () => dispatch({ type: 'PAUSE' }),
+        stopEngine: () => window.rifffApi.engineStop()
+      })
+      if (previewGenerationRef.current !== generation || !isActivePreview(previewToken)) return
+      // Do not start Web Audio when native silence could not be confirmed;
+      // that would recreate the exact two-playback overlap this handoff
+      // exists to prevent.
+      if (!stopped) {
         stopTilePreview()
         return
       }
-      if (previewGenerationRef.current !== generation || !isActivePreview(previewToken)) return
       const sources = await startPreviewLoop(
         getAudioContext(),
         rifff.stems.map((s) => ({
@@ -388,6 +390,10 @@ export function Shelf({
             const corresponding = hoveredRiffKey === correspondenceKey
             const hovered = hoverId === rifff.groupId
             const previewing = previewingGroupId === rifff.groupId
+            // What you hear: this tile's own preview, or Sketch playing it
+            // (Ben and Elling, 2026-10-08: the selection alone was too quiet
+            // a link between the two).
+            const sounding = previewing || sketchSoundingId === rifff.groupId
             const placed = rifff.startBar !== undefined
             // Already placed on the timeline dims further than the normal idle
             // state — it's already in the arrangement, so the shelf's default
@@ -396,7 +402,7 @@ export function Shelf({
             // (selected/hovered/previewing/batch-selected) still lights it up
             // normally regardless of placement — greying out is only the idle
             // default, not a suppression of interaction feedback.
-            const lit = selected || hovered || previewing
+            const lit = selected || hovered || sounding
             return (
               <button
                 key={rifff.groupId}
@@ -406,6 +412,7 @@ export function Shelf({
                 data-corresponding={corresponding}
                 data-placed={placed}
                 data-lit={lit}
+                data-sounding={sounding}
                 draggable
                 onDragStart={(e) => {
                   suppressNextSyntheticClick()
@@ -467,7 +474,9 @@ export function Shelf({
                   flex: 'none',
                   padding: 2,
                   boxSizing: 'border-box',
-                  border: '1px solid transparent',
+                  // A sounding tile gets a 1px playhead-coloured edge: it is
+                  // audio information, so colour is allowed, but not a glow.
+                  border: `1px solid ${sounding ? 'var(--ra-playhead)' : 'transparent'}`,
                   cursor: 'grab',
                   opacity: 1
                 }}

@@ -26,11 +26,20 @@ import {
 } from '../audio/previewLoop'
 import { pauseArrangementBeforeShelfPreview } from '../audio/shelfPreviewHandoff'
 import { classifyStems } from '../audio/classifyStems'
-import { buildImportedRifff, importedStemVolumes } from '../audio/importResolvedRiff'
+import {
+  buildImportedRifff,
+  importedStemVolumes,
+  mergeJoiningStems
+} from '../audio/importResolvedRiff'
+import { evictStemAnalysis } from '../audio/evictStemAnalysis'
+import { showReoneNotice } from '../state/reoneNotice'
+import { lateStemsNotAddedText } from '@shared/reoneNotices'
+import type { DiscoverSeedPhase } from '@shared/discoverSeedPhase'
 import {
   usePlaying,
   useDispatch,
   useAppState,
+  getStateSnapshot,
   useRiffFavourites,
   useRiffFavouritesActions
 } from '../state/StoreContext'
@@ -71,6 +80,11 @@ import { resolveOwnUsername } from '@shared/ownUsernameReport'
 import { syncOutcomeNote, syncOutcomeNoteRefreshMs } from '@shared/syncOutcomeNote'
 import { loginSyncPromptText, type LoginSyncConsent } from '@shared/loginSyncConsent'
 import { loadLastSelectedImportJam, storeLastSelectedImportJam } from './libraryBrowserSelection'
+import { IMPORT_MULTI_SELECT_HINT } from '@shared/keyGestures'
+import { DEFAULT_PREVIEW_LEVEL, previewLevelLabel } from '@shared/previewLevel'
+import { Dial } from './Dial'
+import { commitPreviewLevel, setPreviewLevel, usePreviewLevel } from '../audio/previewOutput'
+import { useBlockUndo } from '../state/undoRouting'
 
 // The "your username" setting is persisted locally (not in project files or
 // app state) since it's a per-person identity setting, not something that
@@ -167,6 +181,8 @@ export function LibraryBrowser({
   setDiscoverRedoStack,
   discoverSeedBpm,
   setDiscoverSeedBpm,
+  discoverSeedPhase,
+  setDiscoverSeedPhase,
   onCoachSlotsChange,
   onPublishedToShelf,
   initialMode
@@ -229,6 +245,10 @@ export function LibraryBrowser({
   setDiscoverRedoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
   discoverSeedBpm: number | null
   setDiscoverSeedBpm: React.Dispatch<React.SetStateAction<number | null>>
+  /** App.tsx's discoverSeedPhase: the seed's rotation, for candidates from its own jam. A Browse
+   * seed is the library riff at its raw phase, so it clears it. */
+  discoverSeedPhase: DiscoverSeedPhase | null
+  setDiscoverSeedPhase: (phase: DiscoverSeedPhase | null) => void
   /** Passed straight through to DiscoverPanel -- see its own doc comments. */
   onCoachSlotsChange?: (slots: CoachSlotSnapshot[]) => void
   onPublishedToShelf: (groupId: string) => void
@@ -253,6 +273,10 @@ export function LibraryBrowser({
   // why that content-carrying move is the ONLY way across, now that the tab
   // pair is gone.
   const [libraryMode, setLibraryMode] = useState<LibraryMode>(() => initialMode)
+  // Browse mode has no undo of its own: Cmd+Z does nothing here rather than
+  // undo the arrangement hidden under the view. Discover claims its own
+  // (undoRouting.ts).
+  useBlockUndo(libraryMode === 'browse')
 
   // Auth (gates sync-triggering and live jam-membership discovery)
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ loggedIn: false })
@@ -584,6 +608,7 @@ export function LibraryBrowser({
       ? (loopFolders.folders.find((f) => f.rootPath === selectedLoopRoot) ?? null)
       : null
   const setBusy = useBusy()
+  const previewLevel = usePreviewLevel()
 
   // Stable across renders (useCallback, empty deps) so it's safe to pass to
   // registerActivePreview/reference from effect cleanups without triggering
@@ -1080,7 +1105,7 @@ export function LibraryBrowser({
         : 'remove it from sync (any already-downloaded audio stays on disk)'
       if (
         !window.confirm(
-          `Really ${consequence} for "${jamName}"? Re-syncing it later will re-download everything from Endlesss from scratch.`
+          `really ${consequence} for "${jamName}"? re-syncing it later will re-download everything from endlesss from scratch.`
         )
       ) {
         return
@@ -1108,7 +1133,7 @@ export function LibraryBrowser({
         })
         .catch((err) => {
           console.error('LibraryBrowser: riffLibraryRemoveJamSync() failed:', err)
-          alert(`Couldn't remove "${jamName}" from sync — see the console for details.`)
+          alert(`couldn't remove "${jamName}" from sync — see the console for details.`)
         })
     },
     [syncingKeys, jamFilter, riffLibraryUsername, selectedJamCID]
@@ -1387,7 +1412,11 @@ export function LibraryBrowser({
         // Auto-preview on selection, full mix only — same reasoning as
         // BeatPicker's own preview: pause the main arrangement first so the
         // two don't play over each other.
-        await pauseArrangementBeforeShelfPreview({
+        //
+        // When the engine can't confirm the stop, the preview stays off, but
+        // the riff's stems still download below: a failed stop used to
+        // reject out of this whole chain and skip the sync with it.
+        const engineStopped = await pauseArrangementBeforeShelfPreview({
           playing,
           pauseArrangement: () => dispatch({ type: 'PAUSE' }),
           stopEngine: () => window.rifffApi.engineStop()
@@ -1402,6 +1431,7 @@ export function LibraryBrowser({
         // applied at all, so it has to be computed fresh here, same as this
         // preview always did.
         async function tryStartPreview(riff: RiffLibraryResolvedRiff): Promise<boolean> {
+          if (!engineStopped) return false
           const cachedStems = riff.stems.filter((s) => s.path !== null)
           if (cachedStems.length === 0) return false
           const gain = sqrtGain(cachedStems.length)
@@ -1553,12 +1583,19 @@ export function LibraryBrowser({
    * through riffLibraryStore.ts's riff-library-* channels either way; only
    * which underlying root is currently active changes what the resulting
    * riff should be labeled as having come from. */
-  function importResolvedRiff(
+  //
+  // A merge into a riff that was re-oned since its first import bakes the
+  // new stems to the riff's rotation first (rotateJoiningStems), all or
+  // nothing: stems that can't be baked are left out, with a notice, rather
+  // than joining at their raw phase ("only some stems rotated", B1 path 2 of
+  // the 2026-10-08 call triage).
+  async function importResolvedRiff(
     riffCID: string,
     resolved: RiffLibraryResolvedRiff
-  ): { groupId: string; rifff: Rifff } | null {
+  ): Promise<{ groupId: string; rifff: Rifff } | null> {
     const existingGroupId = importedRiffGroupIds.get(riffCID)
-    const existing = existingGroupId ? appState.rifffs[existingGroupId] : undefined
+    // The live state, not this render's: downloads were awaited on the way here.
+    const existing = existingGroupId ? getStateSnapshot().rifffs[existingGroupId] : undefined
     const result = buildImportedRifff(
       riffCID,
       resolved,
@@ -1567,8 +1604,27 @@ export function LibraryBrowser({
       isOwnRiffLibrary ? 'riff library' : 'lore library'
     )
     if (!result) return null
-    const { groupId, rifff, newStemSlots } = result
+    const { groupId, newStemSlots } = result
+    let rifff = result.rifff
     if (newStemSlots.length === 0 && existing) return { groupId, rifff }
+    if (existing) {
+      const joining = rifff.stems.filter((s) => newStemSlots.includes(s.slot))
+      // The bake is awaited, so the merge reads the riff again after it: one
+      // deleted meanwhile isn't brought back, and one re-oned meanwhile has
+      // its new stems baked again to the new rotation.
+      const merge = await mergeJoiningStems(
+        () => getStateSnapshot().rifffs[groupId],
+        joining,
+        (jobs) => window.rifffApi.bakeOffset(jobs)
+      )
+      if (merge.kind === 'gone') return null
+      if (merge.kind === 'failed') {
+        showReoneNotice(lateStemsNotAddedText(merge.rifff.name, joining.length))
+        return { groupId, rifff: merge.rifff }
+      }
+      evictStemAnalysis(merge.rotated.filter((s) => !joining.includes(s)).map((s) => s.path))
+      rifff = { ...merge.rifff, key: rifff.key }
+    }
 
     dispatch({
       type: 'ADD_TO_SHELF',
@@ -1620,7 +1676,7 @@ export function LibraryBrowser({
     if (
       hasRealContent &&
       !window.confirm(
-        "Replace the current Discover loop with this riff's stems? Whatever you've built so far in Discover will be lost."
+        "replace the current discover loop with this riff's stems? whatever you've built so far in discover will be lost."
       )
     ) {
       return
@@ -1684,6 +1740,7 @@ export function LibraryBrowser({
       setDiscoverRedoStack([])
       setDiscoverSlots(buildSeedSlotsFromCandidates(candidates))
       setDiscoverSeedBpm(resolvedRiff.bpm)
+      setDiscoverSeedPhase(null)
       setLibraryMode('discover')
     } finally {
       setBusy(null)
@@ -1709,7 +1766,7 @@ export function LibraryBrowser({
     setBusy('importing rifff…')
     try {
       const toImport = await ensureStemsDownloaded(selectedRiffCID, resolvedRiff)
-      const result = importResolvedRiff(selectedRiffCID, toImport)
+      const result = await importResolvedRiff(selectedRiffCID, toImport)
       if (result) onImported([result.groupId])
     } finally {
       setBusy(null)
@@ -1738,7 +1795,7 @@ export function LibraryBrowser({
               : await window.rifffApi.riffLibraryResolveRiff(riffCID)
           if (resolved) {
             const toImport = await ensureStemsDownloaded(riffCID, resolved)
-            const result = importResolvedRiff(riffCID, toImport)
+            const result = await importResolvedRiff(riffCID, toImport)
             if (result) {
               groupIds.push(result.groupId)
               rifffs.push(result.rifff)
@@ -1872,6 +1929,22 @@ export function LibraryBrowser({
               one click away. */}
           <span className="ra-eyebrow">{libraryModeLabel(libraryMode)}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* How loud previews play, to talk over them on a call (Ben, 2026-10-08). Every
+                Web Audio preview, not just this view's (audio/previewOutput.ts); remembered. */}
+            {libraryMode === 'browse' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 4 }}>
+                <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>preview level</span>
+                <Dial
+                  value={previewLevel}
+                  onChange={setPreviewLevel}
+                  onCommit={commitPreviewLevel}
+                  defaultValue={DEFAULT_PREVIEW_LEVEL}
+                  size={22}
+                  ariaLabel="preview level"
+                  tooltip={`preview level ${previewLevelLabel(previewLevel)} · every preview, not the arrangement`}
+                />
+              </div>
+            )}
             <button
               onClick={attemptClose}
               aria-label="close library browser"
@@ -2534,7 +2607,7 @@ export function LibraryBrowser({
                                       }}
                                     >
                                       <RiffCircle
-                                        title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)`}
+                                        title={`${formatBpm(riff.bpm)} BPM · ${riff.stemCount} stems (${riff.cachedStemCount} cached)\n${IMPORT_MULTI_SELECT_HINT}`}
                                         selected={selectedRiffCID === riff.riffCID}
                                         multiSelected={
                                           selectedRiffCID !== riff.riffCID &&
@@ -2651,6 +2724,34 @@ export function LibraryBrowser({
                                 : 'download missing stems'}
                             </button>
                           )}
+                          {/* The visible way to stop the preview. Clicking the
+                              playing riff again does the same (libraryPreviewToggle),
+                              but nothing said so (Ben, 2026-10-08). */}
+                          {playingRiffCID === selectedRiffCID && (
+                            <button
+                              onClick={() => setSelectedRiffPreviewEnabled(false)}
+                              aria-label="stop the preview"
+                              title="stop the preview · or click the playing riff again"
+                              style={{
+                                height: 24,
+                                borderRadius: 0,
+                                padding: '0 10px',
+                                fontSize: 10,
+                                border: '1px solid var(--ra-border)',
+                                background: 'var(--ra-bg-row-active)',
+                                color: 'var(--ra-text-2)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 6
+                              }}
+                            >
+                              <span
+                                aria-hidden="true"
+                                style={{ width: 6, height: 6, background: 'currentColor' }}
+                              />
+                              stop
+                            </button>
+                          )}
                           {selectedRiffCIDs.size <= 1 && (
                             <button
                               onClick={() => void seedDiscoverFromBrowseRiff()}
@@ -2682,6 +2783,7 @@ export function LibraryBrowser({
                             // slower. importResolvedRiff already no-ops safely (returns null) if
                             // that fetch fails and truly nothing ends up cached.
                             disabled={downloadingRiffCID !== null}
+                            title={IMPORT_MULTI_SELECT_HINT}
                             style={{
                               height: 34,
                               borderRadius: 0,
@@ -2738,6 +2840,7 @@ export function LibraryBrowser({
             onRadioViewChange={onRadioViewChange}
             setDiscoverConsented={setDiscoverConsented}
             seedBpm={discoverSeedBpm}
+            seedPhase={discoverSeedPhase}
             onCoachSlotsChange={onCoachSlotsChange}
             onPublishedToShelf={onPublishedToShelf}
           />

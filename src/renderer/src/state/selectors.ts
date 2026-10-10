@@ -10,8 +10,10 @@ import type { StemAutomation } from '@shared/toolkit'
 import { riserEndBar, type RiserClip } from '@shared/riser'
 import { clipLengthBars } from '@shared/automationEdit'
 import type { SoundSettings } from '@shared/radioSound'
+import { rotationSecForBars } from '@shared/reonedRotation'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 import { appSoundDefaultsNow } from './appSoundDefaults'
+import type { HistoryAction } from './history'
 
 /** The sound settings the project plays with, as the sound panel shows them (native radio sound
  * plan, Task 13): its own, or -- for the pre-project startup state, which has none -- the
@@ -319,6 +321,18 @@ export function groupIdAtPosition(state: AppState, pos: number): string | null {
   return null
 }
 
+/** The riff Sketch is playing right now, for the shelf to mark (the 2026-10-08 call, U2): the one
+ * under the playhead, only while the transport runs and only in Sketch, the one mode where a
+ * single riff sounds at a time. */
+export function sketchSoundingGroupId(
+  state: AppState,
+  playing: boolean,
+  pos: number
+): string | null {
+  if (state.mode !== 'sketch' || !playing) return null
+  return groupIdAtPosition(state, pos)
+}
+
 /** Fields clipGeometryFromFields needs -- an options object rather than a
  * long positional parameter list deliberately, matching this codebase's own
  * convention for functions like this (computeBandEnergy/computePitchContour/
@@ -557,9 +571,7 @@ export function offsetStepsForBeatIndex(beatIndex: number, snapDiv: number): num
  * loop length rather than the rifff's.
  */
 export function rotationSecondsForStem(offsetSteps: number, snapDiv: number, stem: Stem): number {
-  const kBars = -offsetSteps / snapDiv
-  const wrapped = ((kBars % stem.barLength) + stem.barLength) % stem.barLength
-  return wrapped * (stem.durationSec / stem.barLength)
+  return rotationSecForBars(-offsetSteps / snapDiv, stem)
 }
 
 /**
@@ -571,8 +583,10 @@ export function rotationSecondsForStem(offsetSteps: number, snapDiv: number, ste
  * deleted before pasting).
  *
  * Sharing file paths is safe even when two pasted copies are later re-oned
- * independently: BeatPicker writes a new immutable derived file per operation,
- * so the second correction cannot overwrite audio used by the first.
+ * independently: a re-oned copy is never rewritten once published (a different
+ * rotation is a different file, named by its recipe), so the second correction
+ * cannot overwrite audio used by the first, and each copy's own phaseLinkId
+ * keeps their re-ones apart even when both land on one reused file.
  */
 export function pasteRifffAction(
   state: AppState,
@@ -972,6 +986,42 @@ export function channelAllMuted(fields: {
     rifffs.every((rifff) => rifff.stems.every((s) => !!mute[stemKey(rifff.groupId, s.slot)])) &&
     channelRisers.every((riser) => riser.muted)
   )
+}
+
+/** A row's risers as its `m` button sees them: muted by the temporary layer
+ * (`mixerMute`, what the row's m writes now) or by the riser's own saved
+ * `muted`. Nothing writes the saved one any more, but a project saved before
+ * the temporary layers has it wherever the old row m was pressed; counting it
+ * here lights the m, so the riser can be found and brought back
+ * (rowMuteToggleActions). */
+export function risersForRowMute(
+  channelRisers: RiserClip[],
+  mixerMute: Record<string, boolean>
+): RiserClip[] {
+  return channelRisers.map((riser) => ({ ...riser, muted: riser.muted || !!mixerMute[riser.id] }))
+}
+
+/** What pressing a row's `m` dispatches. Muting is temporary
+ * (SET_CHANNEL_MUTE: not saved, not exported, not undoable). Unmuting also
+ * clears a riser's saved mute from before the temporary layers
+ * (SET_RISER_MUTE, an undoable edit, since it changes the saved project and
+ * its exports), which is otherwise unreachable. Those go in one BATCH, so
+ * however many risers the row has, one press is one undo step. */
+export function rowMuteToggleActions(
+  channelId: string,
+  allMuted: boolean,
+  channelRisers: RiserClip[]
+): HistoryAction[] {
+  if (!allMuted) return [{ type: 'SET_CHANNEL_MUTE', channelId, muted: true }]
+  const savedMuteClears = channelRisers
+    .filter((riser) => riser.muted)
+    .map((riser): Action => ({ type: 'SET_RISER_MUTE', id: riser.id, muted: false }))
+  return [
+    { type: 'SET_CHANNEL_MUTE', channelId, muted: false },
+    ...(savedMuteClears.length > 0
+      ? [{ type: 'BATCH', actions: savedMuteClears } satisfies HistoryAction]
+      : [])
+  ]
 }
 
 /** Is this exact row the current explicit Solo target? Solo has its own

@@ -43,6 +43,11 @@ import {
 } from '@shared/discoverSlotKind'
 import { DEFAULT_DISCOVER_CHAOS, pickReroll, rankCandidates } from '@shared/discoverRanking'
 import { DEFAULT_SOURCE_LEAN, drawSoundSource } from '@shared/discoverSlotModifier'
+import {
+  SOURCE_DIAL_LEFT_LABEL,
+  SOURCE_DIAL_RIGHT_LABEL,
+  SOURCE_DIAL_TOOLTIP
+} from '@shared/radioControlCopy'
 import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
 import type { Stem } from '@shared/types'
 import type { DiscoverCandidate } from '@shared/discoverCandidate'
@@ -57,6 +62,9 @@ import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreC
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { useCrossPreview, type CrossPreviewMode } from '../state/useCrossPreview'
 import { crossEmptyDropSlotCount } from './crossDropSlots'
+import { crossColumnMark } from './crossColumnMark'
+import { MetronomeButton } from './MetronomeButton'
+import { useClaimUndo } from '../state/undoRouting'
 
 const SOURCE_DRAG_TYPE = 'application/x-sssketch-cross-source'
 const ROW_DRAG_TYPE = 'application/x-sssketch-cross-row'
@@ -72,6 +80,21 @@ function CrossPlaybackIndicator(): React.JSX.Element {
       <i />
       <i />
       <i />
+    </span>
+  )
+}
+
+function CrossColumnMarkView({
+  selected,
+  playing
+}: {
+  selected: boolean
+  playing: boolean
+}): React.JSX.Element {
+  const mark = crossColumnMark(selected, playing)
+  return (
+    <span style={{ width: 16, color: mark.color }} aria-label={mark.label}>
+      {mark.kind === 'playing' ? <CrossPlaybackIndicator /> : mark.kind === 'selected' ? '●' : ''}
     </span>
   )
 }
@@ -310,8 +333,7 @@ function SourceRow({
             left: 5,
             top: 3,
             fontSize: 8,
-            color: 'var(--ra-text)',
-            textShadow: '0 1px 2px var(--ra-bg)'
+            color: 'var(--ra-text)'
           }}
         >
           {stem?.name ?? 'unavailable'}
@@ -386,12 +408,7 @@ function SourceColumn({
           {parent.label}
         </span>
         <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{Math.round(parent.bpm)} bpm</span>
-        <span
-          style={{ width: 16, color: selected ? 'var(--ra-playhead)' : 'var(--ra-text-4)' }}
-          aria-label={selected ? (playing ? 'playing' : 'selected') : undefined}
-        >
-          {selected && playing ? <CrossPlaybackIndicator /> : selected ? '●' : ''}
-        </span>
+        <CrossColumnMarkView selected={selected} playing={playing} />
       </button>
       {parent.sources.map((source) => (
         <SourceRow
@@ -634,7 +651,7 @@ export function CrossPanel({
   draft: CrossDraft
   setDraft: Dispatch<SetStateAction<CrossDraft | null>>
   currentProjectKey: string
-  /** Persists the Endlesss↔Other source preference shared with Discover.
+  /** Persists the source preference (instruments↔recorded) shared with Discover.
    * The draft still updates live while the knob moves; this fires once when
    * the gesture finishes so reopening Cross does not reset the choice. */
   onSourceLeanCommit: (sourceLean: number) => void
@@ -644,7 +661,6 @@ export function CrossPanel({
   const dispatch = useDispatch()
   const rifffs = useAppSelector((state) => state.rifffs)
   const playedBars = useAppSelector((state) => state.playedBars)
-  const projectBpm = useAppSelector((state) => state.bpm)
   const playing = usePlaying()
   const pos = usePos()
   const { preview } = useCrossPreview()
@@ -676,11 +692,6 @@ export function CrossPanel({
     draftRef.current = draft
     currentProjectKeyRef.current = currentProjectKey
   }, [currentProjectKey, draft])
-
-  useEffect(() => {
-    if (draft.targetBpm === projectBpm) return
-    setDraft((value) => (value ? setCrossTargetBpm(value, projectBpm) : value))
-  }, [draft.targetBpm, projectBpm, setDraft])
 
   function toggleSideMute(sourceId: string): void {
     setSideMuted((before) => {
@@ -920,8 +931,14 @@ export function CrossPanel({
     }
   }
 
+  /** Cross's tempo is the preview's, not the project's. The draft starts at
+   * the project tempo (createCrossDraft) and its preview plays at
+   * draft.targetBpm (useCrossPreview's throwaway project); changing it here
+   * used to dispatch SET_TEMPO too, which retuned the real arrangement behind
+   * Cross as an undoable edit and marked the project unsaved. A committed
+   * Cross riff keeps this tempo as its own bpm, and the project plays it at
+   * the project tempo like any other riff. */
   function changeTempo(nextBpm: number): void {
-    dispatch({ type: 'SET_TEMPO', bpm: nextBpm })
     setDraft((value) => (value ? setCrossTargetBpm(value, nextBpm) : value))
   }
 
@@ -988,7 +1005,9 @@ export function CrossPanel({
     if (committingRef.current) return
     const revision = draft.revision
     const projectKey = draft.projectKey
-    const assembly = assembleCrossRifff(draft)
+    // The center solo counts, as in Discover's add: a row that isn't heard
+    // arrives Disabled at its own level (assembleCrossRifff).
+    const assembly = assembleCrossRifff(draft, undefined, activeCenterSoloedId)
     if (!assembly) return
     committingRef.current = true
     setCommitting(destination)
@@ -1001,7 +1020,12 @@ export function CrossPanel({
       const current = draftRef.current
       if (!crossCommitIsCurrent(revision, projectKey, current, currentProjectKeyRef.current)) return
       if (destination === 'shelf') {
-        dispatch({ type: 'ADD_TO_SHELF', rifff: assembly.rifff, vol: assembly.vol })
+        dispatch({
+          type: 'ADD_TO_SHELF',
+          rifff: assembly.rifff,
+          vol: assembly.vol,
+          mute: assembly.mute
+        })
         onPublishedToShelf(assembly.rifff.groupId)
       } else {
         const ends = Object.values(rifffs)
@@ -1015,7 +1039,8 @@ export function CrossPanel({
           type: 'PLACE_LOOP_ON_TIMELINE',
           stems: [assembly.rifff],
           startBar: ends.length > 0 ? Math.max(...ends) : 0,
-          vol: assembly.vol
+          vol: assembly.vol,
+          mute: assembly.mute
         })
       }
       setCommitted(destination)
@@ -1036,6 +1061,18 @@ export function CrossPanel({
         100
       : null
   const placeholders = crossEmptyDropSlotCount(draft.center.length, MAX_RIFFF_STEM_SLOTS)
+
+  // Cmd+Z / Cmd+Shift+Z drive Cross's own undo and redo while it's open,
+  // like the buttons below (and held off while a result is being added, as
+  // they are), not the project's history hidden under it (undoRouting.ts).
+  useClaimUndo(
+    () => {
+      if (!committing) setDraft((value) => (value ? undoCross(value) : value))
+    },
+    () => {
+      if (!committing) setDraft((value) => (value ? redoCross(value) : value))
+    }
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
@@ -1183,7 +1220,7 @@ export function CrossPanel({
           className="ra-cross-button"
           data-active={playing}
           onClick={() => (playing ? dispatch({ type: 'PAUSE' }) : void playTarget(selectedTarget))}
-          aria-label={playing ? 'pause Cross' : 'play Cross'}
+          aria-label={playing ? 'pause cross' : 'play cross'}
         >
           {playing ? '■' : '▶'}
         </button>
@@ -1191,8 +1228,8 @@ export function CrossPanel({
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tempo</span>
         <button
           className="ra-cross-button"
-          onClick={() => changeTempo(projectBpm - 1)}
-          aria-label="Decrease tempo"
+          onClick={() => changeTempo(draft.targetBpm - 1)}
+          aria-label="decrease tempo"
         >
           −
         </button>
@@ -1204,16 +1241,21 @@ export function CrossPanel({
             color: 'var(--ra-text)'
           }}
         >
-          {Math.round(projectBpm)}
+          {Math.round(draft.targetBpm)}
         </span>
         <button
           className="ra-cross-button"
-          onClick={() => changeTempo(projectBpm + 1)}
-          aria-label="Increase tempo"
+          onClick={() => changeTempo(draft.targetBpm + 1)}
+          aria-label="increase tempo"
         >
           +
         </button>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
+        {/* The app's metronome, not a Cross-only one: the same switch and
+            volume as the main transport. The engine clicks at the loaded
+            project's tempo, so while Cross plays it follows draft.targetBpm,
+            and the real project's tempo once Cross restores it. */}
+        <MetronomeButton />
         <span className="ra-cross-divider" />
         <div style={{ flex: 1 }} />
         <button
@@ -1274,7 +1316,7 @@ export function CrossPanel({
           className="ra-cross-button ra-cross-close"
           onClick={onBack}
           disabled={!!committing}
-          aria-label="close Cross"
+          aria-label="close cross"
           title="close"
         >
           ×
@@ -1344,23 +1386,7 @@ export function CrossPanel({
             <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>
               {draft.center.length} / {MAX_RIFFF_STEM_SLOTS}
             </span>
-            <span
-              style={{
-                width: 16,
-                color: selectedTarget === 'center' ? 'var(--ra-playhead)' : 'var(--ra-text-4)'
-              }}
-              aria-label={
-                selectedTarget === 'center' ? (playing ? 'playing' : 'selected') : undefined
-              }
-            >
-              {selectedTarget === 'center' && playing ? (
-                <CrossPlaybackIndicator />
-              ) : selectedTarget === 'center' ? (
-                '●'
-              ) : (
-                ''
-              )}
-            </span>
+            <CrossColumnMarkView selected={selectedTarget === 'center'} playing={playing} />
           </button>
           {draft.center.map((row, index) => {
             const source = crossSourceForRow(draft, row)
@@ -1471,7 +1497,9 @@ export function CrossPanel({
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
+                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>
+                    {SOURCE_DIAL_LEFT_LABEL}
+                  </span>
                   <Dial
                     value={draft.sourceLean ?? DEFAULT_SOURCE_LEAN}
                     onChange={(sourceLean) =>
@@ -1481,9 +1509,11 @@ export function CrossPanel({
                     defaultValue={DEFAULT_SOURCE_LEAN}
                     size={28}
                     ariaLabel="source"
-                    tooltip="other sounds clockwise"
+                    tooltip={SOURCE_DIAL_TOOLTIP}
                   />
-                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
+                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>
+                    {SOURCE_DIAL_RIGHT_LABEL}
+                  </span>
                 </div>
                 <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>source</span>
               </div>

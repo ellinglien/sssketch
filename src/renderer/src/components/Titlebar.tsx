@@ -156,7 +156,7 @@ export function Titlebar({
             than in a control beside it answering the same question. */}
         <button
           onClick={onCycleMode}
-          aria-label="Cycle arranger view"
+          aria-label="cycle arranger view"
           data-tour-id="tour-mode"
           title={!sketchEligible ? 'sketch unavailable' : `view: ${modeLabel(mode)} (Tab)`}
           style={{

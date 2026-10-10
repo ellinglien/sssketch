@@ -5,7 +5,7 @@ import { riffCorrespondenceKey } from './riffCorrespondence'
 function stem(slot: number, path: string, phaseSourcePath?: string): Stem {
   return {
     slot,
-    author: 'elling',
+    author: 'river',
     name: `stem ${slot}`,
     type: 'drums',
     path,

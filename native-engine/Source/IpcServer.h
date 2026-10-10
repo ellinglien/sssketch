@@ -11,6 +11,7 @@
 #include "LoopRecorder.h"
 #include "GatedLoopRecorder.h"
 #include "LinkSession.h"
+#include "HaltAck.h"
 #include <juce_events/juce_events.h>
 #include <memory>
 #include <vector>
@@ -56,6 +57,10 @@ namespace sssketch
     private:
         void sendJson(const juce::var& payload);
         void sendTransportStopped(int token, bool stopped);
+        // transport.play(fromPos), answering every stop still waiting for
+        // silence as superseded first. Both play sites ("play" and
+        // "arm-recording") go through it, so neither leaves a waiter to time out.
+        void playSupersedingStops(double fromPos, bool fadeIn = false);
         // timerID is one of kPositionTimerId/kLinkPollTimerId/
         // kHaltAckTimerId (IpcServer.cpp) --
         // see this class's own doc comment above for why this is a MultiTimer
@@ -191,12 +196,9 @@ namespace sssketch
         // thread's fade to reach true silence. Normally one; an immediate
         // transport re-render may issue the same logical stop twice, and
         // every waiter receives its own correlated acknowledgement.
-        struct PendingHaltAck
-        {
-            int token;
-            unsigned long long commandGeneration;
-        };
-        std::vector<PendingHaltAck> pendingHaltAcks;
+        // A waiter is also answered when the device isn't rendering at all;
+        // see HaltAck.h.
+        std::vector<HaltAckWait> pendingHaltAcks;
     };
 
     class IpcServer : public juce::InterprocessConnectionServer

@@ -4,6 +4,9 @@ import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import type { DiscoverSlotKind, DiscoverTraitKind } from '@shared/discoverSlotKind'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type { ToolkitExportMode } from '@shared/toolkit'
+import type { ReoneBakeJob } from '@shared/reonedRotation'
+import type { ReonedRepairBatch, ReonedRepairOutcome } from '@shared/reonedRepair'
+import type { ReonedCleanResult, ReonedSurvey } from '@shared/reonedCleanup'
 import type { LiveParamField } from '@shared/liveParam'
 import type { OwnUsernameReport } from '@shared/ownUsernameReport'
 import type { AppFeatureSettings } from '@shared/features'
@@ -145,7 +148,7 @@ const api = {
   renderStretched: (stemPath: string, ratio: number): Promise<StretchedStem> =>
     ipcRenderer.invoke('render-stretched', stemPath, ratio),
   bakeOffset: (
-    jobs: { path: string; rotationSec: number }[]
+    jobs: ReoneBakeJob[]
   ): Promise<{ path: string; bakedPath: string; durationSec: number }[]> =>
     ipcRenderer.invoke('bake-offset', jobs),
   materializeShape: (request: ShapeMaterializeRequest): Promise<ShapeMaterializeResult> =>
@@ -158,12 +161,31 @@ const api = {
     ipcRenderer.invoke('shape-cleanup-preview', paths),
   cleanupUncommittedShapeAssets: (paths: string[]): Promise<void> =>
     ipcRenderer.invoke('shape-cleanup-uncommitted', paths),
+  // The re-oned copies cleanup (src/main/reonedCopiesIpc.ts).
+  rebuildReonedCopies: (batches: ReonedRepairBatch[]): Promise<ReonedRepairOutcome[][]> =>
+    ipcRenderer.invoke('rebuild-reoned-copies', batches),
+  reonedCopiesLibraryAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke('reoned-copies-library-available'),
+  reonedCopiesSurvey: (request: {
+    inMemoryNames: string[]
+    respectNotNow: boolean
+  }): Promise<ReonedSurvey> => ipcRenderer.invoke('reoned-copies-survey', request),
+  reonedCopiesClean: (inMemoryNames: string[]): Promise<ReonedCleanResult> =>
+    ipcRenderer.invoke('reoned-copies-clean', inMemoryNames),
+  reonedCopiesNotNow: (): Promise<void> => ipcRenderer.invoke('reoned-copies-not-now'),
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-project'),
   autosaveProject: (json: string): Promise<void> => ipcRenderer.invoke('autosave-project', json),
   loadAutosave: (): Promise<string | null> => ipcRenderer.invoke('load-autosave'),
   clearAutosave: (): Promise<void> => ipcRenderer.invoke('clear-autosave'),
+  // Recover or Discard on the offered snapshot: deletes it for good (clearAutosave moves a
+  // still-undecided one aside, projectFile.ts).
+  discardAutosave: (): Promise<void> => ipcRenderer.invoke('discard-autosave'),
+  // The one kept earlier snapshot, set aside undecided; offered next to the current one.
+  loadPreviousAutosave: (): Promise<{ json: string; sketchJson: string | null } | null> =>
+    ipcRenderer.invoke('load-previous-autosave'),
+  discardPreviousAutosave: (): Promise<void> => ipcRenderer.invoke('discard-previous-autosave'),
   autosaveProjectSketch: (json: string): Promise<void> =>
     ipcRenderer.invoke('autosave-project-sketch', json),
   loadAutosaveSketch: (): Promise<string | null> => ipcRenderer.invoke('load-autosave-sketch'),
@@ -537,6 +559,9 @@ const api = {
     ipcRenderer.on('engine-startup-complete', listener)
     return () => ipcRenderer.removeListener('engine-startup-complete', listener)
   },
+  // The import view's "preview level" dial, 0..100 (src/main/previewLevelStore.ts).
+  getPreviewLevel: (): Promise<number> => ipcRenderer.invoke('get-preview-level'),
+  setPreviewLevel: (level: number): Promise<void> => ipcRenderer.invoke('set-preview-level', level),
   getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
   setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
     ipcRenderer.invoke('set-discover-settings', settings),
@@ -846,6 +871,12 @@ const api = {
     ipcRenderer.invoke('riff-library-resolve-riff-with-context', riffCID),
   riffLibraryDownloadMissingStems: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
     ipcRenderer.invoke('riff-library-download-missing-stems', riffCID),
+  /** path -> the jam of each library stem file the riff index knows (the jam of the riff it
+   * plays from, as a Discover candidate's jamCID), and those jams' names. */
+  riffLibraryStemJams: (
+    paths: string[]
+  ): Promise<{ jams: Record<string, string>; names: Record<string, string> }> =>
+    ipcRenderer.invoke('riff-library-stem-jams', paths),
   saveDiscoveredRifff: (
     members: {
       path: string

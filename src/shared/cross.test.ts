@@ -20,6 +20,7 @@ import {
   redoCross,
   removeCrossRow,
   setCrossGain,
+  setCrossTargetBpm,
   swapCrossSides,
   toggleCrossAudible,
   toggleCrossSoloedId,
@@ -30,7 +31,7 @@ import {
 
 function stem(path: string, barLength = 4): Omit<Stem, 'slot'> {
   return {
-    author: 'elling',
+    author: 'wren',
     name: path.slice(1),
     type: 'fx',
     path,
@@ -302,8 +303,26 @@ describe('Cross center editing', () => {
   })
 })
 
+describe('setCrossTargetBpm', () => {
+  it("changes only the draft's preview tempo, clamped, and replays a playing preview", () => {
+    const start = draft()
+    const next = setCrossTargetBpm(start, 96)
+    expect(next.targetBpm).toBe(96)
+    expect(next.revision).toBe(start.revision + 1)
+    expect(next.past).toEqual(start.past)
+    expect(setCrossTargetBpm(start, 500).targetBpm).toBe(200)
+    expect(setCrossTargetBpm(start, start.targetBpm)).toBe(start)
+  })
+
+  it('a committed Cross riff keeps the tempo it was auditioned at as its own bpm', () => {
+    let value = setCrossTargetBpm(draft(), 96)
+    value = addCrossSource(value, 'a:1', 0)
+    expect(assembleCrossRifff(value, 'child')?.rifff.bpm).toBe(96)
+  })
+})
+
 describe('assembleCrossRifff', () => {
-  it('assembles displayed order, max bar length, exact gains, and silent excluded rows', () => {
+  it('assembles displayed order, max bar length, exact gains, and Disabled excluded rows', () => {
     let value = addCrossSource(draft(), 'a:1')
     value = addCrossSource(value, 'b:2')
     value = setCrossGain(value, 'a:1', 0.42)
@@ -320,7 +339,18 @@ describe('assembleCrossRifff', () => {
       [1, '/same.wav'],
       [2, '/b2.wav']
     ])
-    expect(assembly?.vol).toEqual({ 'group-cross:1': 0.42, 'group-cross:2': 0 })
+    // What you hear is what you get (the 2026-10-08 call, F6), as Discover's add: a muted row
+    // arrives Disabled at its own level, not at gain 0 looking unmuted.
+    expect(assembly?.vol).toEqual({ 'group-cross:1': 0.42, 'group-cross:2': 0.9 })
+    expect(assembly?.mute).toEqual({ 'group-cross:2': true })
+  })
+
+  it('with a center row soloed, Disables every other row, and brings in the soloed one even if muted', () => {
+    let value = addCrossSource(draft(), 'a:1')
+    value = addCrossSource(value, 'b:2')
+    value = toggleCrossAudible(value, 'b:2')
+    expect(assembleCrossRifff(value, 'g', 'b:2')?.mute).toEqual({ 'g:1': true })
+    expect(assembleCrossRifff(value, 'g', null)?.mute).toEqual({ 'g:2': true })
   })
 
   it('returns null when the center is empty', () => {

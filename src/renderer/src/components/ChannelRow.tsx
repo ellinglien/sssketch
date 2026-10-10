@@ -1,7 +1,12 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import type { BusId, Rifff } from '@shared/types'
 import type { LoopRegion } from '../state/store'
-import { channelAllMuted, channelIsSoloed } from '../state/selectors'
+import {
+  channelAllMuted,
+  channelIsSoloed,
+  risersForRowMute,
+  rowMuteToggleActions
+} from '../state/selectors'
 import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { RiserBlock } from './RiserBlock'
 import { ChannelChainPanel } from './ChannelChainPanel'
@@ -18,6 +23,7 @@ import {
   useZoom
 } from '../state/StoreContext'
 import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './arrangementMixerRail'
+import { MixerRailAnchor } from './MixerRailAnchor'
 
 // The right-edge m/s/fx/r/x button stack (rendered further down, an
 // absolutely-positioned flex column with gap: 2, anchored at top: 4 from
@@ -88,15 +94,10 @@ const CHANNEL_FX_BUTTON_ENABLED = false
  * at once via SET_CHANNEL_MUTE/SOLO_CHANNEL, plus the "fx" button opening
  * this channel's own 2-slot plugin chain panel — see
  * docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md).
- * Pinned to the row's own right edge with position:sticky, over the fixed
- * mixer rail beside the Inspector, so it stays on
- * screen while the timeline scrolls horizontally, rather than the clip
- * title (which lives at the LEFT of each clip, per RifffBlockRow) ever
- * being covered. The sticky element itself has height:0 so it never adds
- * to the row's own flow height -- the actual visible buttons hang off it
- * via an absolutely-positioned child, a standard "zero-size sticky anchor"
- * technique for pinning an overlay to a scrolling viewport's edge without
- * disturbing surrounding layout. */
+ * Pinned into the fixed mixer rail beside the Inspector by MixerRailAnchor,
+ * so it stays on screen at the viewport's right edge however long the
+ * timeline is and wherever it's scrolled. See MixerRailAnchor for why the
+ * anchor must be zero-width. */
 function ChannelRowImpl({
   channelId,
   rifffs,
@@ -155,8 +156,10 @@ function ChannelRowImpl({
   // state.risers itself only changes when a riser actually does.
   const allRisers = useAppSelector((s) => s.risers)
   const channelRisers = useMemo(() => risersOnChannel(allRisers, channelId), [allRisers, channelId])
+  // Temporary mute, plus a riser's saved mute from before the temporary
+  // layers, so that one lights the m and clears with it (risersForRowMute).
   const mixerChannelRisers = useMemo(
-    () => channelRisers.map((riser) => ({ ...riser, muted: !!mixerMute[riser.id] })),
+    () => risersForRowMute(channelRisers, mixerMute),
     [channelRisers, mixerMute]
   )
   const riserIds = useMemo(() => channelRisers.map((riser) => riser.id), [channelRisers])
@@ -356,7 +359,7 @@ function ChannelRowImpl({
             })
           }
         } else if (result.error) {
-          window.alert(`Recording failed: ${result.error}`)
+          window.alert(`recording failed: ${result.error}`)
         } else {
           // committed: false with no error -- no minimum-length
           // requirement anymore (LoopRecorder.hasAnyAudio() just checks
@@ -368,7 +371,7 @@ function ChannelRowImpl({
           // manual testing: an old take just sitting there, revealed once
           // the live overlay disappears, read as "it recorded the wrong
           // thing" rather than "it recorded nothing."
-          window.alert('Nothing recorded.')
+          window.alert('nothing recorded.')
         }
       } else {
         if (!selectedInputDevice || !loopRegion) return
@@ -397,7 +400,7 @@ function ChannelRowImpl({
             dispatch({ type: 'PLAY' })
           }
         } else {
-          window.alert(`Failed to arm recording: ${result.error ?? 'unknown error'}`)
+          window.alert(`failed to arm recording: ${result.error ?? 'unknown error'}`)
         }
       }
     } catch (err) {
@@ -407,7 +410,7 @@ function ChannelRowImpl({
       // visibly instead of leaving an unhandled rejection and a channel
       // stuck mid-toggle with no user-facing feedback.
       console.error('ChannelRow: arm/disarm toggle failed:', err)
-      window.alert(`Recording action failed: ${err instanceof Error ? err.message : String(err)}`)
+      window.alert(`recording action failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setTogglingArm(false)
     }
@@ -426,7 +429,7 @@ function ChannelRowImpl({
   // each other (e.g. removing mid-arm/disarm, or double-clicking remove).
   async function handleRemoveRecordingChannel(): Promise<void> {
     if (togglingArm) return
-    if (!window.confirm('Remove this recording channel?')) return
+    if (!window.confirm('remove this recording channel?')) return
     if (isArmed) {
       setTogglingArm(true)
       try {
@@ -438,13 +441,13 @@ function ChannelRowImpl({
           // may still be actively recording into a channel nothing in the
           // UI references anymore.
           window.alert(
-            `Channel removed, but the engine may still be recording (disarm failed: ${result.error}). Restart if audio behaves oddly.`
+            `channel removed, but the engine may still be recording (disarm failed: ${result.error}). restart if audio behaves oddly.`
           )
         }
       } catch (err) {
         console.error('ChannelRow: failed to disarm before removing channel:', err)
         window.alert(
-          `Channel removed, but the engine may still be recording (disarm failed: ${err instanceof Error ? err.message : String(err)}). Restart if audio behaves oddly.`
+          `channel removed, but the engine may still be recording (disarm failed: ${err instanceof Error ? err.message : String(err)}). restart if audio behaves oddly.`
         )
       } finally {
         setTogglingArm(false)
@@ -531,7 +534,7 @@ function ChannelRowImpl({
         borderLeft: bus ? `3px solid ${busColorHex(bus)}` : undefined
       }}
     >
-      <div style={{ position: 'sticky', right: 0, top: 0, height: 0, zIndex: 5 }}>
+      <MixerRailAnchor zIndex={5}>
         <div
           style={{
             position: 'absolute',
@@ -548,7 +551,8 @@ function ChannelRowImpl({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              dispatch({ type: 'SET_CHANNEL_MUTE', channelId, muted: !allMuted })
+              for (const action of rowMuteToggleActions(channelId, allMuted, channelRisers))
+                dispatch(action)
             }}
             aria-label={`mute channel ${channelId}`}
             title="temporarily mute channel"
@@ -658,7 +662,7 @@ function ChannelRowImpl({
             </button>
           )}
         </div>
-      </div>
+      </MixerRailAnchor>
       {/* No automation pointer-events wrapper here, deliberately.
           There used to be one -- `pointerEvents: 'none'` over this whole
           stack whenever the lanes were up, so a drag landed on the lane rather than

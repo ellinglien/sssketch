@@ -118,7 +118,7 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
           }}
         >
           <span style={{ color: 'var(--ra-text-2)' }}>master chain</span>
-          <button onClick={onClose} aria-label="Close master chain panel" style={buttonStyle()}>
+          <button onClick={onClose} aria-label="close master chain panel" style={buttonStyle()}>
             ×
           </button>
         </div>

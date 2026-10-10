@@ -4,7 +4,16 @@ import { stemKey, type Rifff } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
 import { MIN_RISER_LENGTH_BARS, createRiser } from '@shared/riser'
 import { normalizeSoundSettings } from '@shared/radioSound'
-import { channelsInOrder, loopLengthBars } from './selectors'
+import {
+  channelAllMuted,
+  channelsInOrder,
+  loopLengthBars,
+  risersForRowMute,
+  rowMuteToggleActions
+} from './selectors'
+import { risersOnChannel } from '@shared/riser'
+import { createHistoryState, historyReducer } from './history'
+import { bakeTargetGroupIds } from '@shared/bakePropagation'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import { lockClimaxFromArrangeRoles, type CoachSlotSnapshot } from '@shared/coachClimax'
 import { startCoach } from '@shared/coach'
@@ -413,6 +422,101 @@ describe('reducer', () => {
     expect(state.off.r1).toBe(0)
     expect(state.off['r1:1']).toBeUndefined()
     expect(state.off['r1:6']).toBeUndefined()
+  })
+
+  it("a riff's first re-one gives it a phaseLinkId, so another riff later re-oned onto the same reused copy stays independent", () => {
+    const placed = (groupId: string): Rifff =>
+      makeRifff({ groupId, startBar: 0, stems: [makeRifff().stems[0]] })
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: placed('a') })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: placed('w') }) // a window copy of a
+    const COPY = '/lib/.bakes/0123456789abcdef0123456789abcdef.baked.wav'
+    const result = {
+      path: '/x/1.wav',
+      bakedPath: COPY,
+      durationSec: 12.8,
+      phaseSourcePath: '/x/1.wav',
+      phaseBars: 1
+    }
+    state = reducer(state, { type: 'APPLY_BAKE', targetGroupIds: ['a', 'w'], results: [result] })
+    expect(state.rifffs.a.phaseLinkId).toBe('a')
+    expect(state.rifffs.w.phaseLinkId).toBe('a') // moved together, so linked together
+    // An independent riff, re-oned on its own to the same spot, reuses the same copy.
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: placed('b') })
+    state = reducer(state, { type: 'APPLY_BAKE', targetGroupIds: ['b'], results: [result] })
+    expect(state.rifffs.b.stems[0].path).toBe(COPY)
+    expect(state.rifffs.b.phaseLinkId).toBe('b')
+    expect(bakeTargetGroupIds(state.rifffs, 'a').sort()).toEqual(['a', 'w'])
+    expect(bakeTargetGroupIds(state.rifffs, 'b')).toEqual(['b'])
+  })
+
+  it('a riff that already has a phaseLinkId keeps it through a re-one', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ phaseLinkId: 'lineage-x' })
+    })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
+      results: [
+        { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 },
+        { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.2 }
+      ]
+    })
+    expect(state.rifffs.r1.phaseLinkId).toBe('lineage-x')
+  })
+
+  describe('REPAIR_REONED_PATHS', () => {
+    const COPY = '/lib/.bakes/0123456789abcdef0123456789abcdef.baked.wav'
+    const NEW = '/lib/.bakes/ffffffffffffffffffffffffffffffff.baked.wav'
+    const onCopy = (groupId: string): Rifff =>
+      makeRifff({
+        groupId,
+        stems: [
+          {
+            ...makeRifff().stems[0],
+            path: COPY,
+            phaseSourcePath: '/x/1.wav',
+            phaseBars: 1
+          },
+          makeRifff().stems[1]
+        ]
+      })
+
+    it('repoints every stem naming the copy and leaves off and phase lineage alone', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: onCopy('a') })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: onCopy('b') })
+      state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'a', steps: 3 })
+      const next = reducer(state, {
+        type: 'REPAIR_REONED_PATHS',
+        results: [{ path: COPY, bakedPath: NEW, durationSec: 12.81 }]
+      })
+      for (const id of ['a', 'b']) {
+        expect(next.rifffs[id].stems[0]).toMatchObject({
+          path: NEW,
+          durationSec: 12.81,
+          phaseSourcePath: '/x/1.wav',
+          phaseBars: 1
+        })
+        expect(next.rifffs[id].stems[1]).toBe(state.rifffs[id].stems[1])
+      }
+      expect(next.off).toBe(state.off)
+    })
+
+    it('returns the same state when no stem names the path, or the path is unchanged', () => {
+      const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: onCopy('a') })
+      expect(
+        reducer(state, {
+          type: 'REPAIR_REONED_PATHS',
+          results: [{ path: '/elsewhere.baked.wav', bakedPath: NEW, durationSec: 1 }]
+        })
+      ).toBe(state)
+      expect(
+        reducer(state, {
+          type: 'REPAIR_REONED_PATHS',
+          results: [{ path: COPY, bakedPath: COPY, durationSec: 1 }]
+        })
+      ).toBe(state)
+    })
   })
 
   it('stores immutable phase provenance with a completed bake', () => {
@@ -1260,6 +1364,38 @@ describe('reducer', () => {
       expect(stem.trimStartSec).toBeUndefined()
       expect(stem.trimEndSec).toBeUndefined()
       expect(state.rifffs.r1.startBar).toBe(3)
+    })
+
+    it('drops the phase lineage: the stretched render is a new original, so a later re-one bakes it, not the unstretched source', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeOneShotRifff({
+          stems: [
+            {
+              slot: 1,
+              author: '',
+              name: 'kick',
+              type: 'fx',
+              path: '/lib/.bakes/0123456789abcdef0123456789abcdef.baked.wav',
+              durationSec: 0.6,
+              barLength: 1,
+              oneShot: true,
+              phaseSourcePath: '/x/kick.wav',
+              phaseBars: 0.5
+            }
+          ]
+        })
+      })
+      state = reducer(state, {
+        type: 'SET_ONE_SHOT_STRETCHED',
+        groupId: 'r1',
+        path: '/x/kick-stretched.wav',
+        durationSec: 0.9,
+        startBar: 3
+      })
+      const stem = state.rifffs.r1.stems[0]
+      expect(stem.phaseSourcePath).toBeUndefined()
+      expect(stem.phaseBars).toBeUndefined()
     })
   })
 
@@ -2573,6 +2709,93 @@ describe('reducer', () => {
       )
       expect(alreadyPresent.channelOrder.filter((id) => id === 'pre-existing').length).toBe(1)
     })
+
+    // What you hear is what you get: a row muted (or left out by a solo) in
+    // Discover arrives Disabled, the saved layer, so it stays silent in the
+    // arrangement after a save, at its own real level.
+    it('Disables the stems given in `mute`, keeping their levels', () => {
+      const discoverRifff = {
+        groupId: 'disc',
+        name: 'discover: drums+bass',
+        bpm: 120,
+        barLength: 4,
+        folderPath: '',
+        stems: [1, 2].map((slot) => ({
+          slot,
+          author: 'wren',
+          name: `${slot}.wav`,
+          path: `/tmp/${slot}.wav`,
+          type: 'drums' as const,
+          durationSec: 2,
+          barLength: 4
+        }))
+      }
+      const next = reducer(initialState, {
+        type: 'PLACE_LOOP_ON_TIMELINE',
+        startBar: 0,
+        stems: [discoverRifff],
+        vol: { 'disc:1': 0.8, 'disc:2': 0.6 },
+        mute: { 'disc:2': true }
+      })
+      expect(next.mute['disc:2']).toBe(true)
+      expect(next.mute['disc:1']).toBeFalsy()
+      expect(next.vol['disc:2']).toBe(0.6)
+      expect(next.mixerMute['disc:2']).toBeUndefined()
+    })
+  })
+
+  describe('ADD_TO_SHELF from Discover', () => {
+    it('Disables the stems given in `mute`, keeping their levels', () => {
+      const next = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: {
+          groupId: 'disc',
+          name: 'discover: drums',
+          bpm: 120,
+          barLength: 4,
+          folderPath: '',
+          stems: [1, 2].map((slot) => ({
+            slot,
+            author: 'wren',
+            name: `${slot}.wav`,
+            path: `/tmp/${slot}.wav`,
+            type: 'drums' as const,
+            durationSec: 2,
+            barLength: 4
+          }))
+        },
+        vol: { 'disc:1': 0.8, 'disc:2': 0.6 },
+        mute: { 'disc:2': true }
+      })
+      expect(next.mute['disc:2']).toBe(true)
+      expect(next.mute['disc:1']).toBeFalsy()
+      expect(next.vol['disc:2']).toBe(0.6)
+    })
+
+    it("a merge without `mute` leaves the riff's Disables alone", () => {
+      const rifff = {
+        groupId: 'r',
+        name: 'r',
+        bpm: 120,
+        barLength: 4,
+        folderPath: '',
+        stems: [
+          {
+            slot: 1,
+            author: 'wren',
+            name: '1.wav',
+            path: '/tmp/1.wav',
+            type: 'drums' as const,
+            durationSec: 2,
+            barLength: 4
+          }
+        ]
+      }
+      const disabled = { ...reducer(initialState, { type: 'ADD_TO_SHELF', rifff }) }
+      disabled.mute = { 'r:1': true }
+      const next = reducer(disabled, { type: 'ADD_TO_SHELF', rifff })
+      expect(next.mute['r:1']).toBe(true)
+    })
   })
 })
 
@@ -3451,6 +3674,87 @@ describe('a riser on its own row', () => {
     state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'ch-r1', muted: true })
     expect(state.mixerMute['r1']).toBe(true)
     expect(state.mixerMute['r2']).toBeUndefined()
+    expect(state.risers['r1'].muted).toBe(false)
+  })
+
+  it("gives a riser muted under the old saved mute a way back through the row's m", () => {
+    // Before the temporary mute layers, the row m wrote the riser's own saved `muted`. Nothing
+    // dispatches SET_RISER_MUTE any more, so such a riser must show on the row's m and clear
+    // with it, or it can never be heard again.
+    let state = withRiser('r1', 'ch-r1')
+    state = reducer(state, { type: 'SET_RISER_MUTE', id: 'r1', muted: true })
+    const rowRisers = (): ReturnType<typeof risersForRowMute> =>
+      risersForRowMute(risersOnChannel(state.risers, 'ch-r1'), state.mixerMute)
+    const allMuted = channelAllMuted({ rifffs: [], channelRisers: rowRisers(), mute: {} })
+    expect(allMuted).toBe(true)
+
+    for (const action of rowMuteToggleActions(
+      'ch-r1',
+      allMuted,
+      risersOnChannel(state.risers, 'ch-r1')
+    ))
+      state = historyReducer(createHistoryState(state), action).present
+    expect(state.risers['r1'].muted).toBe(false)
+    expect(state.mixerMute['r1']).toBe(false)
+    expect(channelAllMuted({ rifffs: [], channelRisers: rowRisers(), mute: {} })).toBe(false)
+  })
+
+  it('unmuting a row with several old saved riser mutes is one undo step, and undo brings them all back', () => {
+    let present = withRiser('r1', 'ch-r1')
+    for (const [id, startBar] of [
+      ['r2', 8],
+      ['r3', 16]
+    ] as const)
+      present = reducer(present, {
+        type: 'ADD_RISER',
+        riser: createRiser({ id, channelId: 'ch-r1', startBar })
+      })
+    for (const id of ['r1', 'r2', 'r3'])
+      present = reducer(present, { type: 'SET_RISER_MUTE', id, muted: true })
+    expect(risersOnChannel(present.risers, 'ch-r1')).toHaveLength(3)
+
+    let history = createHistoryState(present)
+    for (const action of rowMuteToggleActions(
+      'ch-r1',
+      true,
+      risersOnChannel(history.present.risers, 'ch-r1')
+    ))
+      history = historyReducer(history, action)
+    expect(history.past).toHaveLength(1)
+    expect(['r1', 'r2', 'r3'].map((id) => history.present.risers[id].muted)).toEqual([
+      false,
+      false,
+      false
+    ])
+
+    history = historyReducer(history, { type: 'UNDO' })
+    expect(['r1', 'r2', 'r3'].map((id) => history.present.risers[id].muted)).toEqual([
+      true,
+      true,
+      true
+    ])
+  })
+
+  it('unmuting a row with no old saved riser mute adds no undo step', () => {
+    let history = createHistoryState(withRiser('r1', 'ch-r1'))
+    for (const action of rowMuteToggleActions(
+      'ch-r1',
+      true,
+      risersOnChannel(history.present.risers, 'ch-r1')
+    ))
+      history = historyReducer(history, action)
+    expect(history.past).toHaveLength(0)
+  })
+
+  it('a new row mute stays temporary: it never writes the saved riser mute', () => {
+    let state = withRiser('r1', 'ch-r1')
+    for (const action of rowMuteToggleActions(
+      'ch-r1',
+      false,
+      risersOnChannel(state.risers, 'ch-r1')
+    ))
+      state = historyReducer(createHistoryState(state), action).present
+    expect(state.mixerMute['r1']).toBe(true)
     expect(state.risers['r1'].muted).toBe(false)
   })
 

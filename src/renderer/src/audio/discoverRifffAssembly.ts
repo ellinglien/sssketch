@@ -1,6 +1,7 @@
 // src/renderer/src/audio/discoverRifffAssembly.ts
 import { stemKey, type Rifff, type Stem } from '@shared/types'
 import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
+import { disabledOnAdd } from '@shared/heard'
 
 /** One stem to include in an assembled Discover rifff, paired with its own
  * committed gain (0-1) -- gain lives OUTSIDE the Stem/Rifff shape itself
@@ -15,6 +16,9 @@ import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
 export interface DiscoverRifffMember {
   stem: Omit<Stem, 'slot'>
   gain: number
+  /** Not heard in Discover when it was added (muted, or left out by a solo): the member arrives
+   * Disabled (`mute` below), at its own `gain`. */
+  disabled?: boolean
 }
 
 export interface DiscoverRifffAssembly {
@@ -24,6 +28,52 @@ export interface DiscoverRifffAssembly {
    * whatever AppState.vol the caller is building (PLACE_LOOP_ON_TIMELINE's
    * own vol param, or a throwaway preview AppState). */
   vol: Record<string, number>
+  /** stemKey -> true for every `disabled` member: the saved Disable layer (state.mute), for
+   * ADD_TO_SHELF / PLACE_LOOP_ON_TIMELINE's own `mute`. Empty when every member is heard. */
+  mute: Record<string, boolean>
+}
+
+/** Whether a Discover row arrives Disabled when the loop is added to the shelf or timeline.
+ * Elling's rule (the 2026-10-08 call, F6): what you hear is what you get. A soloed row is the
+ * only one heard, even if it was muted underneath; without a solo, the muted rows (out of
+ * `previewing`) are the ones not heard. Disable is the saved layer, so they stay silent in the
+ * arrangement after a save, rather than the temporary mixer Mute, which a save drops. */
+export function discoverRowDisabledOnAdd(
+  id: string,
+  previewing: ReadonlySet<string>,
+  soloed: string | null
+): boolean {
+  return disabledOnAdd(id, !previewing.has(id), soloed)
+}
+
+/** One member of a kept group, as saveDiscoveredRifff writes it to the library. */
+export interface DiscoverKeepMember {
+  path: string
+  gain: number
+  name: string
+  author: string
+  barLength: number
+  durationSec: number
+}
+
+/** The members keep saves, from the same assembly add-to-shelf and add-to-timeline use. Keep
+ * follows their rule too (Elling, 2026-10-09: what you hear is what you get): a row that isn't
+ * heard (muted, or left out by a solo; `mute`) is saved at gain 0, as a muted row always was.
+ * The library has no Disable, so silence is the nearest thing, and the stem is still there to
+ * bring back up. */
+export function discoverKeepMembers(assembly: DiscoverRifffAssembly): DiscoverKeepMember[] {
+  const { rifff, vol, mute } = assembly
+  return rifff.stems.map((stem) => {
+    const key = stemKey(rifff.groupId, stem.slot)
+    return {
+      path: stem.path,
+      gain: mute[key] ? 0 : (vol[key] ?? 1),
+      name: stem.name,
+      author: stem.author,
+      barLength: stem.barLength,
+      durationSec: stem.durationSec
+    }
+  })
 }
 
 // The persisted ceiling on one rifff: 20. Riffs.StemCID_1..8 addresses the
@@ -132,9 +182,11 @@ export function assembleDiscoverRifff(
   // what you hear, full stop -- the earlier loudness-matching goal was
   // real but secondary to that.
   const vol: Record<string, number> = {}
-  capped.forEach(({ gain }, i) => {
+  const mute: Record<string, boolean> = {}
+  capped.forEach(({ gain, disabled }, i) => {
     vol[stemKey(groupId, i + 1)] = gain
+    if (disabled) mute[stemKey(groupId, i + 1)] = true
   })
 
-  return { rifff, vol }
+  return { rifff, vol, mute }
 }

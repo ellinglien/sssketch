@@ -20,7 +20,7 @@ const VISIBLE_MS = 14_000
  *
  * Keyed on the project-opened count (StoreContext's restoreState), not on the slots, so an edit
  * never brings it back; it waits for main's answer on the switch, so a project restored at
- * startup still gets it. Same look and place as StemsUnavailableIndicator, one row below. */
+ * startup still gets it. Same look as StemsUnavailableIndicator, stacked below it (TopRightNotices). */
 export function PluginsOffNotice(): React.JSX.Element | null {
   const openCount = useSyncExternalStore(subscribeProjectOpened, projectOpenedCount)
   const masterChain = useAppSelector((s) => s.masterChain)
@@ -47,10 +47,7 @@ export function PluginsOffNotice(): React.JSX.Element | null {
       onClick={() => setDismissedCount(openCount)}
       title="plugins are off"
       style={{
-        position: 'fixed',
-        top: 100,
-        right: 10,
-        zIndex: 2000,
+        pointerEvents: 'auto',
         display: 'flex',
         alignItems: 'center',
         gap: 6,
@@ -73,7 +70,7 @@ export function PluginsOffNotice(): React.JSX.Element | null {
 /** While plugins are switched off but still loaded ('held': their settings couldn't be read back,
  * so they were left in the engine rather than lost): says so, and whether it is still trying. Stays
  * up as long as that lasts -- turning advanced features back on ends it, keeping the plugins as
- * they are. One row below PluginsOffNotice. */
+ * they are. Stacked below PluginsOffNotice (TopRightNotices). */
 export function PluginsHeldNotice(): React.JSX.Element | null {
   const status = useSyncExternalStore(subscribePluginsHeld, pluginsHeldStatus)
   if (status === 'none') return null
@@ -82,10 +79,7 @@ export function PluginsHeldNotice(): React.JSX.Element | null {
       role="status"
       title="plugins still loaded"
       style={{
-        position: 'fixed',
-        top: 128,
-        right: 10,
-        zIndex: 2000,
+        pointerEvents: 'auto',
         padding: '5px 10px',
         background: 'var(--ra-bg-bar)',
         border: '1px solid var(--ra-border)',

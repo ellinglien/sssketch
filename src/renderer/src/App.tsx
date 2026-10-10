@@ -11,6 +11,7 @@ import {
 } from 'react'
 import {
   StoreProvider,
+  getStateSnapshot,
   useAppSelector,
   useAppState,
   useDispatch,
@@ -20,6 +21,9 @@ import {
   useRestoreState,
   useZoom
 } from './state/StoreContext'
+import { setReonedSessionRoot } from './state/reonedInUse'
+import { openWithReonedRepair } from './state/reonedRepairOnOpen'
+import { reconcileReonedMissing, setReonedMissing } from './state/reonedMissing'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
 import { Ruler, PPB } from './components/Ruler'
@@ -30,7 +34,9 @@ import {
 } from './components/zoomMath'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
-import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './components/arrangementMixerRail'
+import { ARRANGEMENT_MIXER_RAIL_WIDTH, railWheelGesture } from './components/arrangementMixerRail'
+import { useScrollbarInsets } from './components/useScrollbarInsets'
+import { undoRouter, undoShortcutFor } from './state/undoRouting'
 import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
 import { CrossPanel } from './components/CrossPanel'
@@ -96,6 +102,28 @@ import { BackgroundWorkIndicator } from './components/BackgroundWorkIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { StemsUnavailableIndicator } from './components/StemsUnavailableIndicator'
 import { PluginsHeldNotice, PluginsOffNotice } from './components/PluginsOffNotice'
+import { ReonedCopyMissingNotice } from './components/ReonedCopyMissingNotice'
+import { ReonedCopiesNotice } from './components/ReonedCopiesNotice'
+import { ReoneNotice } from './components/ReoneNotice'
+import { SaveCopyNotice } from './components/SaveCopyNotice'
+import { TopRightNotices } from './components/TopRightNotices'
+import { showSaveCopyNotice } from './state/saveCopyNotice'
+import { saveAsNewVersion } from './state/saveAsNewVersion'
+import {
+  SAVE_AS_NEW_VERSION_HINT,
+  SAVE_AS_NEW_VERSION_LABEL,
+  SAVE_COPY_TO_FILE_HINT,
+  SAVE_COPY_TO_FILE_LABEL,
+  copyToFileConfirmation
+} from '@shared/saveCopyText'
+import { showReoneNotice } from './state/reoneNotice'
+import { reoneSiblings, siblingsNotReonedText } from '@shared/reoneNotices'
+import {
+  activeSeedPhase,
+  discoverSeedPhase as seedPhaseOfStems,
+  type DiscoverSeedPhase
+} from '@shared/discoverSeedPhase'
+import { phaseLineage } from '@shared/reonedRotation'
 import { StartupGate } from './components/StartupGate'
 import { OwnUsernameReporter } from './components/OwnUsernameReporter'
 import { markManualSeek } from './state/manualSeek'
@@ -108,6 +136,7 @@ import {
   nextArrangerMode,
   isSketchEligible,
   groupIdAtPosition,
+  sketchSoundingGroupId,
   resolvePlayedBars,
   resolvedPlayedBarsFromFields
 } from './state/selectors'
@@ -134,6 +163,7 @@ import {
   type ShapeDraft
 } from '@shared/shape'
 import { stopActivePreview } from './audio/previewLoop'
+import { loadSavedPreviewLevel } from './audio/previewOutput'
 import { assessTidyUpReadiness, unbussedStemPaths } from '@shared/tidyUpReadiness'
 import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
@@ -154,12 +184,16 @@ import {
 } from './state/pendingPluginStates'
 import {
   autosaveAction,
+  autosaveWaitsOnRecoveryOffer,
+  recoverySnapshotHasContent,
   autosaveDelayMs,
   createAutosaveGate,
   dirtyCheckJson,
   liveSettingsForSave,
   projectJsonForSave,
-  saveCompletionIsCurrent
+  saveCompletionIsCurrent,
+  saveOutcomeNotice,
+  type SaveOutcome
 } from './state/saveSerialization'
 import { slotsEngineHolds } from '@shared/pluginSwitch'
 import type { PluginStatesMap } from '@shared/pluginStates'
@@ -212,6 +246,13 @@ const GHOST_ROW_HEIGHT = 44
 // No Node `path` module in the renderer -- a plain string split covers what
 // this needs (an externally-opened sketch's own file name, sans its project
 // extension, as an Ableton export's default suggested filename).
+/** An open that failed after openWithReonedRepair set the new project's missing copies: the
+ * project in the store (the previous one, or the new one if it got that far) keeps only the
+ * entries it names, so the pill and the retry never chase another project's copies. */
+function reonedOpenFailed(): void {
+  reconcileReonedMissing(getStateSnapshot().rifffs)
+}
+
 function basenameWithoutProjectExt(filePath: string): string {
   const base = filePath.split(/[\\/]/).pop() ?? filePath
   return base.replace(/\.sssketchproj$/i, '')
@@ -525,9 +566,11 @@ function Timeline({
   // whatever clip happened to sit near that stale boundary. Setting this
   // width explicitly (redundant with Ruler's own width, but that's fine --
   // it's the source of truth for "how wide is the whole timeline") gives
-  // every child the correct wide containing block, so sticky tracks the
-  // real viewport edge exactly like Ruler's own horizontal scroll already
-  // does correctly.
+  // every child the correct wide containing block. That alone wasn't enough
+  // for the sticky stack, though: a full-width sticky box fills its row and
+  // can't move, so the controls sat at the timeline's END. MixerRailAnchor
+  // makes it zero-width at the row's end, which is what lets it slide to the
+  // viewport's right edge (the mixer rail).
   //
   // minWidth:'100%' alongside the explicit width (rather than just the
   // explicit width alone) keeps this filling the full viewport on a short
@@ -742,29 +785,46 @@ function ProjectMenu({
 
   async function handleSaveCopyElsewhere(): Promise<void> {
     try {
-      await window.rifffApi.saveProject(await serializeForSave())
+      // Writes a copy and changes nothing about the project you're in: no
+      // switch, and it stays exactly as saved or unsaved as it was.
+      const written = await window.rifffApi.saveProject(await serializeForSave())
+      if (written === null) return
+      const currentName =
+        currentSketch === null
+          ? null
+          : currentSketch.kind === 'library'
+            ? currentSketch.name
+            : basenameWithoutProjectExt(currentSketch.path)
+      showSaveCopyNotice(copyToFileConfirmation(written, currentName))
     } catch (err) {
       console.error('ProjectMenu: failed to save a copy elsewhere:', err)
-      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
+      window.alert(`save failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
   async function handleDuplicateAsNewVersion(): Promise<void> {
     if (currentSketch === null || currentSketch.kind !== 'library') return
-    try {
-      // The live project -- unsaved edits and plugin settings included --
-      // goes straight into the new version; the ORIGINAL sketch is never
-      // written (it keeps what it last saved).
-      const touchedVersion = pluginsTouchedSnapshot().version
-      const json = await serializeForSave()
-      const result = await window.rifffApi.duplicateSketch(currentSketch.name, json)
-      if (!result) return
-      setCurrentSketch({ kind: 'library', name: result.name })
-      markSaved(touchedVersion)
-    } catch (err) {
-      console.error('ProjectMenu: failed to duplicate sketch as a new version:', err)
-      window.alert(`Duplicate failed: ${err instanceof Error ? err.message : String(err)}`)
+    // Saves the original first, as save does, then writes the same project as the next numbered
+    // version and moves you into it (state/saveAsNewVersion.ts). A failed save makes no copy.
+    const touchedVersion = pluginsTouchedSnapshot().version
+    const outcome = await saveAsNewVersion(currentSketch.name, {
+      serialize: () => serializeForSave(),
+      saveOriginal: (name, json) => window.rifffApi.saveProjectToLibrary(name, json),
+      writeCopy: (name, json) => window.rifffApi.duplicateSketch(name, json)
+    })
+    if (outcome.kind === 'save-failed') {
+      window.alert(outcome.alert)
+      return
     }
+    if (outcome.kind === 'copy-failed') {
+      // The original's save landed: it counts as saved, and you stay in it.
+      markSaved(touchedVersion)
+      window.alert(outcome.alert)
+      return
+    }
+    setCurrentSketch({ kind: 'library', name: outcome.copyName })
+    markSaved(touchedVersion)
+    showSaveCopyNotice(outcome.notice)
   }
 
   async function handleExportMix(): Promise<void> {
@@ -786,7 +846,7 @@ function ProjectMenu({
       // Export now has exactly one code path (the native engine, with no Web
       // Audio fallback) — a spawn/render failure here would otherwise reset
       // the button with zero visible indication anything went wrong.
-      window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+      window.alert(`export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setExporting(false)
     }
@@ -829,7 +889,7 @@ function ProjectMenu({
           if (
             warn &&
             !window.confirm(
-              "This sketch's Ableton export has been modified since the last export from sssketch (likely from mixing directly in Ableton). Exporting again will overwrite it. Continue?"
+              "this sketch's ableton export has been modified since the last export from sssketch (likely from mixing directly in ableton). exporting again will overwrite it. continue?"
             )
           ) {
             return
@@ -888,7 +948,7 @@ function ProjectMenu({
       if (wrote) markV1Exported()
     } catch (err) {
       console.error(`ProjectMenu: failed to export (${format}):`, err)
-      window.alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+      window.alert(`export failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setExporting(false)
     }
@@ -1010,10 +1070,22 @@ function ProjectMenu({
           ignoreRef={saveButtonRef}
           items={[
             { label: 'save', onClick: handleSave },
-            { label: 'save a copy elsewhere…', onClick: handleSaveCopyElsewhere },
+            // Named for what each leaves you in (@shared/saveCopyText): the
+            // new version switches you to the copy, the file copy doesn't.
             ...(currentSketch !== null && currentSketch.kind === 'library'
-              ? [{ label: 'save a copy', onClick: handleDuplicateAsNewVersion }]
-              : [])
+              ? [
+                  {
+                    label: SAVE_AS_NEW_VERSION_LABEL,
+                    hint: SAVE_AS_NEW_VERSION_HINT,
+                    onClick: handleDuplicateAsNewVersion
+                  }
+                ]
+              : []),
+            {
+              label: SAVE_COPY_TO_FILE_LABEL,
+              hint: SAVE_COPY_TO_FILE_HINT,
+              onClick: handleSaveCopyElsewhere
+            }
           ]}
           onClose={() => setSaveMenu(null)}
         />
@@ -1033,7 +1105,7 @@ function ProjectMenu({
           const rect = e.currentTarget.getBoundingClientRect()
           setGearMenu({ x: rect.left, y: rect.bottom + 4 })
         }}
-        aria-label="More arranger options"
+        aria-label="more arranger options"
         title="tidy options"
         data-tour-id="tour-tidy"
         style={{
@@ -1194,12 +1266,27 @@ const TOUR_SEEN_STORAGE_KEY = 'sssketch:tourSeen'
  * sluggish visuals during playback on any project with a nontrivial clip
  * count. Isolating the subscription here means only this invisible
  * component (cheap: no DOM, no children) re-renders on each tick instead. */
-function SketchModeAutoFollow(): null {
+function SketchModeAutoFollow({
+  onSoundingChange
+}: {
+  /** The riff Sketch is playing now, or null (sketchSoundingGroupId), reported
+   * only when it changes so Frame doesn't re-render on every position tick.
+   * The shelf marks that riff's tile. */
+  onSoundingChange: (groupId: string | null) => void
+}): null {
   const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
   const pos = usePos()
   const autoFollowedGroupIdRef = useRef<string | null>(null)
+  const soundingRef = useRef<string | null>(null)
+  useEffect(() => {
+    const sounding = sketchSoundingGroupId(state, playing, pos)
+    if (sounding !== soundingRef.current) {
+      soundingRef.current = sounding
+      onSoundingChange(sounding)
+    }
+  }, [state, playing, pos, onSoundingChange])
   useEffect(() => {
     if (state.mode !== 'sketch' || !playing) {
       autoFollowedGroupIdRef.current = null
@@ -1366,10 +1453,21 @@ function Frame(): React.JSX.Element {
   // When the first change not yet autosaved happened (null: none), for the
   // autosave's max wait (AUTOSAVE_MAX_WAIT_MS).
   const autosaveUnsavedSinceRef = useRef<number | null>(null)
+  // This session is done with the recovery file (a save, a discard of its
+  // unsaved work, a welcome button). Main deletes it, or moves it aside when
+  // it is a previous session's snapshot still awaiting Recover or Discard
+  // (projectFile.ts's clearAutosave), so it is offered again next launch.
   function clearAutosaveNow(): void {
     autosaveGateRef.current.bump()
     autosaveWrittenRef.current = false
     void window.rifffApi.clearAutosave()
+  }
+  // The user decided on the offered snapshot (Recover or Discard), or it held
+  // nothing worth offering: deleted for good.
+  async function discardRecoveryNow(): Promise<void> {
+    autosaveGateRef.current.bump()
+    autosaveWrittenRef.current = false
+    await window.rifffApi.discardAutosave()
   }
 
   /** `saved` is now durably on disk as the open project: the unsaved-changes
@@ -1381,6 +1479,11 @@ function Frame(): React.JSX.Element {
     autosaveGateRef.current.bump()
     // Every save path clears the recovery file in main (projectFile.ts).
     autosaveWrittenRef.current = false
+    // A save moves a still-offered previous snapshot aside in main, replacing
+    // the kept older one: neither is on disk as offered any more. Both stay
+    // for the next launch's offer.
+    setRecoverableAutosave(null)
+    setRecoverablePrevious(null)
     setSaveVersion((v) => v + 1)
   }
 
@@ -1466,7 +1569,11 @@ function Frame(): React.JSX.Element {
    * quit-time save) can tell a real failure (disk full, permission denied,
    * etc.) apart from a resolved promise and avoid proceeding to discard/
    * replace the live project on top of a save that never landed. */
-  async function handleSave(stateToSave: AppState = stateRef.current): Promise<boolean> {
+  /** Writes the live project (or `stateToSave`, the exact state a departure
+   * save publishes an EEEDIT draft into first) and says how it went, without
+   * telling the user anything itself (saveOutcomeNotice decides that): the quit
+   * prompt's save has to answer main before an alert can block the renderer. */
+  async function saveProjectNow(stateToSave: AppState = stateRef.current): Promise<SaveOutcome> {
     try {
       const touchedVersion = pluginsTouchedSnapshot().version
       const savedDirtyJson = dirtyCheckJson(stateToSave)
@@ -1487,11 +1594,32 @@ function Frame(): React.JSX.Element {
         touchedVersion,
         pluginsTouchedSnapshot().version
       )
+        ? { kind: 'saved' }
+        : { kind: 'changed' }
     } catch (err) {
       console.error('Frame: failed to save project:', err)
-      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
-      return false
+      return { kind: 'failed', error: err instanceof Error ? err.message : String(err) }
     }
+  }
+
+  /** The Save button and Cmd+S: true when the write landed. Newer edits made
+   * while it was in flight just leave the project marked unsaved. */
+  async function handleSave(): Promise<boolean> {
+    const outcome = await saveProjectNow()
+    const notice = saveOutcomeNotice(outcome, 'save')
+    if (notice) window.alert(notice)
+    return outcome.kind !== 'failed'
+  }
+
+  /** Saving before something that closes or replaces the live project
+   * (quit's Save, and Save in the discard guard before New or opening
+   * another). True only when the save holds the newest edits; on false the
+   * caller must not go on, and the user has already been told why. */
+  async function saveBeforeLeaving(): Promise<boolean> {
+    const outcome = await saveProjectBeforeLeavingNow()
+    const notice = saveOutcomeNotice(outcome, 'leaving')
+    if (notice) window.alert(notice)
+    return outcome.kind === 'saved'
   }
 
   /** Shared discard-guard -- called from every place about to replace the
@@ -1525,8 +1653,8 @@ function Frame(): React.JSX.Element {
       return
     }
     if (choice === 'save') {
-      const saved = await handleSaveForDeparture()
-      // Save failed (handleSave already alerted) -- the live project is
+      const saved = await saveBeforeLeaving()
+      // Save failed (saveBeforeLeaving already alerted) -- the live project is
       // still safely in the editor and unsaved, so bail out here rather
       // than opening the new-project modal, which would discard it.
       if (!saved) {
@@ -1573,8 +1701,9 @@ function Frame(): React.JSX.Element {
         invalidateShapeSession()
         projectSessionEpochRef.current = crypto.randomUUID()
         dispatch({ type: 'LOAD_STATE', state: freshState })
-        // The previous project's saved plugin settings are not this one's.
+        // The previous project's saved plugin settings are not this one's, nor its missing copies.
         replacePendingPluginStates({})
+        setReonedMissing([])
         lastSavedJsonRef.current = dirtyCheckJson(freshState)
         setCurrentSketch({ kind: 'library', name })
         setNewProjectModal(null)
@@ -1603,6 +1732,17 @@ function Frame(): React.JSX.Element {
   // normal new/open welcome -- see its own doc comment for why the view is
   // derived from this prop rather than mirrored into local state there.
   const [recoverableAutosave, setRecoverableAutosave] = useState<{ json: string } | null>(null)
+  // The one kept older snapshot (projectFile.ts's loadPreviousAutosave): a
+  // past session's offer that was left undecided and moved aside when that
+  // session needed the recovery file. Offered next to the current one.
+  const [recoverablePrevious, setRecoverablePrevious] = useState<{
+    json: string
+    sketchJson: string | null
+  } | null>(null)
+  // The welcome's x (hideOnboardingForSession, below): closed for this session
+  // without recovering or discarding. Declared here because the autosave
+  // effect below keys off it (autosaveWaitsOnRecoveryOffer).
+  const [onboardingDismissedForSession, setOnboardingDismissedForSession] = useState(false)
 
   // Once, on mount: check for a crash-recovery snapshot and, if real,
   // surface it via recoverableAutosave for OnboardingModal to offer --
@@ -1636,14 +1776,18 @@ function Frame(): React.JSX.Element {
       // on their very next launch for content that was never really
       // there. Matches the same Object.keys(...).length > 0 definition
       // of "real" already used by the New-project dirty check above.
-      if (json !== null && Object.keys(JSON.parse(json).rifffs ?? {}).length > 0) {
+      if (json !== null && recoverySnapshotHasContent(json)) {
         setRecoverableAutosave({ json })
-        return
+      } else if (json) {
+        // Autosave file exists but has no real content (see above) -- delete
+        // it so it doesn't linger and get offered on some later launch once
+        // it might coincidentally look more "real."
+        await discardRecoveryNow()
       }
-      // Autosave file exists but has no real content (see above) -- clear
-      // it so it doesn't linger and get offered on some later launch once
-      // it might coincidentally look more "real."
-      if (json) clearAutosaveNow()
+      const previous = await window.rifffApi.loadPreviousAutosave()
+      if (previous !== null && recoverySnapshotHasContent(previous.json))
+        setRecoverablePrevious(previous)
+      else if (previous !== null) void window.rifffApi.discardPreviousAutosave()
     })()
   }, [dispatch])
 
@@ -1652,12 +1796,35 @@ function Frame(): React.JSX.Element {
    * writeAutosaveSketchInfo/loadAutosaveSketchInfo -- without this, the
    * next routine Save after a recovered library sketch would silently
    * fork a brand-new library entry instead of writing back to the sketch
-   * the recovered content actually came from), clears the snapshot, and
-   * dismisses the welcome modal. */
+   * the recovered content actually came from), deletes the snapshot, and
+   * closes the welcome modal. A kept older snapshot stays on disk, offered
+   * again next launch. */
   async function handleRecoverAutosave(dontShowAgain: boolean): Promise<void> {
     if (!recoverableAutosave) return
+    await loadRecoveredSnapshot(
+      recoverableAutosave.json,
+      await window.rifffApi.loadAutosaveSketch()
+    )
+    await discardRecoveryNow()
+    setRecoverableAutosave(null)
+    closeWelcome(dontShowAgain)
+  }
+
+  /** "recover older": the same for the kept older snapshot. The current
+   * snapshot, if one is still offered, is left undecided: the welcome's
+   * other buttons' rule applies (dismissOnboarding), so main moves it aside
+   * into the slot this just emptied. */
+  async function handleRecoverPrevious(dontShowAgain: boolean): Promise<void> {
+    if (!recoverablePrevious) return
+    await loadRecoveredSnapshot(recoverablePrevious.json, recoverablePrevious.sketchJson)
+    await window.rifffApi.discardPreviousAutosave()
+    setRecoverablePrevious(null)
+    dismissOnboarding(dontShowAgain)
+  }
+
+  async function loadRecoveredSnapshot(json: string, sketchJson: string | null): Promise<void> {
     const { state: loaded, pluginStates } = deserializeProject(
-      JSON.parse(recoverableAutosave.json),
+      JSON.parse(json),
       await appSoundDefaults()
     )
     // Same pre-warm-before-LOAD_STATE reasoning as the library browser's
@@ -1665,13 +1832,20 @@ function Frame(): React.JSX.Element {
     // strip rendering with blank waveforms that pop in one at a time as
     // each mounted component's own decode finishes.
     setBusy('loading…')
-    await warmStemCaches(loaded)
-    invalidateShapeSession()
-    projectSessionEpochRef.current = crypto.randomUUID()
-    restoreState(loaded, pluginStates)
-    lastSavedJsonRef.current = dirtyCheckJson(loaded)
+    // Missing re-oned copies are rebuilt before the engine sees the project; the baseline is the
+    // snapshot as saved, so only a copy that moved shows as unsaved (reonedRepairOnOpen.ts).
+    const opened = await openWithReonedRepair(loaded)
+    try {
+      await warmStemCaches(opened.state)
+      invalidateShapeSession()
+      projectSessionEpochRef.current = crypto.randomUUID()
+      restoreState(opened.state, pluginStates)
+    } catch (err) {
+      reonedOpenFailed()
+      throw err
+    }
+    lastSavedJsonRef.current = opened.savedJson
     setBusy(null)
-    const sketchJson = await window.rifffApi.loadAutosaveSketch()
     // The sketch-info sidecar can be missing/corrupted even when the
     // content autosave above recovered fine (they're written/read
     // independently). Falling back to null here would leave real
@@ -1682,9 +1856,6 @@ function Frame(): React.JSX.Element {
         ? (JSON.parse(sketchJson) as CurrentSketch)
         : { kind: 'library', name: await window.rifffApi.generateDefaultProjectName() }
     )
-    clearAutosaveNow()
-    setRecoverableAutosave(null)
-    dismissOnboarding(dontShowAgain)
   }
 
   /** OnboardingModal's "discard" button -- clears the snapshot, which is
@@ -1698,8 +1869,13 @@ function Frame(): React.JSX.Element {
    * "don't show this again," now that there's no longer a risk of
    * stranding the user on a bare recovery screen with no other buttons). */
   function handleDiscardRecovery(): void {
-    clearAutosaveNow()
+    void discardRecoveryNow()
     setRecoverableAutosave(null)
+  }
+
+  function handleDiscardPreviousRecovery(): void {
+    void window.rifffApi.discardPreviousAutosave()
+    setRecoverablePrevious(null)
   }
 
   // Debounced crash-recovery autosave — fires AUTOSAVE_DEBOUNCE_MS after the
@@ -1731,7 +1907,12 @@ function Frame(): React.JSX.Element {
   // touched yet -- destroying the exact safety net crash recovery exists
   // to provide. Resumes normally as soon as recoverableAutosave flips back
   // to null (Recover or Discard, both in handleRecoverAutosave/
-  // handleDiscardRecovery above).
+  // handleDiscardRecovery above), or the welcome is closed with its x
+  // (autosaveWaitsOnRecoveryOffer): the snapshot then stays until this
+  // session has unsaved work, whose first write moves it aside in main as
+  // the kept older snapshot (projectFile.ts), offered again next launch.
+  // Waiting for the rest of the session left that work with no crash
+  // protection.
   //
   // Also restarted by a plugin being touched (pluginsTouched.version: a knob
   // turned in an open editor), so a plugin-only change is autosaved too --
@@ -1746,7 +1927,13 @@ function Frame(): React.JSX.Element {
   // checkPluginEdits): one marks the plugins touched, which restarts this
   // effect, and its next tick writes.
   useEffect(() => {
-    if (recoverableAutosave !== null) return
+    if (
+      autosaveWaitsOnRecoveryOffer({
+        recoveryPending: recoverableAutosave !== null,
+        offerDismissed: onboardingDismissedForSession
+      })
+    )
+      return
     const now = Date.now()
     autosaveUnsavedSinceRef.current ??= now
     const delay = autosaveDelayMs(
@@ -1783,6 +1970,14 @@ function Frame(): React.JSX.Element {
           autosaveWrittenRef.current = true
           await window.rifffApi.autosaveProject(json)
           await window.rifffApi.autosaveProjectSketch(sketchJson)
+          // A previous session's snapshot, left by the welcome's x, is now
+          // moved aside in main, replacing the kept older one: what is left on
+          // disk is this session's, so offering either again here would
+          // recover or delete the wrong file. The next launch offers it.
+          if (recoverableAutosave !== null) {
+            setRecoverableAutosave(null)
+            setRecoverablePrevious(null)
+          }
         })
         .catch((err) => console.error('Frame: crash-recovery autosave failed:', err))
     }, delay)
@@ -1791,7 +1986,13 @@ function Frame(): React.JSX.Element {
       window.clearTimeout(id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- serializeForSave is a fresh closure every render over this render's `state`, the one persistedJson was made from; keyed on persistedJson (not state) so a transient UI change doesn't restart the debounce (see above)
-  }, [persistedJson, currentSketch, recoverableAutosave, pluginsTouched.version])
+  }, [
+    persistedJson,
+    currentSketch,
+    recoverableAutosave,
+    onboardingDismissedForSession,
+    pluginsTouched.version
+  ])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [riffLibraryOpen, setRiffLibraryOpen] = useState(false)
   // Direct request, 2026-09-17: "i've had to close discover occasionally
@@ -1867,6 +2068,11 @@ function Frame(): React.JSX.Element {
     departureShapeSnapshotRef.current = null
     setProjectDepartureLocked(false)
   }
+  // The re-oned copies cleanup counts what Cross and Discover hold as in use (reonedInUse.ts).
+  // The saved preview level, before the first preview plays (audio/previewOutput.ts).
+  useEffect(() => loadSavedPreviewLevel(), [])
+  useEffect(() => setReonedSessionRoot('cross', crossDraft), [crossDraft])
+  useEffect(() => setReonedSessionRoot('discover', discoverSlots), [discoverSlots])
   // One shared, session-only riff selection for both Sketch and Shelf.
   // Keeping this above the fullscreen Cross/Discover workspaces means the
   // exact working set remains highlighted when either workspace closes;
@@ -1874,6 +2080,9 @@ function Frame(): React.JSX.Element {
   // state, not musical project data. The anchor is separate from state.sel:
   // Sketch's playback auto-follow legitimately changes state.sel as the
   // playhead advances, but must not collapse a deliberate two-riff choice.
+  // The riff Sketch is playing right now (SketchModeAutoFollow), for the
+  // shelf's playhead-coloured edge on its tile.
+  const [sketchSoundingId, setSketchSoundingId] = useState<string | null>(null)
   const [riffSelection, setRiffSelection] = useState<{
     ids: Set<string>
     anchorId: string | null
@@ -1965,7 +2174,22 @@ function Frame(): React.JSX.Element {
   const [discoverChaos, setDiscoverChaos] = useState(DEFAULT_DISCOVER_CHAOS)
   const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>([])
   const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
+  // An undo or redo in Discover can bring back a slot seeded from a copy (reonedInUse.ts).
+  useEffect(
+    () => setReonedSessionRoot('discover-history', [discoverUndoStack, discoverRedoStack]),
+    [discoverUndoStack, discoverRedoStack]
+  )
   const [discoverSeedBpm, setDiscoverSeedBpm] = useState<number | null>(null)
+  // The open Discover seed's rotation, per jam: a candidate from the seed's own jam is baked by
+  // it (discoverCandidateStem.ts), so it plays in phase with the seed. Set with the seed, like
+  // discoverSeedBpm; null for a seed at its raw phase.
+  const [discoverSeedPhase, setDiscoverSeedPhase] = useState<DiscoverSeedPhase | null>(null)
+  // What Discover resolves with: the seed's phase only while a seed row is there
+  // (activeSeedPhase), so it lapses with the seed rows and comes back with them on undo.
+  const activeDiscoverSeedPhase = useMemo(
+    () => activeSeedPhase(discoverSeedPhase, discoverSlots),
+    [discoverSeedPhase, discoverSlots]
+  )
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
   // welcome modal (suppresses it below while this is up), since knowing
   // where your work lives is more foundational than a feature tour. Never
@@ -2018,29 +2242,31 @@ function Frame(): React.JSX.Element {
       return true
     }
   })
-  const [onboardingDismissedForSession, setOnboardingDismissedForSession] = useState(false)
-
   function hideOnboardingForSession(): void {
     setShowOnboarding(false)
     setOnboardingDismissedForSession(true)
   }
 
   function dismissOnboarding(dontShowAgain: boolean): void {
-    setShowOnboarding(false)
-    setOnboardingDismissedForSession(true)
     // Choosing any of this modal's normal actions (new/open/login/tour)
     // while a recovery notice is still showing (see OnboardingModal's own
     // doc comment -- the notice now sits ON TOP OF those buttons rather
-    // than replacing them) is an implicit "not recovering this" -- without
-    // clearing it here too, recoverableAutosave staying non-null would
-    // immediately reopen this same modal on the next render (its render
-    // condition ORs on recoverableAutosave !== null). handleRecoverAutosave
-    // already nulls it out itself before calling this, so this is a no-op
-    // on that path.
+    // than replacing them) moves on without recovering, but it isn't a
+    // decision to throw the snapshot away either: main moves it aside as the
+    // kept older snapshot (clearAutosaveNow, projectFile.ts), offered again
+    // next launch, and this session's autosave is free to run.
     if (recoverableAutosave !== null) {
       clearAutosaveNow()
       setRecoverableAutosave(null)
+      // Replaced on disk by the one just moved aside.
+      setRecoverablePrevious(null)
     }
+    closeWelcome(dontShowAgain)
+  }
+
+  function closeWelcome(dontShowAgain: boolean): void {
+    setShowOnboarding(false)
+    setOnboardingDismissedForSession(true)
     if (!dontShowAgain) return
     try {
       localStorage.setItem(ONBOARDING_SEEN_STORAGE_KEY, '1')
@@ -2228,7 +2454,7 @@ function Frame(): React.JSX.Element {
     const hasExistingContent = Object.keys(state.rifffs).length > 0
     if (
       hasExistingContent &&
-      !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
+      !window.confirm('start the tour? this adds a demo rifff to your current sketch.')
     ) {
       return
     }
@@ -2342,47 +2568,46 @@ function Frame(): React.JSX.Element {
     if (
       hasRealContent &&
       !window.confirm(
-        "Replace the current Discover loop with this riff's stems? Whatever you've built so far in Discover will be lost."
+        "replace the current discover loop with this riff's stems? whatever you've built so far in discover will be lost."
       )
     ) {
       return
     }
     shapePreviewStopRef.current?.()
-    let seedRifff = rifff
-    const groupSteps = state.off[rifff.groupId] ?? 0
-    const effectiveSteps = new Map(
-      rifff.stems.map((stem) => [
-        stem.slot,
-        state.off[stemKey(rifff.groupId, stem.slot)] ?? groupSteps
-      ])
-    )
-    if ([...effectiveSteps.values()].some((steps) => steps !== 0)) {
-      // Discover's library/Keep formats do not carry runtime phase. Make
-      // the exact effective phase of every source stem physical first, as
-      // one immutable all-or-nothing batch, then seed from those returned
-      // paths. This also repairs the intended per-stem precedence of a
-      // legacy partial bake instead of copying its contradictory off map.
-      const results = await bakeStems(
-        dispatch,
-        (stem) => effectiveSteps.get(stem.slot) ?? 0,
-        SNAP_DIVS[state.snapIdx],
-        rifff.stems,
-        [rifff.groupId]
+    // Discover's library/Keep formats do not carry runtime phase, so the
+    // exact effective phase of every source stem is made physical first, as
+    // one immutable all-or-nothing batch, and Discover is seeded from those
+    // files. Auditioning a riff in Discover must not edit the project: this
+    // renders the bake without adopting it into the riff (no APPLY_BAKE), as
+    // Cross does for its parents, so opening Discover leaves the project
+    // saved and its undo history alone. A riff with no live phase is used as
+    // it is.
+    // Can reject (the bake IPC failing outright); callers fire this and
+    // forget, so a rejection here would vanish without a word.
+    let seedRifff: Rifff | null
+    try {
+      seedRifff = await rifffForSketchCross(rifff, state.off, SNAP_DIVS[state.snapIdx], (jobs) =>
+        window.rifffApi.bakeOffset(jobs)
       )
-      if (!results) {
-        window.alert('Could not prepare every stem for Discover. Nothing was changed; try again.')
-        return
-      }
-      const byPath = new Map(results.map((result) => [result.path, result]))
-      seedRifff = {
-        ...rifff,
-        stems: rifff.stems.map((stem) => {
-          const result = byPath.get(stem.path)
-          return result
-            ? { ...stem, path: result.bakedPath, durationSec: result.durationSec }
-            : stem
-        })
-      }
+    } catch (err) {
+      console.error('App: failed to prepare a riff for Discover:', err)
+      window.alert('could not prepare this riff for discover. nothing was changed; try again.')
+      return
+    }
+    if (!seedRifff) {
+      window.alert('could not prepare every stem for discover. nothing was changed; try again.')
+      return
+    }
+    // Which jam each seed stem's original is from, so candidates rolled from the same jam can be
+    // baked by the seed's rotation. If the lookup fails, only the seed's own stems are known.
+    let seedPhase: DiscoverSeedPhase | null = null
+    try {
+      const originals = seedRifff.stems.map((stem) => phaseLineage(stem).sourcePath)
+      const { jams, names } = await window.rifffApi.riffLibraryStemJams(originals)
+      seedPhase = seedPhaseOfStems(seedRifff.stems, jams, names)
+    } catch (err) {
+      console.error("App: couldn't look up the Discover seed's jams:", err)
+      seedPhase = seedPhaseOfStems(seedRifff.stems, {})
     }
 
     setLibraryBrowserOpen(false)
@@ -2401,6 +2626,7 @@ function Frame(): React.JSX.Element {
     setDiscoverUndoStack([[]])
     setDiscoverRedoStack([])
     setDiscoverSeedBpm(rifff.bpm)
+    setDiscoverSeedPhase(seedPhase)
     setRiffLibraryOpen(true)
   }
 
@@ -2433,7 +2659,7 @@ function Frame(): React.JSX.Element {
         )
       )
       if (!prepared[0] || !prepared[1]) {
-        window.alert('Could not prepare every stem for Cross. Nothing was changed; try again.')
+        window.alert('could not prepare every stem for cross. nothing was changed; try again.')
         return
       }
       setCrossDraft({
@@ -2443,7 +2669,7 @@ function Frame(): React.JSX.Element {
           crossParentFromRifff(prepared[1], state.vol),
           state.bpm
         ),
-        // Cross and Discover expose the same Endlesss↔Other choice. Seed a
+        // Cross and Discover expose the same source choice (instruments↔recorded). Seed a
         // disposable Cross draft from the persisted setting rather than
         // resetting the knob whenever a new pair is opened.
         sourceLean: radioSourceOf(discoverSettingsRef.current.radio)
@@ -2452,7 +2678,7 @@ function Frame(): React.JSX.Element {
     } catch (err) {
       console.error('App: failed to prepare selected riffs for Cross:', err)
       window.alert(
-        'Could not prepare the selected riffs for Cross. Nothing was changed; try again.'
+        'could not prepare the selected riffs for cross. nothing was changed; try again.'
       )
     } finally {
       setBusy(null)
@@ -2610,11 +2836,14 @@ function Frame(): React.JSX.Element {
     }
   }
 
-  /** Save used by New/Open/Quit. An unpublished Shape draft is first
-   * materialized into the shelf, then that exact reducer result is written
-   * as the project snapshot. */
-  async function handleSaveForDeparture(): Promise<boolean> {
-    if (shapeDepartureSaveRef.current) return false
+  /** The save before something that closes or replaces the live project (quit's
+   * Save, and Save in the discard guard before New or opening another), without
+   * telling the user anything itself. An unpublished EEEDIT draft is first
+   * materialized onto the shelf, and that exact reducer result is what gets
+   * written. 'saved' only when the write holds the newest edits, the draft's
+   * included; a draft that changed meanwhile reads as 'changed'. */
+  async function saveProjectBeforeLeavingNow(): Promise<SaveOutcome> {
+    if (shapeDepartureSaveRef.current) return { kind: 'busy' }
     const draft = shapeDraftRef.current
     const draftFingerprint = draft ? shapeContentFingerprint(draft) : null
     const departureSnapshot = {
@@ -2638,35 +2867,46 @@ function Frame(): React.JSX.Element {
     setBusy(needsShapePublish ? 'saving edit…' : 'saving…')
     try {
       if (!needsShapePublish || !draft || draftFingerprint === null) {
-        const saved = await handleSave()
-        return saved && shapeSessionIsUnchanged()
+        const outcome = await saveProjectNow()
+        if (outcome.kind === 'saved' && !shapeSessionIsUnchanged()) return { kind: 'changed' }
+        return outcome
       }
-      const assembled = await materializeCurrentShape(draft)
-      if (!assembled || !shapeDraftIsCurrent(draft)) return false
-      const action = {
-        type: 'ADD_TO_SHELF' as const,
-        rifff: assembled.rifff,
-        vol: assembled.vol
+      let savedState: AppState
+      try {
+        const assembled = await materializeCurrentShape(draft)
+        if (!assembled || !shapeDraftIsCurrent(draft)) return { kind: 'changed' }
+        const action = {
+          type: 'ADD_TO_SHELF' as const,
+          rifff: assembled.rifff,
+          vol: assembled.vol
+        }
+        savedState = reducer(stateRef.current, action)
+        // The disk save below must serialize and validate the exact shelf
+        // result even before React has had a chance to render the dispatched
+        // action. Keep the live mirror transactionally in step with it.
+        stateRef.current = savedState
+        dispatch(action)
+        shapePublishedRiffIdRef.current = assembled.rifff.groupId
+        setRiffSelection({
+          ids: new Set([assembled.rifff.groupId]),
+          anchorId: assembled.rifff.groupId
+        })
+        shapeSavedFingerprintRef.current = draftFingerprint
+        setShapeDirty(false)
+      } catch (err) {
+        console.error('App: failed to publish the EEEDIT draft during project save:', err)
+        return {
+          kind: 'failed',
+          error: "couldn't add the edited riff to the shelf, so the project wasn't saved"
+        }
       }
-      const savedState = reducer(stateRef.current, action)
-      // The disk save below must serialize and validate the exact shelf
-      // result even before React has had a chance to render the dispatched
-      // action. Keep the live mirror transactionally in step with it.
-      stateRef.current = savedState
-      dispatch(action)
-      shapePublishedRiffIdRef.current = assembled.rifff.groupId
-      setRiffSelection({
-        ids: new Set([assembled.rifff.groupId]),
-        anchorId: assembled.rifff.groupId
-      })
-      shapeSavedFingerprintRef.current = draftFingerprint
-      setShapeDirty(false)
-      const saved = await handleSave(savedState)
-      return saved && shapeSessionIsUnchanged() && shapeProjectKeyRef.current === draft.projectKey
-    } catch (err) {
-      console.error('App: failed to publish Shape during project save:', err)
-      window.alert('Could not add the edited riff before saving. The project stayed open.')
-      return false
+      const outcome = await saveProjectNow(savedState)
+      if (
+        outcome.kind === 'saved' &&
+        !(shapeSessionIsUnchanged() && shapeProjectKeyRef.current === draft.projectKey)
+      )
+        return { kind: 'changed' }
+      return outcome
     } finally {
       shapeDepartureSaveRef.current = false
       setDepartureSaveBusy(false)
@@ -3123,20 +3363,28 @@ function Frame(): React.JSX.Element {
   // checkbox or radio has no text of its own to undo, and a range input keeps focus
   // after a drag -- without this, Cmd+Z right after dragging a sound panel slider did
   // nothing at all. The other global shortcuts keep their broader guard.
+  //
+  // While Discover/radio or Cross is open it claims these keys (undoRouting.ts):
+  // they drive that panel's own undo, not the project's, which would silently
+  // undo arrangement edits hidden under the overlay. The import view's browse
+  // mode claims them to do nothing, for the same reason.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
-      const key = e.key.toLowerCase()
-      const isUndo = (e.metaKey || e.ctrlKey) && key === 'z' && !e.shiftKey
-      const isRedo =
-        ((e.metaKey || e.ctrlKey) && key === 'z' && e.shiftKey) || (e.ctrlKey && key === 'y')
-      if (!isUndo && !isRedo) return
-      const target = e.target as HTMLElement | null
-      const textInput =
-        target?.tagName === 'INPUT' &&
-        !['range', 'checkbox', 'radio'].includes((target as HTMLInputElement).type)
-      if (textInput || target?.tagName === 'TEXTAREA') return
+      const action = undoShortcutFor({
+        key: e.key,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        shiftKey: e.shiftKey,
+        target: e.target as HTMLInputElement | null
+      })
+      if (action === null) return
       e.preventDefault()
-      if (isRedo) history.redo()
+      const owner = undoRouter.current()
+      if (owner) {
+        // A held key waits for the owner's render (undoRouting.ts, createRepeatGate).
+        if (action === 'redo') owner.redo(e.repeat)
+        else owner.undo(e.repeat)
+      } else if (action === 'redo') history.redo()
       else history.undo()
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -3188,12 +3436,20 @@ function Frame(): React.JSX.Element {
 
   // Main pushes 'request-save-before-quit' when the user picks "Save" on
   // the native quit-time dialog (index.ts's before-quit handler) -- run the
-  // same handleSave() the Save button/Cmd+S use, then report whether it
-  // actually landed. Main keeps the app open on false or timeout.
+  // same save the Save button/Cmd+S use, then report whether it landed AND
+  // holds the newest edits (saveBeforeLeaving's rule). Main keeps the app
+  // open on false or timeout, and says nothing itself on false: the notice
+  // below is the user's explanation. It's shown only after main has its
+  // answer, since an alert blocks the renderer and would otherwise run main
+  // into its timeout and a misleading "still saving" dialog.
   useEffect(() => {
     return window.rifffApi.onRequestSaveBeforeQuit((requestId) => {
-      void handleSaveForDeparture().then(
-        (success) => window.rifffApi.notifySaveBeforeQuitComplete(requestId, success),
+      void saveProjectBeforeLeavingNow().then(
+        (outcome) => {
+          window.rifffApi.notifySaveBeforeQuitComplete(requestId, outcome.kind === 'saved')
+          const notice = saveOutcomeNotice(outcome, 'leaving')
+          if (notice) window.alert(notice)
+        },
         () => window.rifffApi.notifySaveBeforeQuitComplete(requestId, false)
       )
     })
@@ -3272,6 +3528,7 @@ function Frame(): React.JSX.Element {
   // than having to grab the scrollbar directly.
   const handModeHeld = useHandModeHeld()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const scrollbarInsets = useScrollbarInsets(scrollContainerRef, state.mode === 'normal')
   const [panning, setPanning] = useState(false)
 
   // Captured by handleTimelineWheel, consumed by the effect below once the
@@ -3395,17 +3652,24 @@ function Frame(): React.JSX.Element {
     <div className="ra-viewport">
       <StartupGate />
       <OwnUsernameReporter />
-      <SketchModeAutoFollow />
+      <SketchModeAutoFollow onSoundingChange={setSketchSoundingId} />
       <BackgroundFeatureScan />
       {/* The one app-wide "what is running in the background" line --
        * analysis scans, library index, auto-classify, plugin scan, sync
        * (see its own doc comment). Replaces LibraryWarmupIndicator and
        * DiscoverLibraryScan's own progress line. */}
       <BackgroundWorkIndicator />
-      <EngineStartupIndicator />
-      <StemsUnavailableIndicator />
-      <PluginsOffNotice />
-      <PluginsHeldNotice />
+      {/* One column, so a notice that wraps pushes the next down (TopRightNotices). */}
+      <TopRightNotices>
+        <EngineStartupIndicator />
+        <StemsUnavailableIndicator />
+        <PluginsOffNotice />
+        <PluginsHeldNotice />
+        <ReonedCopyMissingNotice />
+        <ReonedCopiesNotice />
+        <ReoneNotice />
+        <SaveCopyNotice />
+      </TopRightNotices>
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the
@@ -3462,6 +3726,7 @@ function Frame(): React.JSX.Element {
         {/* Kept above the mode-specific Arrange / Map / Sketch content so
             two-riff Shelf selection and Cross are available in all three. */}
         <Shelf
+          sketchSoundingId={sketchSoundingId}
           onImported={handleImported}
           onOpenLibrary={openRiffLibrary}
           onSeedDiscover={openRiffLibraryWithDiscoverSeed}
@@ -3577,34 +3842,65 @@ function Frame(): React.JSX.Element {
                   )}
                 </div>
                 {state.mode === 'normal' && (
+                  // The mixer rail: the column every row's m/s/fx and gain
+                  // controls are pinned into (MixerRailAnchor), docked at the
+                  // viewport's right edge beside the inspector. It's drawn here,
+                  // outside the scroller, so it never scrolls; the controls
+                  // themselves live in their rows (so they line up with them
+                  // vertically) and sit above this at zIndex 5/6. It sits just
+                  // left of the scroller's own scrollbars, where the sticky
+                  // controls land, rather than over them.
+                  //
+                  // It takes the pointer, so a click in a gap between controls
+                  // doesn't scrub or grab a clip hidden underneath. Being
+                  // outside the scroller, it hands wheel gestures back to it.
                   <div
-                    aria-hidden="true"
+                    onWheel={(e) => {
+                      const gesture = railWheelGesture(e)
+                      if (gesture.kind === 'zoom') handleTimelineWheel(e)
+                      else
+                        scrollContainerRef.current?.scrollBy({
+                          left: gesture.left,
+                          top: gesture.top
+                        })
+                    }}
                     style={{
                       position: 'absolute',
                       zIndex: 4,
                       top: 0,
-                      right: 0,
-                      bottom: 0,
+                      right: scrollbarInsets.right,
+                      bottom: scrollbarInsets.bottom,
                       width: ARRANGEMENT_MIXER_RAIL_WIDTH,
                       boxSizing: 'border-box',
                       borderLeft: '1px solid var(--ra-border)',
-                      background: 'color-mix(in srgb, var(--ra-bg-bar) 97%, transparent)',
-                      boxShadow: '-5px 0 14px color-mix(in srgb, #000 28%, transparent)',
+                      background: 'var(--ra-bg-bar)'
+                    }}
+                  />
+                )}
+                {state.mode === 'normal' && (
+                  // The rail's heading, over the ruler's right end (the ruler is
+                  // zIndex 10, above the rail itself).
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      position: 'absolute',
+                      zIndex: 11,
+                      top: 0,
+                      right: scrollbarInsets.right,
+                      width: ARRANGEMENT_MIXER_RAIL_WIDTH,
+                      height: 24,
+                      boxSizing: 'border-box',
+                      display: 'grid',
+                      placeItems: 'center',
+                      borderLeft: '1px solid var(--ra-border)',
+                      borderBottom: '1px solid var(--ra-border)',
+                      background: 'var(--ra-bg-bar)',
+                      color: 'var(--ra-text-4)',
+                      fontSize: 8,
                       pointerEvents: 'none'
                     }}
                   >
-                    <div
-                      style={{
-                        height: 24,
-                        display: 'grid',
-                        placeItems: 'center',
-                        borderBottom: '1px solid var(--ra-border)',
-                        color: 'var(--ra-text-4)',
-                        fontSize: 8
-                      }}
-                    >
-                      mix
-                    </div>
+                    mix
                   </div>
                 )}
               </div>
@@ -3615,7 +3911,7 @@ function Frame(): React.JSX.Element {
             Inspector's current state. */}
               <button
                 onClick={() => dispatch({ type: 'TOGGLE_INSPECTOR_COLLAPSED' })}
-                aria-label="Toggle inspector panel"
+                aria-label="toggle inspector panel"
                 title={state.inspectorCollapsed ? 'show inspector' : 'hide inspector'}
                 style={{
                   flex: 'none',
@@ -3678,14 +3974,19 @@ function Frame(): React.JSX.Element {
               if (wasBatchImport) setRiffLibraryOpen(false)
             }}
             onBaked={(steps) => {
-              const siblingGroupIds = pickerBatchGroupIds.filter((id) => id !== pickerGroupId)
-              for (const siblingGroupId of siblingGroupIds) {
-                const siblingRifff = state.rifffs[siblingGroupId]
-                if (!siblingRifff) continue
-                void bakeStems(dispatch, steps, SNAP_DIVS[state.snapIdx], siblingRifff.stems, [
-                  siblingGroupId
-                ])
-              }
+              const siblings = pickerBatchGroupIds
+                .filter((id) => id !== pickerGroupId)
+                .flatMap((id) => (state.rifffs[id] ? [state.rifffs[id]] : []))
+              if (siblings.length === 0) return
+              const batchSize = pickerBatchGroupIds.length
+              const snapDiv = SNAP_DIVS[state.snapIdx]
+              // Each sibling is its own all-or-nothing bake; one that fails stays wholly at its
+              // original phase, so it is named rather than left to a console line.
+              void reoneSiblings(siblings, (sibling) =>
+                bakeStems(dispatch, steps, snapDiv, sibling.stems, [sibling.groupId])
+              ).then((failed) => {
+                if (failed.length > 0) showReoneNotice(siblingsNotReonedText(failed, batchSize))
+              })
             }}
           />
         )}
@@ -3713,6 +4014,8 @@ function Frame(): React.JSX.Element {
             setDiscoverRedoStack={setDiscoverRedoStack}
             discoverSeedBpm={discoverSeedBpm}
             setDiscoverSeedBpm={setDiscoverSeedBpm}
+            discoverSeedPhase={activeDiscoverSeedPhase}
+            setDiscoverSeedPhase={setDiscoverSeedPhase}
             initialMode={riffLibraryInitialMode}
             onCoachSlotsChange={handleCoachSlotsChange}
             onPublishedToShelf={selectPublishedShelfRiff}
@@ -3756,8 +4059,8 @@ function Frame(): React.JSX.Element {
                 return 'cancel'
               }
               if (choice === 'save') {
-                const saved = await handleSaveForDeparture()
-                // Save failed (handleSave already alerted) -- abort the
+                const saved = await saveBeforeLeaving()
+                // Save failed (saveBeforeLeaving already alerted) -- abort the
                 // open/restore rather than replacing the still-unsaved
                 // live project.
                 if (!saved) {
@@ -3786,15 +4089,20 @@ function Frame(): React.JSX.Element {
                     await appSoundDefaults()
                   )
                   setBusy('loading…')
-                  await warmStemCaches(loaded)
-                  if (!projectDepartureIsCurrent()) return
+                  const opened = await openWithReonedRepair(loaded)
+                  await warmStemCaches(opened.state)
+                  if (!projectDepartureIsCurrent()) {
+                    reonedOpenFailed()
+                    return
+                  }
                   invalidateShapeSession()
                   projectSessionEpochRef.current = crypto.randomUUID()
-                  restoreState(loaded, pluginStates)
-                  lastSavedJsonRef.current = dirtyCheckJson(loaded)
+                  restoreState(opened.state, pluginStates)
+                  lastSavedJsonRef.current = opened.savedJson
                   setCurrentSketch({ kind: 'library', name })
                 } catch (err) {
                   console.error('App: failed to open library sketch:', err)
+                  reonedOpenFailed()
                 } finally {
                   endProjectDeparture()
                   setBusy(null)
@@ -3810,8 +4118,8 @@ function Frame(): React.JSX.Element {
                   return
                 }
                 if (choice === 'save') {
-                  const saved = await handleSaveForDeparture()
-                  // Save failed (handleSave already alerted) -- bail out
+                  const saved = await saveBeforeLeaving()
+                  // Save failed (saveBeforeLeaving already alerted) -- bail out
                   // rather than proceeding to the disk-open flow, which
                   // would replace the still-unsaved live project.
                   if (!saved) {
@@ -3834,15 +4142,20 @@ function Frame(): React.JSX.Element {
                   // Same pre-warm-before-LOAD_STATE reasoning as the onSelect
                   // handler right above -- see its own comment history.
                   setBusy('loading…')
-                  await warmStemCaches(loaded)
-                  if (!projectDepartureIsCurrent()) return
+                  const opened = await openWithReonedRepair(loaded)
+                  await warmStemCaches(opened.state)
+                  if (!projectDepartureIsCurrent()) {
+                    reonedOpenFailed()
+                    return
+                  }
                   invalidateShapeSession()
                   projectSessionEpochRef.current = crypto.randomUUID()
-                  restoreState(loaded, pluginStates)
-                  lastSavedJsonRef.current = dirtyCheckJson(loaded)
+                  restoreState(opened.state, pluginStates)
+                  lastSavedJsonRef.current = opened.savedJson
                   setCurrentSketch({ kind: 'external', path: result.path })
                 } catch (err) {
                   console.error('App: failed to open project from disk:', err)
+                  reonedOpenFailed()
                 } finally {
                   endProjectDeparture()
                   setBusy(null)
@@ -3925,11 +4238,14 @@ function Frame(): React.JSX.Element {
           silently dropping recoverable work. */}
         {!showLibraryLocationSetup &&
           !onboardingDismissedForSession &&
-          (showOnboarding || recoverableAutosave !== null) && (
+          (showOnboarding || recoverableAutosave !== null || recoverablePrevious !== null) && (
             <OnboardingModal
               hasRecovery={recoverableAutosave !== null}
               onRecover={(dontShowAgain) => void handleRecoverAutosave(dontShowAgain)}
               onDiscardRecovery={handleDiscardRecovery}
+              hasPreviousRecovery={recoverablePrevious !== null}
+              onRecoverPrevious={(dontShowAgain) => void handleRecoverPrevious(dontShowAgain)}
+              onDiscardPreviousRecovery={handleDiscardPreviousRecovery}
               onNewProject={(dontShowAgain) => {
                 // Dismiss first so the welcome modal doesn't visually stack
                 // behind/conflict with whatever handleNew() shows next (the
@@ -3952,7 +4268,7 @@ function Frame(): React.JSX.Element {
                 const hasExistingContent = Object.keys(state.rifffs).length > 0
                 if (
                   hasExistingContent &&
-                  !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
+                  !window.confirm('start the tour? this adds a demo rifff to your current sketch.')
                 ) {
                   return
                 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { formatBpm } from '@shared/format'
 import { announceEndlesssLoggedOut } from '../audio/riffLibraryUsername'
 import { traitMatchBarLabel } from '@shared/traitBar'
 import { phoneRemoteModalView, type PhoneRemoteStatus } from '@shared/phoneRemoteView'
@@ -10,6 +11,8 @@ import { stopActivePreview } from '../audio/previewLoop'
 import { MasterChainPanel } from './MasterChainPanel'
 import { SoundSettingsPanel } from './SoundSettingsPanel'
 import { ContextMenu } from './ContextMenu'
+import { CLEANUP_MENU_LABEL, LIBRARY_MISSING_TITLE } from '@shared/reonedCleanup'
+import { requestReonedCleanup } from '../state/reonedCleanupRequest'
 import { AudioDeviceModal } from './AudioDeviceModal'
 import { KeyGesturesModal } from './KeyGesturesModal'
 import { RadioHeartsKeyModal } from './RadioHeartsKeyModal'
@@ -61,7 +64,7 @@ function storeSelectedInputDevice(device: string | null): void {
 // this settings menu needs to read which output device is active.
 
 // Simplified 6-tooth cog silhouette, same hand-drawn-glyph/no-icon-library
-// convention as MetronomeIcon above -- outer ring + hole drawn as strokes,
+// convention as MetronomeIcon (MetronomeButton.tsx) -- outer ring + hole drawn as strokes,
 // teeth as small rects rotated around the same center. (The "tidy" button
 // this used to sit next to moved up to App.tsx's own ProjectMenu, in the
 // top row -- see that component's tidy button for tidy-up/tidy-view.)
@@ -307,6 +310,9 @@ export function TransportBar({
   // gear menu's "sound defaults…"). One panel, two bindings -- see SoundSettingsPanel.tsx.
   const [soundPanel, setSoundPanel] = useState<'project' | 'defaults' | null>(null)
   const [settingsMenu, setSettingsMenu] = useState<{ x: number; y: number } | null>(null)
+  // Whether the project library is reachable, fetched as the menu opens: the cleanup of re-oned
+  // stem copies is greyed while its drive is away. null until main answers.
+  const [reonedLibraryAvailable, setReonedLibraryAvailable] = useState<boolean | null>(null)
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   // The settings menu's "audio…" entry -- replaces the two dropdowns that
   // used to sit directly in the transport bar (see AudioDeviceModal.tsx's
@@ -563,6 +569,14 @@ export function TransportBar({
     }
     const rect = e.currentTarget.getBoundingClientRect()
     setSettingsMenu({ x: rect.left, y: rect.bottom + 4 })
+    setReonedLibraryAvailable(null)
+    void window.rifffApi
+      .reonedCopiesLibraryAvailable()
+      .then(setReonedLibraryAvailable)
+      .catch((err) => {
+        console.error('TransportBar: reonedCopiesLibraryAvailable() failed:', err)
+        setReonedLibraryAvailable(false)
+      })
     void window.rifffApi
       .riffLibraryIsOwn()
       .then(setRiffLibraryIsOwn)
@@ -635,19 +649,22 @@ export function TransportBar({
   // during render rather than an effect (React's "adjust state while rendering"
   // pattern) whenever state.bpm changes from elsewhere (±buttons, loading a
   // project) while the field isn't being actively edited.
-  const [tempoText, setTempoText] = useState(String(state.bpm))
+  const [tempoText, setTempoText] = useState(formatBpm(state.bpm))
   const [tempoFocused, setTempoFocused] = useState(false)
-  if (!tempoFocused && tempoText !== String(state.bpm)) {
-    setTempoText(String(state.bpm))
+  if (!tempoFocused && tempoText !== formatBpm(state.bpm)) {
+    setTempoText(formatBpm(state.bpm))
   }
 
   function commitTempo(): void {
     setTempoFocused(false)
     const bpm = Number(tempoText)
+    // The field shows the tempo rounded (formatBpm); leaving it untouched must not
+    // round the project's real tempo, so an unchanged text dispatches nothing.
+    if (tempoText === formatBpm(state.bpm)) return
     if (!Number.isNaN(bpm) && tempoText.trim() !== '') {
       dispatch({ type: 'SET_TEMPO', bpm })
     } else {
-      setTempoText(String(state.bpm))
+      setTempoText(formatBpm(state.bpm))
     }
   }
 
@@ -685,7 +702,7 @@ export function TransportBar({
             dispatch({ type: 'PLAY' })
           }
         }}
-        aria-label={playing ? 'Stop' : 'Play'}
+        aria-label={playing ? 'stop' : 'play'}
         style={{
           width: 22,
           height: 22,
@@ -718,7 +735,7 @@ export function TransportBar({
           // clicked to disable.
           disabled={!state.gatedRecordingEnabled && !state.loopRegion}
           aria-label={
-            state.gatedRecordingEnabled ? 'Disable gated recording' : 'Enable gated recording'
+            state.gatedRecordingEnabled ? 'disable gated recording' : 'enable gated recording'
           }
           title={
             state.gatedRecordingEnabled
@@ -780,12 +797,7 @@ export function TransportBar({
         >
           {positionLabel(pos)}
         </span>
-        <MetronomeButton
-          enabled={state.metronomeEnabled}
-          volume={state.metronomeVolume}
-          onToggle={() => dispatch({ type: 'TOGGLE_METRONOME' })}
-          onVolumeChange={(volume) => dispatch({ type: 'SET_METRONOME_VOLUME', volume })}
-        />
+        <MetronomeButton />
       </div>
 
       <div
@@ -801,7 +813,7 @@ export function TransportBar({
       >
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm - 1 })}
-          aria-label="Decrease tempo"
+          aria-label="decrease tempo"
           style={{
             width: 20,
             height: 20,
@@ -822,7 +834,7 @@ export function TransportBar({
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.currentTarget.blur()
           }}
-          aria-label="Tempo (BPM)"
+          aria-label="tempo (bpm)"
           style={{
             fontSize: 11,
             width: 44,
@@ -843,7 +855,7 @@ export function TransportBar({
         />
         <button
           onClick={() => dispatch({ type: 'SET_TEMPO', bpm: state.bpm + 1 })}
-          aria-label="Increase tempo"
+          aria-label="increase tempo"
           style={{
             width: 20,
             height: 20,
@@ -864,7 +876,7 @@ export function TransportBar({
             void window.rifffApi.engineGetLinkStatus().then(setLinkStatus)
           })
         }}
-        aria-label="Toggle Ableton Link"
+        aria-label="toggle ableton link"
         data-tooltip="ableton link"
         style={{
           display: 'flex',
@@ -903,7 +915,7 @@ export function TransportBar({
       <button
         onClick={() => dispatch({ type: 'SET_AUTOMATION_LANES', on: !automationLanes })}
         disabled={!lanesAvailable}
-        aria-label="Toggle automation lanes"
+        aria-label="toggle automation lanes"
         data-tooltip={
           !lanesAvailable
             ? 'arrange view only'
@@ -929,7 +941,7 @@ export function TransportBar({
       {pluginsOn && (
         <button
           onClick={() => setMasterChainPanelOpen((open) => !open)}
-          aria-label="Toggle master chain panel"
+          aria-label="toggle master chain panel"
           data-tooltip="master plugin chain"
           style={{
             height: 22,
@@ -952,7 +964,7 @@ export function TransportBar({
 
       <button
         onClick={() => setSoundPanel((open) => (open === 'project' ? null : 'project'))}
-        aria-label="Toggle sound panel"
+        aria-label="toggle sound panel"
         data-tooltip="sound"
         style={{
           height: 22,
@@ -995,7 +1007,7 @@ export function TransportBar({
       <button
         ref={settingsButtonRef}
         onClick={handleOpenSettingsMenu}
-        aria-label="Settings"
+        aria-label="settings"
         title="settings"
         style={{
           display: 'flex',
@@ -1021,6 +1033,12 @@ export function TransportBar({
             { label: 'show welcome screen', onClick: onShowWelcome },
             { label: 'take the tour', onClick: onStartTour },
             { label: 'change save location…', onClick: () => void handleChangeSaveLocation() },
+            {
+              label: CLEANUP_MENU_LABEL,
+              onClick: () => requestReonedCleanup(),
+              disabled: reonedLibraryAvailable !== true,
+              title: reonedLibraryAvailable === false ? LIBRARY_MISSING_TITLE : undefined
+            },
             {
               label: 'change riff archive location…',
               onClick: () => void handleChangeRiffLibraryLocation()

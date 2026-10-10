@@ -3,12 +3,15 @@ import { initialState, reducer, type AppState } from './store'
 import { deserializeProject } from './serialize'
 import {
   autosaveAction,
+  autosaveWaitsOnRecoveryOffer,
+  recoverySnapshotHasContent,
   autosaveDelayMs,
   createAutosaveGate,
   dirtyCheckJson,
   liveSettingsForSave,
   projectJsonForSave,
-  saveCompletionIsCurrent
+  saveCompletionIsCurrent,
+  saveOutcomeNotice
 } from './saveSerialization'
 import { hasUnsavedChanges } from './unsavedChanges'
 import type { PluginStatesMap, RawPluginStatesCapture } from '@shared/pluginStates'
@@ -25,6 +28,34 @@ const rifff: Rifff = {
     { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 }
   ]
 }
+
+describe('saveOutcomeNotice', () => {
+  it('says nothing after a save that holds the newest edits', () => {
+    expect(saveOutcomeNotice({ kind: 'saved' }, 'save')).toBeNull()
+    expect(saveOutcomeNotice({ kind: 'saved' }, 'leaving')).toBeNull()
+  })
+
+  it('always reports a failed save, with its error', () => {
+    expect(saveOutcomeNotice({ kind: 'failed', error: 'disk full' }, 'save')).toBe(
+      'save failed: disk full'
+    )
+    expect(saveOutcomeNotice({ kind: 'failed', error: 'disk full' }, 'leaving')).toBe(
+      'save failed: disk full'
+    )
+  })
+
+  it('explains a save that went stale only when it stops a quit, New or open', () => {
+    expect(saveOutcomeNotice({ kind: 'changed' }, 'save')).toBeNull()
+    expect(saveOutcomeNotice({ kind: 'changed' }, 'leaving')).toMatch(/changed while it was saving/)
+  })
+
+  it('says a save is already running instead of stopping without a word', () => {
+    expect(saveOutcomeNotice({ kind: 'busy' }, 'save')).toMatch(/already saving/)
+    expect(saveOutcomeNotice({ kind: 'busy' }, 'leaving')).toMatch(
+      /already saving.*nothing was closed/s
+    )
+  })
+})
 
 describe('saveCompletionIsCurrent', () => {
   it('rejects newer project or plugin edits made while a save was awaiting', () => {
@@ -161,6 +192,32 @@ describe('autosaveAction', () => {
   })
 })
 
+describe('autosaveWaitsOnRecoveryOffer', () => {
+  it('waits while a previous crash snapshot is offered on screen, so it is not overwritten', () => {
+    expect(autosaveWaitsOnRecoveryOffer({ recoveryPending: true, offerDismissed: false })).toBe(
+      true
+    )
+  })
+
+  it('runs again once the offer is closed with the x: the work in this session needs it', () => {
+    // The x hides the welcome without recovering or discarding. Crash protection for what is
+    // made next must not stay off for the rest of the session.
+    expect(autosaveWaitsOnRecoveryOffer({ recoveryPending: true, offerDismissed: true })).toBe(
+      false
+    )
+    expect(autosaveAction(true, false)).toBe('write')
+  })
+
+  it('runs with no snapshot to offer', () => {
+    expect(autosaveWaitsOnRecoveryOffer({ recoveryPending: false, offerDismissed: false })).toBe(
+      false
+    )
+    expect(autosaveWaitsOnRecoveryOffer({ recoveryPending: false, offerDismissed: true })).toBe(
+      false
+    )
+  })
+})
+
 describe('dirtyCheckJson', () => {
   it('a project with plugin settings reads as saved right after it is opened, and right after a save', () => {
     const state = withPlugins()
@@ -177,5 +234,18 @@ describe('dirtyCheckJson', () => {
     const { pluginStates: written, ...rest } = JSON.parse(fileJson)
     expect(written).toEqual(pending)
     expect(rest).toEqual(JSON.parse(dirtyCheckJson(state)))
+  })
+})
+
+describe('recoverySnapshotHasContent', () => {
+  it('is worth offering only with at least one riff in it', () => {
+    expect(recoverySnapshotHasContent(JSON.stringify({ rifffs: { a: {} } }))).toBe(true)
+    // A launch left untouched still autosaves a startup project with no riffs.
+    expect(recoverySnapshotHasContent(JSON.stringify({ rifffs: {} }))).toBe(false)
+    expect(recoverySnapshotHasContent(JSON.stringify({ bpm: 120 }))).toBe(false)
+  })
+
+  it('is not worth offering when it cannot be read', () => {
+    expect(recoverySnapshotHasContent('{not json')).toBe(false)
   })
 })

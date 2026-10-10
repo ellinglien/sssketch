@@ -84,10 +84,10 @@ export function buildSeedSlotsFromStems(
       author: stem.author,
       name: stem.name,
       type: stem.type,
-      // Keep the exact audio the Shelf riff was already playing. A baked
-      // seed and a freshly rolled candidate each carry their own correct
-      // downbeat; forcing both back onto one shared phase changes the
-      // candidate relative to the mix the user actually auditioned.
+      // Keep the exact audio the Shelf riff was already playing. A rolled
+      // candidate from the seed's own jam is baked to the seed's rotation
+      // when it resolves (App's discoverSeedPhase, discoverCandidateStem.ts);
+      // one from another jam keeps its own phase.
       path: stem.path,
       durationSec: stem.durationSec,
       barLength: stem.barLength,

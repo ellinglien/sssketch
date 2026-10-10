@@ -1125,7 +1125,7 @@ export function ClusterStemsBrowser({
                 />
               </>
             )}
-            <button onClick={handleClose} aria-label="Close tidy up browser" style={buttonStyle()}>
+            <button onClick={handleClose} aria-label="close tidy up browser" style={buttonStyle()}>
               ×
             </button>
           </div>

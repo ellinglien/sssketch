@@ -6,6 +6,8 @@ import { SNAP_DIVS } from '../state/store'
 import { PolarGlyph } from './PolarGlyph'
 import { stemColorVar, typeColorVar } from '../theme/typeColor'
 import { EditableText } from './EditableText'
+import { useReonedMissing } from '../state/reonedMissing'
+import { MISSING_COPY_TEXT } from '@shared/reonedCleanup'
 import { formatBpm } from '@shared/format'
 import type { Rifff, Stem } from '@shared/types'
 
@@ -79,6 +81,7 @@ export function Inspector({
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
+  const missingCopies = useReonedMissing()
   const groupId = state.sel
 
   if (!groupId || !state.rifffs[groupId]) {
@@ -453,6 +456,12 @@ export function Inspector({
                       </span>
                     )}
                   </div>
+                  {missingCopies.some((m) => m.path === stem.path) && (
+                    // Not audio information, so no colour: the same quiet ink as the slot number.
+                    <div style={{ fontSize: 9, color: 'var(--ra-text-3)', marginTop: -4 }}>
+                      {MISSING_COPY_TEXT}
+                    </div>
+                  )}
                 </Fragment>
               )
             })}

@@ -23,8 +23,7 @@ const VISIBLE_MS = 14_000
  * this. Same query-once-on-mount-plus-subscribe pattern as
  * LibraryWarmupIndicator/EngineStartupIndicator (the mount query covers
  * skips that already happened before the renderer was listening), and
- * positioned below both of those (top: 70 vs 10 and 40) for the same
- * reason EngineStartupIndicator gives about its own 40.
+ * stacked below EngineStartupIndicator in TopRightNotices.
  *
  * Main sends a notice for the FIRST skip of a session and then only when a
  * new refusing host is learned -- "tell the user once," not a running
@@ -68,10 +67,7 @@ export function StemsUnavailableIndicator(): React.JSX.Element | null {
       onClick={() => setNotice(null)}
       title="some stems unavailable"
       style={{
-        position: 'fixed',
-        top: 70,
-        right: 10,
-        zIndex: 2000,
+        pointerEvents: 'auto',
         display: 'flex',
         alignItems: 'center',
         gap: 6,

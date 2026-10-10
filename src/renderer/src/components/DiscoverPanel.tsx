@@ -1,5 +1,6 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { formatBpm } from '@shared/format'
 import { Dial } from './Dial'
 import { RadioMixActions, RadioStrip, type RadioMixBundle } from './RadioStrip'
 import type { RadioStripContext } from '@shared/radioStripModel'
@@ -13,7 +14,12 @@ import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlaybac
 import { warmEngineBuffer } from '../audio/warmEngineBuffer'
 import { PreviewHaltBarrier } from '../state/useCrossPreview'
 import { getPeaks, peekPeaks } from '../audio/peakCache'
-import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
+import {
+  assembleDiscoverRifff,
+  discoverKeepMembers,
+  discoverRowDisabledOnAdd,
+  type DiscoverRifffAssembly
+} from '../audio/discoverRifffAssembly'
 import {
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
@@ -480,7 +486,21 @@ import {
 } from '@shared/radioCompanions'
 import { DiscoverSlotRow } from './DiscoverSlotRow'
 import { radioRowPlates } from '@shared/radioRowPlates'
-import { resolveCandidateStem, type ResolvedCandidateStem } from './discoverCandidateStem'
+import {
+  cancelDiscoverAlignments,
+  resolveCandidateStem,
+  type ResolvedCandidateStem
+} from './discoverCandidateStem'
+import type { DiscoverSeedPhase } from '@shared/discoverSeedPhase'
+import { useClaimUndo } from '../state/undoRouting'
+import {
+  RADIO_ADD_TO_SHELF_TOOLTIP,
+  RADIO_ADD_TO_TIMELINE_TOOLTIP,
+  RADIO_KEEP_TOOLTIP,
+  SOURCE_DIAL_LEFT_LABEL,
+  SOURCE_DIAL_RIGHT_LABEL,
+  SOURCE_DIAL_TOOLTIP
+} from '@shared/radioControlCopy'
 import {
   DISCOVER_ROW_GRID_COLUMNS,
   DISCOVER_ROW_COLUMN_GAP,
@@ -907,6 +927,7 @@ export function DiscoverPanel({
   onRadioViewChange,
   setDiscoverConsented,
   seedBpm,
+  seedPhase,
   onCoachSlotsChange,
   onPublishedToShelf
 }: {
@@ -985,6 +1006,10 @@ export function DiscoverPanel({
    * seed tempo" button below, direct request 2026-09-16: "maybe a button
    * next to the tempo adjust to set it to the original rifff tempo?" */
   seedBpm: number | null
+  /** The seed's rotation per jam (App.tsx's discoverSeedPhase): a candidate from the seed's own
+   * jam resolves baked by it, so it plays in phase with the seed's jam-mates. Passed to every
+   * resolveCandidateStem here and to each row. */
+  seedPhase: DiscoverSeedPhase | null
   /** The kinds sssketchy's current step pre-arms in the add row -- "each
    * step pre-arms the matching kinds in Discover's add row" (spec, phase 1
    * step 3). Declarative on purpose: this panel unmounts on every
@@ -1234,17 +1259,18 @@ export function DiscoverPanel({
   // controlled input that snaps back to the clamped value on every
   // keystroke makes multi-digit typing impossible. Free-type locally, only
   // committing (and clamping, via the reducer) on blur/Enter.
-  const [tempoText, setTempoText] = useState(String(bpm))
+  const [tempoText, setTempoText] = useState(formatBpm(bpm))
   const [tempoFocused, setTempoFocused] = useState(false)
-  if (!tempoFocused && tempoText !== String(bpm)) setTempoText(String(bpm))
+  if (!tempoFocused && tempoText !== formatBpm(bpm)) setTempoText(formatBpm(bpm))
 
   function commitTempo(): void {
     setTempoFocused(false)
     const nextBpm = Number(tempoText)
+    if (tempoText === formatBpm(bpm)) return // shown rounded; untouched changes nothing
     if (!Number.isNaN(nextBpm) && tempoText.trim() !== '') {
       dispatch({ type: 'SET_TEMPO', bpm: nextBpm })
     } else {
-      setTempoText(String(bpm))
+      setTempoText(formatBpm(bpm))
     }
   }
 
@@ -8634,6 +8660,15 @@ export function DiscoverPanel({
     applySlotsSnapshot(snapshot)
   }
 
+  // Cmd+Z / Cmd+Shift+Z drive these while Discover or radio is open, the
+  // same as the header's undo and redo, instead of the project's history
+  // hidden under it (undoRouting.ts).
+  useClaimUndo(undoDiscoverAction, redoDiscoverAction)
+
+  // Closing Discover drops the alignment bakes still queued, and silences
+  // their "couldn't line up" notices (discoverCandidateStem.ts).
+  useEffect(() => () => cancelDiscoverAlignments(), [])
+
   // While radio runs, the new row appears at once but silent, and joins at
   // the loop top: it is not previewing, so its roll queues as `joining`,
   // and with candidate null until the landing's commitSlotPick,
@@ -10626,7 +10661,7 @@ export function DiscoverPanel({
    * today costs. */
   async function resolveAndWarmPick(pick: SlotPick): Promise<ResolvedCandidateStem | null> {
     if (pick.candidate === null) return null
-    const stem = await resolveCandidateStem(pick.candidate)
+    const stem = await resolveCandidateStem(pick.candidate, seedPhase)
     if (stem === null) return null
     // Three warms, one call. The preview always stretches (previewState
     // sets stretch true for its one rifff) and a Discover candidate is
@@ -13068,7 +13103,7 @@ export function DiscoverPanel({
         // own cache entry; the pick still commits and that one row simply
         // shows as unresolved, the same soft degradation every other
         // Discover path takes.
-        await resolveCandidateStem(pick.candidate)
+        await resolveCandidateStem(pick.candidate, seedPhase)
         return { slotId: id, pick }
       })
     )
@@ -13095,7 +13130,15 @@ export function DiscoverPanel({
   // case is unreachable here, since placed.length === 0 already returned
   // above) -- callers early-return on null rather than dispatching an
   // empty rifff.
-  async function resolveDiscoverRifff(): Promise<DiscoverRifffAssembly | null> {
+  //
+  // `soloed` is the row soloed when the loop was added. Rows that weren't
+  // heard (discoverRowDisabledOnAdd: muted, or left out by that solo) come
+  // back `disabled`, at their real gain, and the assembly's `mute` Disables
+  // them: what you hear is what you get, after a save too (F6 of the
+  // 2026-10-08 call triage).
+  async function resolveDiscoverRifff(
+    soloed: string | null
+  ): Promise<DiscoverRifffAssembly | null> {
     // Direct report, 2026-09-16: "when user plunks to the timeline, the
     // volume levels should be copied over pls" -- root cause traced to
     // something bigger than just gain: this filter used to require a real
@@ -13112,18 +13155,10 @@ export function DiscoverPanel({
     // Direct report, 2026-09-17: "when adding discover-created rifffs to
     // the arranger, i've noticed that tracks that are muted are not muted
     // in the arrangement .. can we make it so they are, if they are
-    // muted?" -- this used to pass every placeable slot's own `gain`
-    // (the visible drag-on-waveform slider, 0..1) straight through
-    // unconditionally, with no reference to previewingSlotIds at all, so
-    // a slot muted in Discover's own mix (excluded from what you hear
-    // while auditioning) still landed in the placed rifff at full/whatever
-    // gain. Forcing a muted slot's own gain to 0 here -- rather than
-    // dropping it from `placeable` outright -- keeps the stem itself
-    // present in the resulting rifff (still visible/re-adjustable later
-    // via the real arranger's own per-stem gain drag, StemWaveformRow.tsx),
-    // just silent, matching what "mute" actually means everywhere else in
-    // this app (ChannelRow.tsx's own mute always wins over whatever gain
-    // is set underneath it) rather than a one-way, unrecoverable removal.
+    // muted?" A row that isn't heard stays in the rifff (still there to
+    // turn back on later) rather than being dropped. It used to come in at
+    // gain 0, which looked unmuted and lost its level; since the 2026-10-08
+    // call (F6) it comes in Disabled at its own gain, and a solo counts.
     const resolved = await Promise.all(
       placeable.map(
         async ({
@@ -13131,14 +13166,17 @@ export function DiscoverPanel({
           candidate,
           seedStem,
           gain
-        }): Promise<{ stem: ResolvedCandidateStem; gain: number } | null> => {
-          const stem = candidate ? await resolveCandidateStem(candidate) : (seedStem ?? null)
-          return stem ? { stem, gain: previewingSlotIds.has(id) ? gain : 0 } : null
+        }): Promise<{ stem: ResolvedCandidateStem; gain: number; disabled: boolean } | null> => {
+          const stem = candidate
+            ? await resolveCandidateStem(candidate, seedPhase)
+            : (seedStem ?? null)
+          const disabled = discoverRowDisabledOnAdd(id, previewingSlotIds, soloed)
+          return stem ? { stem, gain, disabled } : null
         }
       )
     )
     const placed = resolved.filter(
-      (r): r is { stem: ResolvedCandidateStem; gain: number } => r !== null
+      (r): r is { stem: ResolvedCandidateStem; gain: number; disabled: boolean } => r !== null
     )
     if (placed.length === 0) return null
 
@@ -13168,7 +13206,7 @@ export function DiscoverPanel({
     // and is its own piece of work.
     return assembleDiscoverRifff(
       `discover: ${kinds.join('+')}`,
-      placed.map(({ stem, gain }) => ({ stem, gain })),
+      placed.map(({ stem, gain, disabled }) => ({ stem, gain, disabled })),
       bpm,
       placed.length
     )
@@ -13206,9 +13244,9 @@ export function DiscoverPanel({
     if (refusesNow('addToTimeline')) return
     setAddingToTimeline(true)
     try {
-      const assembly = await resolveDiscoverRifff()
+      const assembly = await resolveDiscoverRifff(soloedSlotIdRef.current)
       if (!assembly) return
-      const { rifff, vol } = assembly
+      const { rifff, vol, mute } = assembly
 
       // Appends after the furthest-right currently-placed clip, matching
       // "adds alongside, never replaces" from the design spec's own §8.4 --
@@ -13228,7 +13266,7 @@ export function DiscoverPanel({
         )
       const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
 
-      dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: [rifff], startBar, vol })
+      dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: [rifff], startBar, vol, mute })
 
       // Real bug, live-reported 2026-09-17: "i just clicked add to timeline
       // and the last slot started playing the previous instance of that slot
@@ -13341,10 +13379,10 @@ export function DiscoverPanel({
     if (refusesNow('addToShelf')) return
     setAddingToShelf(true)
     try {
-      const assembly = await resolveDiscoverRifff()
+      const assembly = await resolveDiscoverRifff(soloedSlotIdRef.current)
       if (!assembly) return
-      const { rifff, vol } = assembly
-      dispatch({ type: 'ADD_TO_SHELF', rifff, vol })
+      const { rifff, vol, mute } = assembly
+      dispatch({ type: 'ADD_TO_SHELF', rifff, vol, mute })
       onPublishedToShelf(rifff.groupId)
       setJustAddedToShelf(true)
       window.setTimeout(() => setJustAddedToShelf(false), 500)
@@ -13353,11 +13391,9 @@ export function DiscoverPanel({
     }
   }
 
-  // Reuses resolveDiscoverRifff() verbatim -- the same helper addToTimeline
-  // and addToShelf already share, which is what carries one non-obvious
-  // inherited behaviour worth keeping: a slot muted in the preview mix is
-  // placed at gain 0, not dropped, so a muted stem is saved as silence,
-  // still there, still un-muteable later.
+  // Reuses resolveDiscoverRifff() -- the same helper addToTimeline and
+  // addToShelf share, with the same solo. A slot not heard in the preview mix
+  // is kept at gain 0, not dropped, so its stem is saved as silence, still there.
   /** Returns what the keep came to, for the phone's confirmation
    * (RemoteKeepOutcome). The Mac's own button ignores it. */
   async function keepGroup(): Promise<RemoteKeepOutcome> {
@@ -13369,17 +13405,14 @@ export function DiscoverPanel({
     if (blockedActions(nowMode, still).has('keep')) return 'refused'
     setKeeping(true)
     try {
-      const assembly = await resolveDiscoverRifff()
+      // What you hear is what you get, as add-to-shelf and add-to-timeline do:
+      // with a row soloed only that row is heard. A row not heard is saved
+      // silent (gain 0), as a muted row always was, since the library has no
+      // Disable (discoverKeepMembers).
+      const assembly = await resolveDiscoverRifff(soloedSlotIdRef.current)
       if (!assembly) return 'none'
-      const { rifff, vol } = assembly
-      const members = rifff.stems.map((stem) => ({
-        path: stem.path,
-        gain: vol[stemKey(rifff.groupId, stem.slot)] ?? 1,
-        name: stem.name,
-        author: stem.author,
-        barLength: stem.barLength,
-        durationSec: stem.durationSec
-      }))
+      const { rifff } = assembly
+      const members = discoverKeepMembers(assembly)
       // The rows' lingering artists as of NOW, so main can refuse even if
       // its mirror has not caught up (refusesKeep).
       const saved = await window.rifffApi.saveDiscoveredRifff(
@@ -13509,7 +13542,7 @@ export function DiscoverPanel({
     keep: {
       label: keeping ? 'keeping…' : (keptLabel ?? 'keep'),
       disabled: keeping || listenOnly.has('keep'),
-      tooltip: listenOnly.has('keep') ? listenOnlyTip : 'keep this group',
+      tooltip: listenOnly.has('keep') ? listenOnlyTip : RADIO_KEEP_TOOLTIP,
       pulse: keptLabel !== null,
       onClick: () => void keepGroup()
     },
@@ -13525,14 +13558,14 @@ export function DiscoverPanel({
     shelf: {
       label: addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf',
       disabled: addingToShelf || listenOnly.has('addToShelf'),
-      tooltip: listenOnly.has('addToShelf') ? listenOnlyTip : undefined,
+      tooltip: listenOnly.has('addToShelf') ? listenOnlyTip : RADIO_ADD_TO_SHELF_TOOLTIP,
       pulse: justAddedToShelf,
       onClick: () => void addToShelf()
     },
     timeline: {
       label: addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline',
       disabled: addingToTimeline || listenOnly.has('addToTimeline'),
-      tooltip: listenOnly.has('addToTimeline') ? listenOnlyTip : undefined,
+      tooltip: listenOnly.has('addToTimeline') ? listenOnlyTip : RADIO_ADD_TO_TIMELINE_TOOLTIP,
       pulse: justAddedToTimeline,
       onClick: () => void addToTimeline()
     }
@@ -13795,7 +13828,7 @@ export function DiscoverPanel({
             <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tempo</span>
             <button
               onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm - 1 })}
-              aria-label="Decrease tempo"
+              aria-label="decrease tempo"
               style={{
                 width: 18,
                 height: 18,
@@ -13818,7 +13851,7 @@ export function DiscoverPanel({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur()
               }}
-              aria-label="Tempo (BPM)"
+              aria-label="tempo (bpm)"
               style={{
                 fontSize: 10,
                 width: 36,
@@ -13834,7 +13867,7 @@ export function DiscoverPanel({
             />
             <button
               onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm + 1 })}
-              aria-label="Increase tempo"
+              aria-label="increase tempo"
               style={{
                 width: 18,
                 height: 18,
@@ -13853,7 +13886,7 @@ export function DiscoverPanel({
               <button
                 onClick={() => dispatch({ type: 'SET_TEMPO', bpm: seedTempo })}
                 title={`seed tempo ${seedTempo} bpm`}
-                aria-label="Match seeded riff's own tempo"
+                aria-label="match seeded riff's own tempo"
                 style={{
                   height: 18,
                   padding: '0 6px',
@@ -14034,7 +14067,7 @@ export function DiscoverPanel({
             <button
               onClick={() => void keepGroup()}
               disabled={keeping || listenOnly.has('keep')}
-              data-tooltip={listenOnly.has('keep') ? listenOnlyTip : 'keep this group'}
+              data-tooltip={listenOnly.has('keep') ? listenOnlyTip : RADIO_KEEP_TOOLTIP}
               style={{
                 fontFamily: 'inherit',
                 fontSize: 10,
@@ -14073,7 +14106,9 @@ export function DiscoverPanel({
             <button
               onClick={() => void addToShelf()}
               disabled={addingToShelf || listenOnly.has('addToShelf')}
-              data-tooltip={listenOnly.has('addToShelf') ? listenOnlyTip : undefined}
+              data-tooltip={
+                listenOnly.has('addToShelf') ? listenOnlyTip : RADIO_ADD_TO_SHELF_TOOLTIP
+              }
               style={{
                 fontFamily: 'inherit',
                 fontSize: 10,
@@ -14093,7 +14128,9 @@ export function DiscoverPanel({
             <button
               onClick={() => void addToTimeline()}
               disabled={addingToTimeline || listenOnly.has('addToTimeline')}
-              data-tooltip={listenOnly.has('addToTimeline') ? listenOnlyTip : undefined}
+              data-tooltip={
+                listenOnly.has('addToTimeline') ? listenOnlyTip : RADIO_ADD_TO_TIMELINE_TOOLTIP
+              }
               style={{
                 fontFamily: 'inherit',
                 fontSize: 10,
@@ -14327,6 +14364,7 @@ export function DiscoverPanel({
               soloed={soloedSlotId === slot.id}
               favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
               maxBarLength={maxBarLength}
+              seedPhase={seedPhase}
               onToggleLock={() => toggleLock(slot.id)}
               radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
               radioOn={radioOn}
@@ -14803,11 +14841,13 @@ export function DiscoverPanel({
                 marginRight: 12
               }}
             >
-              {/* The source dial (2026-09-29): 0 = endlesss sounds, 100 =
-                  other sounds, 50 = half and half. The ends are "only". See
-                  drawSoundSource. */}
+              {/* The source dial (2026-09-29): 0 = endlesss instruments, 100 =
+                  recorded (audio-in), 50 = half and half. The ends are "only".
+                  See drawSoundSource. */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
+                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>
+                  {SOURCE_DIAL_LEFT_LABEL}
+                </span>
                 <Dial
                   value={sourceLean}
                   onChange={changeSourceLean}
@@ -14815,9 +14855,11 @@ export function DiscoverPanel({
                   defaultValue={DEFAULT_SOURCE_LEAN}
                   size={30}
                   ariaLabel="source"
-                  tooltip="other clockwise"
+                  tooltip={SOURCE_DIAL_TOOLTIP}
                 />
-                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
+                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>
+                  {SOURCE_DIAL_RIGHT_LABEL}
+                </span>
               </div>
               <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
                 source

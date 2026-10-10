@@ -57,6 +57,12 @@ import {
 } from './radioFold'
 import { THROW_BEATS, THROW_EVERY_BARS } from './radioThrows'
 import { DIG_NEAR_SHARE } from './radioDig'
+import {
+  RADIO_KEEP_TOOLTIP,
+  RADIO_LIKE_TOOLTIP,
+  RADIO_TURN_TOOLTIP,
+  SOURCE_DIAL_TOOLTIP
+} from './radioControlCopy'
 
 // ---- the shape ----
 
@@ -801,7 +807,7 @@ export const RADIO_GUIDE: RadioGuide = {
             },
             {
               key: 'like',
-              text: 'the thumbs up: star the sound as a favourite and hook it',
+              text: `the thumbs up: ${RADIO_LIKE_TOOLTIP}`,
               desktop: [{ row: 'like' }]
             },
             {
@@ -859,7 +865,7 @@ export const RADIO_GUIDE: RadioGuide = {
             },
             {
               key: 'turn',
-              text: 'a turnaround at the next loop top',
+              text: RADIO_TURN_TOOLTIP,
               desktop: [{ strip: 'turn' }]
             },
             {
@@ -874,7 +880,7 @@ export const RADIO_GUIDE: RadioGuide = {
             },
             {
               key: 'keep',
-              text: 'save the rows playing now to your library',
+              text: RADIO_KEEP_TOOLTIP,
               desktop: [{ strip: 'keep' }]
             }
           ]
@@ -892,7 +898,7 @@ export const RADIO_GUIDE: RadioGuide = {
             },
             {
               key: 'source',
-              text: 'endlesss sounds to the left, other sounds to the right',
+              text: SOURCE_DIAL_TOOLTIP,
               desktop: [{ strip: 'source' }]
             },
             {
@@ -958,10 +964,10 @@ export const RADIO_GUIDE: RadioGuide = {
             },
             {
               key: 'source',
-              text: 'endlesss sounds to the left, other sounds to the right',
+              text: SOURCE_DIAL_TOOLTIP,
               web: ['source']
             },
-            { key: 'turn', text: 'a turnaround at the next loop top', web: ['turn'] },
+            { key: 'turn', text: RADIO_TURN_TOOLTIP, web: ['turn'] },
             { key: 'build · drop', text: 'push the intensity wave along', web: ['build', 'drop'] },
             {
               key: 'level · reverb',

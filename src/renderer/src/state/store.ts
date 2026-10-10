@@ -1,4 +1,5 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
+import { applyReonedRepair } from '@shared/reonedRepair'
 import { sqrtGain } from '@shared/mixGain'
 import {
   DEFAULT_REVERB,
@@ -645,6 +646,9 @@ export type Action =
        * intended. Every existing caller omits this field and keeps today's
        * sqrtGain-default behavior unchanged. */
       vol?: Record<string, number>
+      /** Stems that arrive Disabled (state.mute), keyed by stemKey: Discover's rows that weren't
+       * heard when it was added (discoverRowDisabledOnAdd). Merged in; omitted by every import. */
+      mute?: Record<string, boolean>
     }
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
   | { type: 'MOVE_TO_CHANNEL'; groupId: string; startBar: number; channelId: string }
@@ -664,6 +668,8 @@ export type Action =
        * volume-slider tests) that omits it keeps reading the universal
        * `state.vol[key] ?? 1` default unchanged. */
       vol?: Record<string, number>
+      /** Stems that arrive Disabled (state.mute), as ADD_TO_SHELF's own `mute`. */
+      mute?: Record<string, boolean>
     }
   | { type: 'SEQUENCE_RIFFFS'; groupIds: string[] }
   | { type: 'SELECT'; groupId: string }
@@ -724,6 +730,13 @@ export type Action =
         phaseSourcePath?: string
         phaseBars?: number
       }[]
+    }
+  | {
+      /** A missing re-oned copy rebuilt under a new name (reonedRepairOnOpen.ts's retry, in
+       * ReonedCopyMissingNotice.tsx). A repair, not an undo step: history.ts applies it to the
+       * present and to every past and future step, since it is the same audio under a new name. */
+      type: 'REPAIR_REONED_PATHS'
+      results: { path: string; bakedPath: string; durationSec: number }[]
     }
   | {
       type: 'PASTE_RIFFF'
@@ -1132,7 +1145,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         rifffs: { ...state.rifffs, [action.rifff.groupId]: action.rifff },
-        vol
+        vol,
+        ...(action.mute ? { mute: { ...state.mute, ...action.mute } } : {})
       }
     }
 
@@ -1403,7 +1417,11 @@ export function reducer(state: AppState, action: Action): AppState {
                 path: action.path,
                 durationSec: action.durationSec,
                 trimStartSec: undefined,
-                trimEndSec: undefined
+                trimEndSec: undefined,
+                // The stretched render is a new original. A lineage kept from before would make
+                // the next re-one (or a rebuild) bake the unstretched source with this length.
+                phaseSourcePath: undefined,
+                phaseBars: undefined
               }
             ]
           }
@@ -1524,8 +1542,12 @@ export function reducer(state: AppState, action: Action): AppState {
     // and any timeline windows the caller deliberately linked to it. Path
     // equality is only a compatibility signal used before this action is
     // dispatched; it is never sufficient here to mutate another shelf riff.
-    // Every result is a fresh immutable asset, so independently edited copies
-    // can no longer fight over one on-disk `.baked.wav` alias.
+    // A copy is never rewritten once published, but it is named by its recipe
+    // (src/main/reonedRecipe.ts), so two riffs re-oned to the same spot of the
+    // same original share one file. That is why a riff's first re-one gives
+    // it (and the windows moving with it) a phaseLinkId: from then on the
+    // path rule in bakeTargetGroupIds never ties it to another riff that
+    // merely reuses the same copy.
     //
     // The batch is adopted only when it covers every stem in a target riff.
     // On an unsupported/corrupt input the main process returns no partial
@@ -1548,8 +1570,15 @@ export function reducer(state: AppState, action: Action): AppState {
       if (touched.length === 0) return state
       const rifffs = { ...state.rifffs }
       const off = { ...state.off }
+      // The riffs that moved together stay linked. A legacy riff (saved before phaseLinkId)
+      // joins its first target's lineage, or starts one named after it.
+      const linkId =
+        touched.map((groupId) => rifffs[groupId].phaseLinkId).find((id) => id !== undefined) ??
+        touched[0]
       for (const groupId of touched) {
-        const rifff = rifffs[groupId]
+        const rifff = rifffs[groupId].phaseLinkId
+          ? rifffs[groupId]
+          : { ...rifffs[groupId], phaseLinkId: linkId }
         const stems = rifff.stems.map((s) => {
           const result = resultMap.get(s.path)
           return {
@@ -1573,6 +1602,17 @@ export function reducer(state: AppState, action: Action): AppState {
         }
       }
       return { ...state, rifffs, off }
+    }
+
+    // A missing re-oned copy came back under a new name. A repair is not a phase edit: the
+    // copy holds the same rotation of the same original, so `off` and the lineage are untouched.
+    // Unlike APPLY_BAKE, it applies to every riff naming the path: they all named one missing
+    // file, and it is the same audio again.
+    case 'REPAIR_REONED_PATHS': {
+      const { rifffs } = applyReonedRepair(state.rifffs, [
+        action.results.map((r) => ({ ...r, status: 'rebuilt' as const }))
+      ])
+      return rifffs === state.rifffs ? state : { ...state, rifffs: rifffs as AppState['rifffs'] }
     }
 
     // Adds a fresh, independent rifff instance (new groupId, same stem file paths
@@ -1631,7 +1671,8 @@ export function reducer(state: AppState, action: Action): AppState {
         channelOf,
         channelOrder,
         stretch,
-        vol: { ...state.vol, ...action.vol }
+        vol: { ...state.vol, ...action.vol },
+        ...(action.mute ? { mute: { ...state.mute, ...action.mute } } : {})
       }
     }
 

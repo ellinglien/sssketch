@@ -1,6 +1,15 @@
+import { useAppSelector, useDispatch } from '../state/StoreContext'
 import { startPointerDrag } from './dragUtils'
-import { metronomeVolumeFromDrag } from './metronomeVolume'
+import {
+  metronomeButtonTitle,
+  metronomeVolumeBarPx,
+  metronomeVolumeFromDrag
+} from './metronomeVolume'
 
+// A plain triangle-body + pendulum-arm silhouette, monochrome via
+// currentColor -- matches this app's existing convention of drawing
+// transport glyphs directly (▶/■ in the transport) rather than pulling in an
+// icon library, and its "no emoji in chrome" design-system rule (CLAUDE.md).
 function MetronomeIcon(): React.JSX.Element {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor">
@@ -11,33 +20,33 @@ function MetronomeIcon(): React.JSX.Element {
   )
 }
 
-export function MetronomeButton({
-  enabled,
-  volume,
-  onToggle,
-  onVolumeChange
-}: {
-  enabled: boolean
-  volume: number
-  onToggle: () => void
-  onVolumeChange: (volume: number) => void
-}): React.JSX.Element {
+/** The app's one metronome switch: a click toggles it, a vertical drag sets
+ * its volume. Used by the main transport and by Cross, and both drive the same
+ * app-level state (metronomeEnabled / metronomeVolume), which StoreContext
+ * sends to the engine. The engine clicks at the tempo of whatever project it
+ * has loaded, so in Cross it follows the preview's tempo. */
+export function MetronomeButton(): React.JSX.Element {
+  const dispatch = useDispatch()
+  const enabled = useAppSelector((state) => state.metronomeEnabled)
+  const volume = useAppSelector((state) => state.metronomeVolume)
   return (
     <button
-      onClick={onToggle}
+      onClick={() => dispatch({ type: 'TOGGLE_METRONOME' })}
       onMouseDown={(event) => {
         const startVolume = volume
         startPointerDrag(event, (_deltaX, deltaY) => {
-          onVolumeChange(metronomeVolumeFromDrag(startVolume, deltaY))
+          dispatch({
+            type: 'SET_METRONOME_VOLUME',
+            volume: metronomeVolumeFromDrag(startVolume, deltaY)
+          })
         })
       }}
-      aria-label="Toggle metronome"
-      title={`${enabled ? 'metronome: on' : 'metronome: off'} · ${Math.round(volume * 100)}% · drag up/down for volume`}
+      aria-label="metronome"
+      aria-pressed={enabled}
+      title={metronomeButtonTitle(enabled, volume)}
       style={{
         height: 26,
         width: 26,
-        flex: 'none',
-        padding: 0,
         borderRadius: 0,
         display: 'flex',
         alignItems: 'center',
@@ -45,8 +54,7 @@ export function MetronomeButton({
         background: enabled ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
         border: `1px solid ${enabled ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
         color: enabled ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-        position: 'relative',
-        cursor: 'pointer'
+        position: 'relative'
       }}
     >
       <MetronomeIcon />
@@ -57,8 +65,7 @@ export function MetronomeButton({
           right: 1,
           bottom: 1,
           width: 2,
-          height: `${Math.round((volume / 2) * 22)}px`,
-          maxHeight: 22,
+          height: `${metronomeVolumeBarPx(volume)}px`,
           background: 'currentColor',
           pointerEvents: 'none'
         }}

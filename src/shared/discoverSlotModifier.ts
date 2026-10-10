@@ -46,7 +46,8 @@ export function slotRollOptions(
   }
 }
 
-/** The source dial's two ends. 0 is endlesss, 100 is other. */
+/** The source dial's two ends. 0 is endlesss instruments, 100 is other sounds: audio-in,
+ * recorded (the dial's end labels, @shared/radioControlCopy). */
 export const SOURCE_LEAN_ENDLESSS = 0
 export const SOURCE_LEAN_OTHER = 100
 /** Where the dial starts on a new install, and where a double-click puts it back: half and half

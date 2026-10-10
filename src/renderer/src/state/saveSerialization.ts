@@ -57,6 +57,36 @@ export function dirtyCheckJson(state: AppState): string {
   return serializeProject(state)
 }
 
+/** How an explicit save went. 'changed': the write landed, but the project
+ * changed while it was awaiting a plugin capture or the disk
+ * (saveCompletionIsCurrent false), so it doesn't hold the newest edits.
+ * 'busy': another save before leaving (one publishing an EEEDIT draft) was
+ * still running, so this one didn't start. */
+export type SaveOutcome =
+  { kind: 'saved' } | { kind: 'changed' } | { kind: 'busy' } | { kind: 'failed'; error: string }
+
+/** What to tell the user after a save, or null for nothing. `purpose` is
+ * 'save' for the Save button and Cmd+S, where a 'changed' save just leaves the
+ * project marked unsaved, and 'leaving' for a save before quitting, New or
+ * opening another project, which doesn't go on unless the save is current and
+ * so must say why it stopped. */
+export function saveOutcomeNotice(
+  outcome: SaveOutcome,
+  purpose: 'save' | 'leaving'
+): string | null {
+  if (outcome.kind === 'failed') return `save failed: ${outcome.error}`
+  if (outcome.kind === 'changed' && purpose === 'leaving') return CHANGED_DURING_SAVE_NOTICE
+  if (outcome.kind === 'busy')
+    return purpose === 'leaving' ? BUSY_NOTICE + '\n\nnothing was closed.' : BUSY_NOTICE
+  return null
+}
+
+const BUSY_NOTICE = 'already saving. wait for that save to finish, then try again.'
+
+const CHANGED_DURING_SAVE_NOTICE =
+  "saved, but the project changed while it was saving, so the newest changes aren't saved yet.\n\n" +
+  'nothing was closed. save again, then try again.'
+
 /** A completed write may have saved exactly what it started with while the
  * user made newer edits during an awaited plugin capture or disk write. Such
  * a write is successful as a snapshot, but it is not current enough to
@@ -113,4 +143,31 @@ export function autosaveAction(
 ): 'write' | 'clear' | 'skip' {
   if (unsaved) return 'write'
   return wroteSinceClear ? 'clear' : 'skip'
+}
+
+/** Whether the autosave holds off for a previous session's crash snapshot: only while the
+ * welcome is offering it (Recover / Discard). Writing then would overwrite the snapshot with a
+ * session that hasn't started. Once the welcome is closed with its x (neither recovered nor
+ * discarded), the snapshot stays on disk until this session has unsaved work of its own, and the
+ * autosave's first write replaces it: from then on the recovery file protects the new work, as it
+ * must whenever work is unsaved (AGENTS.md). Holding off for the rest of the session instead left
+ * that work with no crash protection at all. */
+export function autosaveWaitsOnRecoveryOffer(offer: {
+  recoveryPending: boolean
+  offerDismissed: boolean
+}): boolean {
+  return offer.recoveryPending && !offer.offerDismissed
+}
+
+/** Whether a crash-recovery snapshot holds real work, worth offering at launch: at least one
+ * riff. A launch left untouched still autosaves its startup project (a recording channel and
+ * nothing else), and offering that would ask to "recover" work that was never there. An
+ * unreadable snapshot has nothing the app could recover either. */
+export function recoverySnapshotHasContent(json: string): boolean {
+  try {
+    const parsed = JSON.parse(json) as { rifffs?: Record<string, unknown> } | null
+    return Object.keys(parsed?.rifffs ?? {}).length > 0
+  } catch {
+    return false
+  }
 }

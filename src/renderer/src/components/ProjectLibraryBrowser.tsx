@@ -187,7 +187,7 @@ export function ProjectLibraryBrowser({
     if (previewCancelled()) return
     if (!json) {
       stopBackupPreview()
-      window.alert("Couldn't preview that version.")
+      window.alert("couldn't preview that version.")
       return
     }
     let state: AppState
@@ -196,7 +196,7 @@ export function ProjectLibraryBrowser({
     } catch (err) {
       console.error('ProjectLibraryBrowser: failed to parse backup for preview:', err)
       stopBackupPreview()
-      window.alert("Couldn't preview that version.")
+      window.alert("couldn't preview that version.")
       return
     }
     // Only placed (arranged) stems -- an unplaced shelf-only rifff was
@@ -212,23 +212,20 @@ export function ProjectLibraryBrowser({
       )
     if (stems.length === 0) {
       stopBackupPreview()
-      window.alert('Nothing to preview -- no stems were placed on the timeline in that version.')
+      window.alert('nothing to preview -- no stems were placed on the timeline in that version.')
       return
     }
     if (previewCancelled()) return
-    try {
-      await pauseArrangementBeforeShelfPreview({
-        playing,
-        pauseArrangement: () => dispatch({ type: 'PAUSE' }),
-        stopEngine: () => window.rifffApi.engineStop()
-      })
-    } catch (err) {
-      if (!isActivePreview(previewToken)) return
-      console.error('ProjectLibraryBrowser: failed to stop arrangement before preview:', err)
+    const stopped = await pauseArrangementBeforeShelfPreview({
+      playing,
+      pauseArrangement: () => dispatch({ type: 'PAUSE' }),
+      stopEngine: () => window.rifffApi.engineStop()
+    })
+    if (previewCancelled()) return
+    if (!stopped) {
       stopBackupPreview()
       return
     }
-    if (previewCancelled()) return
     setPreviewingPath(backupPath)
     const sources = await startPreviewLoop(getAudioContext(), stems, previewCancelled)
     if (previewCancelled()) {
@@ -260,7 +257,7 @@ export function ProjectLibraryBrowser({
     const result = await window.rifffApi.deleteSketch(name)
     if (!result.ok) {
       console.error('ProjectLibraryBrowser: deleteSketch failed:', result.reason)
-      window.alert(`Couldn't delete "${name}": ${result.reason}`)
+      window.alert(`couldn't delete "${name}": ${result.reason}`)
       return
     }
     setSketches(await window.rifffApi.listLibrarySketches())
@@ -300,7 +297,7 @@ export function ProjectLibraryBrowser({
     const result = await window.rifffApi.restoreSketchBackup(name, backupPath)
     if (!result.ok) {
       console.error('ProjectLibraryBrowser: restoreSketchBackup failed:', result.reason)
-      window.alert(`Couldn't restore that version: ${result.reason}`)
+      window.alert(`couldn't restore that version: ${result.reason}`)
       return
     }
     setHistoryOpenName(null)
@@ -390,7 +387,7 @@ export function ProjectLibraryBrowser({
             <button onClick={onOpenFromDisk} style={buttonStyle()}>
               open from disk…
             </button>
-            <button onClick={onClose} aria-label="Close project library" style={buttonStyle()}>
+            <button onClick={onClose} aria-label="close project library" style={buttonStyle()}>
               ×
             </button>
           </div>

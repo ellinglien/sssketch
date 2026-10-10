@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { formatBpm } from '@shared/format'
 import { backgroundScanGate } from '../audio/backgroundScanGate'
 
 /** Shown when "New" is clicked, after the discard-unsaved-changes confirm
@@ -35,7 +36,7 @@ export function NewProjectModal({
   // Free-type-until-blur/Enter, clamped to [40, 200] on commit rather than
   // on every keystroke -- same pattern TransportBar.tsx's and Discover's
   // own tempo fields already use.
-  const [bpmText, setBpmText] = useState(String(defaultBpm))
+  const [bpmText, setBpmText] = useState(formatBpm(defaultBpm))
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {

@@ -4,6 +4,7 @@ import { stemKey } from '@shared/types'
 import { scheduleLiveParamSync } from './liveParamSync'
 import { useAppSelector, useDispatch } from '../state/StoreContext'
 import { ARRANGEMENT_FIRST_GAIN_TOP, ARRANGEMENT_MIXER_CONTROL_INSET } from './arrangementMixerRail'
+import { MixerRailAnchor } from './MixerRailAnchor'
 
 /** The dial's own size. Small enough to continue the narrow right-edge
  * control stack beneath the channel's m/s letters without crowding it. */
@@ -151,11 +152,10 @@ export function RowGainDial({
   }
 
   return (
-    // Zero-height sticky anchor, the same technique ChannelRow's own m/s/fx
-    // stack uses: the dial hangs off it absolutely, so it stays on screen
-    // while the timeline scrolls horizontally without adding anything to
-    // the row's own flow height.
-    <div style={{ position: 'sticky', right: 0, top: 0, height: 0, zIndex: 6 }}>
+    // Pinned into the mixer rail the same way ChannelRow's m/s/fx stack is,
+    // so the dial stays on screen beside the inspector however long the
+    // timeline is.
+    <MixerRailAnchor zIndex={6}>
       <div
         style={{
           position: 'absolute',
@@ -174,6 +174,6 @@ export function RowGainDial({
           tooltip={`gain ${dbLabel(gain)} dB`}
         />
       </div>
-    </div>
+    </MixerRailAnchor>
   )
 }

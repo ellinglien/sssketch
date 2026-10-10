@@ -754,6 +754,10 @@ namespace sssketch
         auto* outR = outputChannelData[1];
         juce::FloatVectorOperations::clear(outL, numSamples);
         juce::FloatVectorOperations::clear(outR, numSamples);
+        // Counted only past the channel check above: a callback that returns
+        // there never applies a transport command, so for a stop waiting on
+        // silence it is as good as no callback at all (see HaltAck.h).
+        renderedCallbackCount.fetch_add(1, std::memory_order_relaxed);
 
         const auto applyLatestTransportCommand = [this]()
         {
@@ -1070,4 +1074,10 @@ namespace sssketch
     }
 
     void Transport::audioDeviceStopped() {}
+
+    bool Transport::audioDeviceRunning() const
+    {
+        auto* device = deviceManager.getCurrentAudioDevice();
+        return device != nullptr && device->isPlaying();
+    }
 }

@@ -42,6 +42,10 @@ export interface KeyGestureGroup {
   gestures: readonly KeyGesture[]
 }
 
+/** The import view's riffs take several at once, which nothing said (the 2026-10-08 call, U5:
+ * even Elling had to try a few keys). Shown on each riff's tooltip and the import button's. */
+export const IMPORT_MULTI_SELECT_HINT = 'shift-click a run · cmd-click to add'
+
 export const KEY_GESTURES: readonly KeyGestureGroup[] = [
   {
     area: 'transport and timeline',
@@ -106,6 +110,15 @@ export const KEY_GESTURES: readonly KeyGestureGroup[] = [
     ]
   },
   {
+    area: 'import',
+    gestures: [
+      { keys: 'click a riff', does: 'preview it' },
+      { keys: 'click the playing riff', does: 'stop its preview' },
+      { keys: 'shift-click', does: 'select a run of riffs to import' },
+      { keys: 'cmd-click', does: 'add one to the selection, or take it out' }
+    ]
+  },
+  {
     area: 'dials',
     gestures: [
       { keys: 'drag', does: 'change the value' },
@@ -118,6 +131,8 @@ export const KEY_GESTURES: readonly KeyGestureGroup[] = [
   {
     area: 'discover',
     gestures: [
+      { keys: 'cmd+z', does: "undo a discover or radio change, not the project's" },
+      { keys: 'cmd+shift+z', does: 'redo it' },
       { keys: 'click a match meter', does: 'open the reclassify picker' },
       { keys: 'esc', does: 'drop the kinds you were about to add' }
     ]

@@ -160,6 +160,43 @@ namespace sssketch
                     1.0e-6f);
             }
 
+            // Cross (and Discover) audition by loading a throwaway project at
+            // their own tempo, then load the real project back. The click has
+            // no tempo of its own: it must follow whichever project is loaded.
+            beginTest("metronome clicks at the tempo of the project loaded now, not an earlier one");
+            {
+                EngineProject before;
+                before.bpm = 60.0;
+                before.snapDiv = 16.0;
+                EngineProject after = before;
+                after.bpm = 120.0;
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setMetronomeEnabled(true);
+                engine.setMetronomeVolume(1.0f);
+                engine.setProject(before);
+                engine.setProject(after);
+
+                // A few ms after beat 2: the same bar position is 10 ms past the
+                // beat at 60 bpm and 5 ms at 120, so the two clicks differ here.
+                const double positionBars = 0.25 + 0.0025;
+                const int n = 64;
+                std::vector<float> l(n, 0.0f), r(n, 0.0f);
+                engine.renderBlock(positionBars, 44100.0, n, l.data(), r.data(), channelChains);
+                bool differsFromOldTempo = false;
+                for (int i = 0; i < n; ++i)
+                {
+                    const double tAfter = positionBars * 2.0 + i / 44100.0; // 120 bpm: 2 s a bar
+                    const double tBefore = positionBars * 4.0 + i / 44100.0; // 60 bpm: 4 s a bar
+                    expectWithinAbsoluteError(l[i], metronomeSampleAt(tAfter, 0.5), 1.0e-6f);
+                    if (std::abs(metronomeSampleAt(tBefore, 1.0) - l[i]) > 1.0e-3f)
+                        differsFromOldTempo = true;
+                }
+                expect(differsFromOldTempo);
+            }
+
             beginTest("metronome contributes nothing when disabled (the default)");
             {
                 EngineProject project;

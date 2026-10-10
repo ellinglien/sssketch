@@ -111,15 +111,15 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
   return promise
 }
 
-/** Peaks + zero-crossing brightness (128 buckets each) from an already
- * decoded buffer -- the one function that produces a WaveformAnalysis,
- * shared by this module's own decode and analyzeStemOnce.ts's single
- * decode. */
-export function waveformFromBuffer(audioBuffer: AudioBuffer): WaveformAnalysis {
+/** Peaks + zero-crossing brightness (128 buckets each, by default) from an
+ * already decoded buffer -- the one function that produces a
+ * WaveformAnalysis, shared by this module's own decode, analyzeStemOnce.ts's
+ * single decode and detailPeakCache.ts's finer re-one waveform. */
+export function waveformFromBuffer(audioBuffer: AudioBuffer, buckets = 128): WaveformAnalysis {
   const channel = audioBuffer.getChannelData(0)
   return {
-    peaks: peaksFromChannel(channel, 128),
-    brightness: zcrFromChannel(channel, 128)
+    peaks: peaksFromChannel(channel, buckets),
+    brightness: zcrFromChannel(channel, buckets)
   }
 }
 

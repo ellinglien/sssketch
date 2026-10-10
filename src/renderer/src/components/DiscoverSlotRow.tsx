@@ -55,11 +55,13 @@ import {
   type RadioRowPart,
   type RadioView
 } from '@shared/radioView'
+import { DISCOVER_LIKE_TOOLTIP, RADIO_LIKE_TOOLTIP } from '@shared/radioControlCopy'
 import {
   peekResolvedCandidateStem,
   resolveCandidateStem,
   type ResolvedCandidateStem
 } from './discoverCandidateStem'
+import type { DiscoverSeedPhase } from '@shared/discoverSeedPhase'
 import {
   DISCOVER_ROW_COLUMN_GAP,
   DISCOVER_ROW_GRID_COLUMNS,
@@ -273,6 +275,7 @@ export function DiscoverSlotRow({
   soloed,
   favourited,
   maxBarLength,
+  seedPhase = null,
   onToggleLock,
   radioFlag,
   radioOn,
@@ -367,6 +370,9 @@ export function DiscoverSlotRow({
    * the row's: since 2026-09-30 there is ONE, drawn by DiscoverPanel over
    * every row at once (sweepLineRef). */
   maxBarLength: number
+  /** The Discover seed's rotation (DiscoverPanel's seedPhase): a candidate from the seed's own
+   * jam resolves baked by it (resolveCandidateStem). */
+  seedPhase?: DiscoverSeedPhase | null
   onToggleLock: () => void
   /** What this row has been told about radio's next change: `hook` to hold
    * it, `replace-soon` to hurry it, null for neither. At most one row in
@@ -547,7 +553,7 @@ export function DiscoverSlotRow({
     let cancelled = false
     if (!slot.candidate) return
     const candidate = slot.candidate
-    void resolveCandidateStem(candidate).then((stem) => {
+    void resolveCandidateStem(candidate, seedPhase).then((stem) => {
       if (cancelled) return
       setResolved(
         stem
@@ -558,7 +564,7 @@ export function DiscoverSlotRow({
     return () => {
       cancelled = true
     }
-  }, [slot.candidate])
+  }, [slot.candidate, seedPhase])
 
   // A seeded slot (see DiscoverSlot's own seedStem doc comment) is already
   // resolved -- there is nothing to fetch, so this is derived at render time
@@ -607,11 +613,11 @@ export function DiscoverSlotRow({
   // and the [resolvedStem] effect below does not report it twice.
   const peekResolved = useMemo(() => {
     if (!slot.candidate) return null
-    const stem = peekResolvedCandidateStem(slot.candidate)
+    const stem = peekResolvedCandidateStem(slot.candidate, seedPhase)
     return stem
       ? { candidate: slot.candidate, status: 'ready' as const, stem: { slot: 1, ...stem } }
       : null
-  }, [slot.candidate])
+  }, [slot.candidate, seedPhase])
 
   const resolvedForCurrent =
     seedResolved ?? peekResolved ?? (resolved?.candidate === slot.candidate ? resolved : null)
@@ -1635,6 +1641,9 @@ export function DiscoverSlotRow({
   // reserved either way, so nothing shifts.
   // In the radio layout 👍 shows only the star: holding is the bar at the row's left edge there.
   const likeInverted = holding && !radioLayout
+  // What 👍 does, said in full (the 2026-10-08 call: "what does like do?"): with radio on it
+  // also hooks the stem, so radio keeps bringing it back.
+  const likeTooltip = `${RADIO_ROW_LABEL.like}: ${radioOn ? RADIO_LIKE_TOOLTIP : DISCOVER_LIKE_TOOLTIP}`
   const likeButton = hasStemToActOn && (
     <button
       onClick={onLike}
@@ -1651,10 +1660,10 @@ export function DiscoverSlotRow({
             : holding
               ? favourited
                 ? 'unlike · holding'
-                : `${RADIO_ROW_LABEL.like} · holding`
+                : `${likeTooltip} · holding`
               : favourited
                 ? 'unlike'
-                : RADIO_ROW_LABEL.like
+                : likeTooltip
       }
       aria-label={
         listenOnlyStars ? 'hold, listening only' : favourited ? 'unlike' : RADIO_ROW_LABEL.like

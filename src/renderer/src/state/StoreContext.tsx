@@ -14,7 +14,12 @@ import { startupState, type AppState } from './store'
 import { createEngineOwnershipTracker, type EngineOwner } from '@shared/engineOwnership'
 import { createSequentialRunner } from '@shared/sequentialAsync'
 import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector'
-import { createHistoryState, historyReducer, type HistoryAction } from './history'
+import {
+  createHistoryState,
+  historyReducer,
+  type HistoryAction,
+  type HistoryState
+} from './history'
 import { buildEngineProject, type BuildEngineProjectOptions } from '@shared/buildEngineProject'
 import { timelineDubThrows } from '@shared/timelineThrows'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
@@ -111,6 +116,21 @@ export function getStateSnapshot(): AppState {
 export function __setStateForTest(state: AppState): void {
   currentState = state
   for (const listener of stateListeners) listener()
+}
+
+// The whole undo history, mirrored beside currentState for the re-oned copies cleanup
+// (reonedInUse.ts): a copy that only an undo or redo step names is still in use. Same writer and
+// same safety argument as currentState; read only from event handlers and async passes.
+let currentHistory: HistoryState = createHistoryState(startupState)
+
+// eslint-disable-next-line react-refresh/only-export-components -- store bridge function, not a component
+export function getHistorySnapshot(): HistoryState {
+  return currentHistory
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- test-only helper, not a component
+export function __setHistoryForTest(history: HistoryState): void {
+  currentHistory = history
 }
 
 const StateCtx = createContext<AppState>(startupState)
@@ -264,6 +284,8 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // specifically before adopting the compiler.
   // eslint-disable-next-line react-hooks/globals -- see comment above
   currentState = state
+  // eslint-disable-next-line react-hooks/globals -- the same argument, for the history mirror
+  currentHistory = history
   useEffect(() => {
     for (const listener of stateListeners) listener()
   }, [state])
