@@ -1108,6 +1108,214 @@ function ShapeClipInspector({
     gap: 7,
     borderBottom: '1px solid var(--ra-border)'
   }
+  // The interventions list shows at all times, with or without a selection: a card opens only
+  // on selected clips, but the rack itself never hides.
+  const interventions = (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ marginBottom: 2 }}>
+        <span style={{ fontSize: 10, color: 'var(--ra-text-3)', letterSpacing: '0.08em' }}>
+          interventions
+        </span>
+        {!enabled && processRack.length > 0 && (
+          <span style={{ marginLeft: 6, fontSize: 9, color: 'var(--ra-text-4)' }}>
+            select clips to open one
+          </span>
+        )}
+      </div>
+      {processRack.map((unit) => {
+        const activeUnit = processSession?.unitId === unit.id
+        const anotherUnitLocked = processSession !== null && processSession.dirty && !activeUnit
+        const displayedProcess = activeUnit ? processSession.process : unit.process
+        return (
+          <div
+            key={unit.id}
+            data-shape-intervention-card={unit.id}
+            style={{
+              marginTop: 6,
+              padding: 6,
+              border: `1px solid ${activeUnit ? 'var(--ra-text-3)' : 'var(--ra-border)'}`,
+              background: 'var(--ra-bg-row-sub)',
+              opacity: processBaking || anotherUnitLocked ? 0.48 : 1,
+              pointerEvents: processBaking || anotherUnitLocked ? 'none' : 'auto'
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: activeUnit ? 4 : 0
+              }}
+            >
+              <button
+                type="button"
+                disabled={!enabled || activeUnit}
+                aria-expanded={activeUnit}
+                title={activeUnit ? undefined : 'open this intervention'}
+                onClick={() => onProcessOpen(unit.id, unit.process)}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  height: 20,
+                  padding: 0,
+                  border: 0,
+                  background: 'transparent',
+                  color: activeUnit ? 'var(--ra-text-2)' : 'var(--ra-text-3)',
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  letterSpacing: '0.08em',
+                  textAlign: 'left',
+                  cursor: enabled && !activeUnit ? 'pointer' : 'default',
+                  opacity: enabled ? 1 : 0.35
+                }}
+              >
+                {shapeProcessLabel(unit.process.type)}
+              </button>
+              {activeUnit && (
+                <button
+                  aria-pressed={!processSession.bypass}
+                  aria-label={
+                    processSession.bypass ? 'preview intervention' : 'bypass intervention'
+                  }
+                  title={
+                    processSession.bypass ? 'preview intervention' : 'hear before intervention'
+                  }
+                  style={{
+                    width: 20,
+                    height: 20,
+                    marginRight: 4,
+                    padding: 0,
+                    display: 'grid',
+                    placeItems: 'center',
+                    border: '1px solid var(--ra-border)',
+                    background: 'transparent',
+                    color: processSession.bypass ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => onProcessBypass(!processSession.bypass)}
+                >
+                  {processSession.bypass ? <EyeSlash size={13} /> : <Eye size={13} />}
+                </button>
+              )}
+              <button
+                aria-label={`remove ${shapeProcessLabel(unit.process.type)} intervention`}
+                title="remove this intervention"
+                onClick={() => onProcessRackRemove(unit.id)}
+                style={{
+                  width: 20,
+                  height: 20,
+                  padding: 0,
+                  border: '1px solid var(--ra-border)',
+                  background: 'transparent',
+                  color: 'var(--ra-text-3)',
+                  fontFamily: 'inherit',
+                  fontSize: 12,
+                  cursor: 'pointer'
+                }}
+              >
+                ×
+              </button>
+            </div>
+            {activeUnit && (
+              <>
+                <ShapeProcessControls
+                  process={displayedProcess}
+                  onChange={(process) => onProcessChange(unit.id, process)}
+                />
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr 1.15fr',
+                    gap: 3,
+                    marginTop: 6
+                  }}
+                >
+                  <button style={compactStepButton()} onClick={onProcessCancel}>
+                    cancel
+                  </button>
+                  <button
+                    style={{
+                      ...compactStepButton(),
+                      // The primary action: bright ink and a stronger edge, monochrome.
+                      color: 'var(--ra-text)',
+                      borderColor: 'var(--ra-text-3)'
+                    }}
+                    onClick={onProcessApply}
+                  >
+                    {processBakeDestination === 'replace' ? 'baking…' : 'bake'}
+                  </button>
+                  <button
+                    style={{
+                      ...compactStepButton(),
+                      color: 'var(--ra-text-3)',
+                      borderColor: 'var(--ra-border-strong)',
+                      background: 'var(--ra-bg-row-active)'
+                    }}
+                    onClick={onProcessAddStem}
+                    title="render this intervention to a new stem lane"
+                  >
+                    {processBakeDestination === 'stem' ? 'adding…' : '+ stem'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )
+      })}
+      <button
+        data-shape-intervention-picker="true"
+        disabled={(processSession?.dirty ?? false) || processBaking}
+        style={{
+          ...buttonStyle(),
+          display: 'block',
+          width: 'auto',
+          marginTop: 8,
+          opacity: !processSession?.dirty && !processBaking ? 1 : 0.35
+        }}
+        onClick={() => {
+          // A clean expanded card normally collapses on an outside pointer
+          // down. Treat the picker as one atomic action instead: collapse the
+          // clean card and open the picker from this same registered click so
+          // layout movement cannot make the button dodge the pointer.
+          if (processSession) onProcessCancel()
+          setProcessPickerOpen((open) => !open)
+        }}
+      >
+        + intervention
+      </button>
+      {processPickerOpen ? (
+        <div
+          style={{
+            marginTop: 5,
+            padding: 6,
+            border: '1px solid var(--ra-border)',
+            background: 'var(--ra-bg-row-sub)',
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 4
+          }}
+        >
+          {SHAPE_PROCESS_CATALOG.map((item) => (
+            <button
+              key={item.type}
+              style={{ ...buttonStyle(), padding: '0 4px' }}
+              onClick={() => {
+                setProcessPickerOpen(false)
+                onProcessRackAdd(item.type)
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {processError && (
+        <div style={{ marginTop: 7, fontSize: 9, color: 'var(--ra-text-3)', lineHeight: 1.4 }}>
+          {processError}
+        </div>
+      )}
+    </div>
+  )
   if (!enabled) {
     return (
       <aside aria-label="clip inspector — no selection" style={inspectorShellStyle}>
@@ -1181,6 +1389,7 @@ function ShapeClipInspector({
             drag riffs from the shelf to import stems.
           </span>
         </div>
+        {interventions}
       </aside>
     )
   }
@@ -1575,198 +1784,7 @@ function ShapeClipInspector({
           </span>
         </div>
       </div>
-      {processRack.map((unit) => {
-        const activeUnit = processSession?.unitId === unit.id
-        const anotherUnitLocked = processSession !== null && processSession.dirty && !activeUnit
-        const displayedProcess = activeUnit ? processSession.process : unit.process
-        return (
-          <div
-            key={unit.id}
-            data-shape-intervention-card={unit.id}
-            style={{
-              marginTop: 6,
-              padding: 6,
-              border: `1px solid ${activeUnit ? 'var(--ra-text-3)' : 'var(--ra-border)'}`,
-              background: 'var(--ra-bg-row-sub)',
-              opacity: processBaking || anotherUnitLocked ? 0.48 : 1,
-              pointerEvents: processBaking || anotherUnitLocked ? 'none' : 'auto'
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                marginBottom: activeUnit ? 4 : 0
-              }}
-            >
-              <button
-                type="button"
-                disabled={!enabled || activeUnit}
-                aria-expanded={activeUnit}
-                title={activeUnit ? undefined : 'open this intervention'}
-                onClick={() => onProcessOpen(unit.id, unit.process)}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  height: 20,
-                  padding: 0,
-                  border: 0,
-                  background: 'transparent',
-                  color: activeUnit ? 'var(--ra-text-2)' : 'var(--ra-text-3)',
-                  fontFamily: 'inherit',
-                  fontSize: 10,
-                  letterSpacing: '0.08em',
-                  textAlign: 'left',
-                  cursor: enabled && !activeUnit ? 'pointer' : 'default',
-                  opacity: enabled ? 1 : 0.35
-                }}
-              >
-                {shapeProcessLabel(unit.process.type)}
-              </button>
-              {activeUnit && (
-                <button
-                  aria-pressed={!processSession.bypass}
-                  aria-label={
-                    processSession.bypass ? 'preview intervention' : 'bypass intervention'
-                  }
-                  title={
-                    processSession.bypass ? 'preview intervention' : 'hear before intervention'
-                  }
-                  style={{
-                    width: 20,
-                    height: 20,
-                    marginRight: 4,
-                    padding: 0,
-                    display: 'grid',
-                    placeItems: 'center',
-                    border: '1px solid var(--ra-border)',
-                    background: 'transparent',
-                    color: processSession.bypass ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
-                    cursor: 'pointer'
-                  }}
-                  onClick={() => onProcessBypass(!processSession.bypass)}
-                >
-                  {processSession.bypass ? <EyeSlash size={13} /> : <Eye size={13} />}
-                </button>
-              )}
-              <button
-                aria-label={`remove ${shapeProcessLabel(unit.process.type)} intervention`}
-                title="remove this intervention"
-                onClick={() => onProcessRackRemove(unit.id)}
-                style={{
-                  width: 20,
-                  height: 20,
-                  padding: 0,
-                  border: '1px solid var(--ra-border)',
-                  background: 'transparent',
-                  color: 'var(--ra-text-3)',
-                  fontFamily: 'inherit',
-                  fontSize: 12,
-                  cursor: 'pointer'
-                }}
-              >
-                ×
-              </button>
-            </div>
-            {activeUnit && (
-              <>
-                <ShapeProcessControls
-                  process={displayedProcess}
-                  onChange={(process) => onProcessChange(unit.id, process)}
-                />
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr 1.15fr',
-                    gap: 3,
-                    marginTop: 6
-                  }}
-                >
-                  <button style={compactStepButton()} onClick={onProcessCancel}>
-                    cancel
-                  </button>
-                  <button
-                    style={{
-                      ...compactStepButton(),
-                      // The primary action: bright ink and a stronger edge, monochrome.
-                      color: 'var(--ra-text)',
-                      borderColor: 'var(--ra-text-3)'
-                    }}
-                    onClick={onProcessApply}
-                  >
-                    {processBakeDestination === 'replace' ? 'baking…' : 'bake'}
-                  </button>
-                  <button
-                    style={{
-                      ...compactStepButton(),
-                      color: 'var(--ra-text-3)',
-                      borderColor: 'var(--ra-border-strong)',
-                      background: 'var(--ra-bg-row-active)'
-                    }}
-                    onClick={onProcessAddStem}
-                    title="render this intervention to a new stem lane"
-                  >
-                    {processBakeDestination === 'stem' ? 'adding…' : '+ stem'}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        )
-      })}
-      <button
-        data-shape-intervention-picker="true"
-        disabled={(processSession?.dirty ?? false) || processBaking}
-        style={{
-          ...buttonStyle(),
-          display: 'block',
-          width: 'auto',
-          marginTop: 8,
-          opacity: !processSession?.dirty && !processBaking ? 1 : 0.35
-        }}
-        onClick={() => {
-          // A clean expanded card normally collapses on an outside pointer
-          // down. Treat the picker as one atomic action instead: collapse the
-          // clean card and open the picker from this same registered click so
-          // layout movement cannot make the button dodge the pointer.
-          if (processSession) onProcessCancel()
-          setProcessPickerOpen((open) => !open)
-        }}
-      >
-        + intervention
-      </button>
-      {processPickerOpen ? (
-        <div
-          style={{
-            marginTop: 5,
-            padding: 6,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-sub)',
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 4
-          }}
-        >
-          {SHAPE_PROCESS_CATALOG.map((item) => (
-            <button
-              key={item.type}
-              style={{ ...buttonStyle(), padding: '0 4px' }}
-              onClick={() => {
-                setProcessPickerOpen(false)
-                onProcessRackAdd(item.type)
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {processError && (
-        <div style={{ marginTop: 7, fontSize: 9, color: 'var(--ra-text-3)', lineHeight: 1.4 }}>
-          {processError}
-        </div>
-      )}
+      {interventions}
     </aside>
   )
 }

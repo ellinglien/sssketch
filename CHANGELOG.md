@@ -5,6 +5,7 @@
 ### Added
 
 - Added an EEEDIT metronome with the same toggle and drag-to-adjust volume behavior as the main transport.
+- Clicking a lane's m or s in EEEDIT also selects that lane, so treatments go to the lane you're listening to.
 - Added non-destructive per-stem rotate controls in EEEDIT, from 1/32 note through 8 bars, with an independent phase reset, project persistence, and one-step undo.
 - Added grouped EEEDIT clip operations: adjacent selections move together, Command-drag bypasses snap, Option-drag copies the group, Command-D duplicates it, and Command-C/Command-V copy and paste at the insertion cursor while cropping cleanly at the riff boundary.
 - Added a docked EEEDIT **clip inspector** with non-destructive smooth transpose and detune controls for selected clips or dragged interior regions. Region transforms create their two clip edges as part of the same undoable action, and multi-clip selections support batch edits with mixed-value display.
@@ -18,7 +19,7 @@
 - Expanded EEEDIT interventions with extreme-range compand distortion, codec damage, short room, true frequency shift, warm stereo/mono chorus, dj eq, and resonant tone processors. Their wide controls support subtle correction through deliberately broken, feedback-heavy, or overdriven settings.
 - Added an EEEDIT-only donor tray: dragging a shelf riff onto the inspector opens its stems in a compact audition view with non-destructive mute/solo and one-click inward controls for adding individual stems to the current EEEDIT draft. Closing the tray restores the inspector without discarding an intervention in progress.
 - Renamed the user-facing entry action to **EEEDIT** and made it follow the riff actually shown in the Sketch inspector, so stale shared-selection bookkeeping can no longer hide the button.
-- EEEDIT's clip inspector now hides all transform and intervention controls when no clip or interior region is selected, replacing disabled controls with a quiet selection skeleton and brief interaction hint.
+- EEEDIT's clip inspector hides its transform controls when no clip or interior region is selected, showing a quiet selection skeleton and brief interaction hint instead. The interventions list always stays in view, with or without a selection.
 - Intervention preview render failures now leave the last valid riff preview playing instead of stopping transport. The **+ intervention** control also atomically collapses a clean expanded card and opens its picker, so reflow can no longer move the button out from under the click.
 - Added independent EEEDIT **formant** shifting from −12 to +12 semitones. It moves the spectral envelope without changing the clip's pitch, rate, or duration, works on clips and selected regions, remains editable after bake, persists through project reopen, and uses cached high-quality R3 renders off the playback thread.
 - Added the first **EEEDIT** editing slice for a single selected riff: split at the playhead, snapped or free fragment moves, Option-copy, duplicate, durable fragment/stem disable, temporary mute/solo, reset, undo/redo, original/shaped A/B playback, and non-destructive save as a new shelf riff. EEEDIT keeps the shelf visible and stores a versioned recipe against immutable source audio so results can be reopened and reset without generational quality loss.
