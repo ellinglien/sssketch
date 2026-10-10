@@ -196,6 +196,7 @@ import {
   saveOutcomeNotice,
   type SaveOutcome
 } from './state/saveSerialization'
+import { createPublishGate } from './state/publishGate'
 import { slotsEngineHolds } from '@shared/pluginSwitch'
 import type { PluginStatesMap } from '@shared/pluginStates'
 import {
@@ -2781,7 +2782,33 @@ function Frame(): React.JSX.Element {
     return assembleShapeRifff(draft, result.stems)
   }
 
+  // One EEEDIT publish at a time (publishGate.ts).
+  const shapePublishGateRef = useRef(createPublishGate())
+  const trackShapePublish = <T,>(work: () => Promise<T>): Promise<T> =>
+    shapePublishGateRef.current.track(work)
+  const awaitShapePublish = (): Promise<void> => shapePublishGateRef.current.settled()
+
   async function publishShape(
+    draft: ShapeDraft,
+    destination: 'keep' | 'shelf' | 'timeline'
+  ): Promise<'✓ kept' | 'already kept' | void> {
+    await awaitShapePublish()
+    // A departure save that ran meanwhile already added exactly this draft to the shelf.
+    if (
+      destination === 'shelf' &&
+      shapePublishedRiffIdRef.current !== null &&
+      shapeContentFingerprint(draft) === shapeSavedFingerprintRef.current
+    )
+      return
+    setBusy(destination === 'keep' ? 'keeping the edit…' : 'adding the edit…')
+    try {
+      return await trackShapePublish(() => publishShapeNow(draft, destination))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function publishShapeNow(
     draft: ShapeDraft,
     destination: 'keep' | 'shelf' | 'timeline'
   ): Promise<'✓ kept' | 'already kept' | void> {
@@ -2816,7 +2843,10 @@ function Frame(): React.JSX.Element {
         return saved.duplicate ? 'already kept' : '✓ kept'
       }
       if (destination === 'shelf') {
-        dispatch({ type: 'ADD_TO_SHELF', rifff: assembled.rifff, vol: assembled.vol })
+        const action = { type: 'ADD_TO_SHELF' as const, rifff: assembled.rifff, vol: assembled.vol }
+        // A save right after must write this result even before React renders it.
+        stateRef.current = reducer(stateRef.current, action)
+        dispatch(action)
         shapePublishedRiffIdRef.current = assembled.rifff.groupId
         setRiffSelection({
           ids: new Set([assembled.rifff.groupId]),
@@ -2830,12 +2860,14 @@ function Frame(): React.JSX.Element {
               (rifff.startBar ?? 0) +
               resolvedPlayedBarsFromFields(state.playedBars[rifff.groupId], rifff.barLength)
           )
-        dispatch({
-          type: 'PLACE_LOOP_ON_TIMELINE',
+        const action = {
+          type: 'PLACE_LOOP_ON_TIMELINE' as const,
           stems: [assembled.rifff],
           startBar: ends.length > 0 ? Math.max(...ends) : 0,
           vol: assembled.vol
-        })
+        }
+        stateRef.current = reducer(stateRef.current, action)
+        dispatch(action)
       }
       shapeSavedFingerprintRef.current = shapeContentFingerprint(draft)
       setShapeDirty(false)
@@ -2854,6 +2886,17 @@ function Frame(): React.JSX.Element {
    * included; a draft that changed meanwhile reads as 'changed'. */
   async function saveProjectBeforeLeavingNow(): Promise<SaveOutcome> {
     if (shapeDepartureSaveRef.current) return { kind: 'busy' }
+    shapeDepartureSaveRef.current = true
+    try {
+      // An add to shelf already running finishes first; this save then finds the draft published.
+      await awaitShapePublish()
+      return await trackShapePublish(departureSaveNow)
+    } finally {
+      shapeDepartureSaveRef.current = false
+    }
+  }
+
+  async function departureSaveNow(): Promise<SaveOutcome> {
     const draft = shapeDraftRef.current
     const draftFingerprint = draft ? shapeContentFingerprint(draft) : null
     const departureSnapshot = {
@@ -2872,7 +2915,6 @@ function Frame(): React.JSX.Element {
     const needsShapePublish =
       draft !== null && draftFingerprint !== shapeSavedFingerprintRef.current
 
-    shapeDepartureSaveRef.current = true
     setDepartureSaveBusy(true)
     setBusy(needsShapePublish ? 'saving edit…' : 'saving…')
     try {
@@ -2918,7 +2960,6 @@ function Frame(): React.JSX.Element {
         return { kind: 'changed' }
       return outcome
     } finally {
-      shapeDepartureSaveRef.current = false
       setDepartureSaveBusy(false)
       setBusy(null)
     }
