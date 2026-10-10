@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { subscribeToState, getStateSnapshot, __setStateForTest } from './StoreContext'
+import { nativePlayDispatchPlan } from './nativePlayDispatch'
 
 describe('subscribeToState / getStateSnapshot', () => {
   it('getStateSnapshot returns the current mirrored state', () => {
@@ -34,5 +35,19 @@ describe('subscribeToState / getStateSnapshot', () => {
     expect(listenerB).toHaveBeenCalledTimes(1)
     unsubscribeA()
     unsubscribeB()
+  })
+})
+
+describe('nativePlayDispatchPlan', () => {
+  it('starts a stopped faded preview exactly once, with no generic follow-up play', () => {
+    const plan = nativePlayDispatchPlan(false, { fromPos: 3.5, fadeIn: true })
+    expect(plan).toEqual({ playNow: true, suppressNextPlayingEffect: true })
+  })
+
+  it('leaves an ordinary stopped Play to the standard playing effect', () => {
+    expect(nativePlayDispatchPlan(false)).toEqual({
+      playNow: false,
+      suppressNextPlayingEffect: false
+    })
   })
 })

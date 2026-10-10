@@ -59,9 +59,11 @@ export function dirtyCheckJson(state: AppState): string {
 
 /** How an explicit save went. 'changed': the write landed, but the project
  * changed while it was awaiting a plugin capture or the disk
- * (saveCompletionIsCurrent false), so it doesn't hold the newest edits. */
+ * (saveCompletionIsCurrent false), so it doesn't hold the newest edits.
+ * 'busy': another save before leaving (one publishing an EEEDIT draft) was
+ * still running, so this one didn't start. */
 export type SaveOutcome =
-  { kind: 'saved' } | { kind: 'changed' } | { kind: 'failed'; error: string }
+  { kind: 'saved' } | { kind: 'changed' } | { kind: 'busy' } | { kind: 'failed'; error: string }
 
 /** What to tell the user after a save, or null for nothing. `purpose` is
  * 'save' for the Save button and Cmd+S, where a 'changed' save just leaves the
@@ -74,8 +76,12 @@ export function saveOutcomeNotice(
 ): string | null {
   if (outcome.kind === 'failed') return `save failed: ${outcome.error}`
   if (outcome.kind === 'changed' && purpose === 'leaving') return CHANGED_DURING_SAVE_NOTICE
+  if (outcome.kind === 'busy')
+    return purpose === 'leaving' ? BUSY_NOTICE + '\n\nnothing was closed.' : BUSY_NOTICE
   return null
 }
+
+const BUSY_NOTICE = 'already saving. wait for that save to finish, then try again.'
 
 const CHANGED_DURING_SAVE_NOTICE =
   "saved, but the project changed while it was saving, so the newest changes aren't saved yet.\n\n" +

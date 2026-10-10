@@ -154,7 +154,10 @@ export function matchBakeResults<T extends { path: string }>(
  * replaced it with the measured length). Main keeps the one whose recipe name matches the
  * missing file. The riff's bpm stands in for the stem's own here; main swaps in the stem's
  * own LORE bpm when its library knows the stem (reonedRebuild.ts). */
-export function rebuildRotationCandidates(stem: Stem, rifffBpm: number): number[] {
+export function rebuildRotationCandidates(
+  stem: Pick<Stem, 'phaseBars' | 'barLength' | 'durationSec'>,
+  rifffBpm: number
+): number[] {
   const bars = stem.phaseBars ?? 0
   const candidates = [rotationSecForBars(bars, stem)]
   if (rifffBpm > 0) {

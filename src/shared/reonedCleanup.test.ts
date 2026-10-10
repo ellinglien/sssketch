@@ -27,7 +27,7 @@ describe('the offer', () => {
 describe('words', () => {
   it("the spec's message, word for word", () => {
     expect(cleanupOfferText(1_200_000_000)).toBe(
-      "about 1.2 GB of re-oned stem copies aren't used by any project. your rifffs, stems and projects aren't touched, and anything needed later is rebuilt automatically."
+      "about 1.2 GB of re-oned stem copies and leftover render files aren't used by any project. your rifffs, stems and projects aren't touched, and anything needed later is rebuilt automatically."
     )
     expect(clearedText(1_200_000_000)).toBe('cleared 1.2 GB')
     expect(MISSING_COPY_TEXT).toBe('re-oned copy missing · rebuilds when its original is back')

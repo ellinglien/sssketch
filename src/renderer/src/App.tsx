@@ -40,6 +40,7 @@ import { undoRouter, undoShortcutFor } from './state/undoRouting'
 import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
 import { CrossPanel } from './components/CrossPanel'
+import { ShapePanel, type ShapeProcessRackUnit } from './components/ShapePanel'
 import { rifffForSketchCross } from './components/crossFromSketch'
 import { Playhead } from './components/Playhead'
 import { RiserExtentGesture } from './components/RiserExtentGesture'
@@ -63,6 +64,7 @@ import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
 import { loadLastProjectTempo, saveLastProjectTempo } from './state/lastProjectTempo'
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog'
+import { ConfirmationDialog } from './components/ConfirmationDialog'
 import { UpdateAvailableDialog } from './components/UpdateAvailableDialog'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { ExportFormatPicker } from './components/ExportFormatPicker'
@@ -135,22 +137,31 @@ import {
   isSketchEligible,
   groupIdAtPosition,
   sketchSoundingGroupId,
-  resolvePlayedBars
+  resolvePlayedBars,
+  resolvedPlayedBarsFromFields
 } from './state/selectors'
 import { initialState, SNAP_DIVS, startupState } from './state/store'
 import { newProjectSeed } from '@shared/seededRandom'
 import { appSoundDefaults } from './state/appSoundDefaults'
-import type { AppState, LoopRegion } from './state/store'
+import { reducer, type AppState, type LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
-import type { BusId, Rifff } from '@shared/types'
+import { stemKey, type BusId, type Rifff } from '@shared/types'
 import {
   createCrossDraft,
   crossParentFromRifff,
   crossProjectKey,
   type CrossDraft
 } from '@shared/cross'
+import {
+  assembleShapeRifff,
+  createShapeDraft,
+  shapeContentFingerprint,
+  shapeRenderSegments,
+  type ShapeAssembly,
+  type ShapeDraft
+} from '@shared/shape'
 import { stopActivePreview } from './audio/previewLoop'
 import { loadSavedPreviewLevel } from './audio/previewOutput'
 import { assessTidyUpReadiness, unbussedStemPaths } from '@shared/tidyUpReadiness'
@@ -184,6 +195,7 @@ import {
   saveOutcomeNotice,
   type SaveOutcome
 } from './state/saveSerialization'
+import { createPublishGate } from './state/publishGate'
 import { slotsEngineHolds } from '@shared/pluginSwitch'
 import type { PluginStatesMap } from '@shared/pluginStates'
 import {
@@ -192,6 +204,13 @@ import {
   pluginsTouchedSnapshot,
   usePluginsTouched
 } from './state/pluginsTouched'
+
+function shapeProjectKey(sessionEpoch: string): string {
+  // Shape belongs to the in-memory editing session, not to its current file
+  // name/path. Rename, first Save and Save As may change storage identity
+  // without replacing the music under the editor.
+  return sessionEpoch
+}
 
 /** Tracks what the currently-open project actually is, so Save/Export know
  * whether to write in place (no dialog) or fall back to the existing
@@ -260,7 +279,9 @@ function Timeline({
   onCloseRiserLane,
   selectedRiffIds,
   riffSelectionAnchorId,
-  onRiffSelectionChange
+  onRiffSelectionChange,
+  hoveredRiffKey,
+  onRiffHover
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
@@ -283,6 +304,8 @@ function Timeline({
   selectedRiffIds: ReadonlySet<string>
   riffSelectionAnchorId: string | null
   onRiffSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
+  hoveredRiffKey: string | null
+  onRiffHover: (correspondenceKey: string | null) => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
    * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
@@ -522,6 +545,8 @@ function Timeline({
         selectedRiffIds={selectedRiffIds}
         selectionAnchorId={riffSelectionAnchorId}
         onSelectionChange={onRiffSelectionChange}
+        hoveredRiffKey={hoveredRiffKey}
+        onRiffHover={onRiffHover}
       />
     )
   }
@@ -1282,6 +1307,7 @@ function Frame(): React.JSX.Element {
   const dispatch = useDispatch()
   const restoreState = useRestoreState()
   const setBusy = useBusy()
+  const projectSessionEpochRef = useRef(crypto.randomUUID())
 
   // Any key/pointer/wheel input pauses the background scans briefly
   // (backgroundScanGate.ts, 2026-09-21) so their UI-thread analysis never
@@ -1396,6 +1422,14 @@ function Frame(): React.JSX.Element {
   // persistedJson. Its version also restarts the autosave's debounce below.
   const pluginsTouched = usePluginsTouched()
   const [dirty, setDirty] = useState(false)
+  const [shapeDirty, setShapeDirty] = useState(false)
+  const [departureSaveBusy, setDepartureSaveBusy] = useState(false)
+  const [projectDepartureLocked, setProjectDepartureLocked] = useState(false)
+  const departureShapeSnapshotRef = useRef<{
+    projectKey: string
+    draftId: string | null
+    fingerprint: string | null
+  } | null>(null)
   useEffect(() => {
     setDirty(
       hasUnsavedChanges(
@@ -1498,8 +1532,14 @@ function Frame(): React.JSX.Element {
    * back to older settings); the autosave, best effort, takes `bestEffort`.
    * A successful capture is kept as the fallback (an engine restart reloads
    * from it). */
-  async function serializeForSave(options?: { bestEffort?: boolean }): Promise<string> {
-    const chains = { masterChain: state.masterChain, channelPlugins: state.channelPlugins }
+  async function serializeForSave(
+    options?: { bestEffort?: boolean },
+    stateToSave: AppState = stateRef.current
+  ): Promise<string> {
+    const chains = {
+      masterChain: stateToSave.masterChain,
+      channelPlugins: stateToSave.channelPlugins
+    }
     const generation = pendingPluginStatesGeneration()
     const pending = pendingPluginStatesRef.current
     const fallback = pluginCaptureFallback()
@@ -1522,22 +1562,18 @@ function Frame(): React.JSX.Element {
       live = liveSettingsForSave(raw, chains, held)
       recordPluginCapture(live, generation)
     }
-    return projectJsonForSave(state, live, pending, fallback)
+    return projectJsonForSave(stateToSave, live, pending, fallback)
   }
 
-  /** Returns whether the save actually succeeded, so every discard-guard
-   * call site (New, opening/restoring a library sketch, opening from disk,
-   * quit-time save) can tell a real failure (disk full, permission denied,
-   * etc.) apart from a resolved promise and avoid proceeding to discard/
-   * replace the live project on top of a save that never landed. */
-  /** Writes the live project and says how it went, without telling the user
-   * anything itself (saveOutcomeNotice decides that): the quit prompt's save
-   * has to answer main before an alert can block the renderer. */
-  async function saveProjectNow(): Promise<SaveOutcome> {
+  /** Writes the live project (or `stateToSave`, the exact state a departure
+   * save publishes an EEEDIT draft into first) and says how it went, without
+   * telling the user anything itself (saveOutcomeNotice decides that): the quit
+   * prompt's save has to answer main before an alert can block the renderer. */
+  async function saveProjectNow(stateToSave: AppState = stateRef.current): Promise<SaveOutcome> {
     try {
       const touchedVersion = pluginsTouchedSnapshot().version
-      const savedDirtyJson = dirtyCheckJson(state)
-      const json = await serializeForSave()
+      const savedDirtyJson = dirtyCheckJson(stateToSave)
+      const json = await serializeForSave(undefined, stateToSave)
       if (currentSketch === null) {
         const name = await window.rifffApi.generateDefaultProjectName()
         await window.rifffApi.saveProjectToLibrary(name, json)
@@ -1547,7 +1583,7 @@ function Frame(): React.JSX.Element {
       } else {
         await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
       }
-      recordSaved(state, touchedVersion)
+      recordSaved(stateToSave, touchedVersion)
       return saveCompletionIsCurrent(
         savedDirtyJson,
         dirtyCheckJson(stateRef.current),
@@ -1562,13 +1598,18 @@ function Frame(): React.JSX.Element {
     }
   }
 
-  /** The Save button and Cmd+S: true when the write landed. Newer edits made
-   * while it was in flight just leave the project marked unsaved. */
+  /** The Save menu item and Cmd+S: true when the write landed. Newer edits made
+   * while it was in flight just leave the project marked unsaved. With EEEDIT
+   * open, it saves as a departure save does: an unpublished draft is added to
+   * the shelf first, so the saved project holds it (EEEDIT's own Cmd+S adds to
+   * the shelf without saving). */
   async function handleSave(): Promise<boolean> {
-    const outcome = await saveProjectNow()
+    const outcome = shapeDraftRef.current
+      ? await saveProjectBeforeLeavingNow()
+      : await saveProjectNow()
     const notice = saveOutcomeNotice(outcome, 'save')
     if (notice) window.alert(notice)
-    return outcome.kind !== 'failed'
+    return outcome.kind !== 'failed' && outcome.kind !== 'busy'
   }
 
   /** Saving before something that closes or replaces the live project
@@ -1576,7 +1617,7 @@ function Frame(): React.JSX.Element {
    * another). True only when the save holds the newest edits; on false the
    * caller must not go on, and the user has already been told why. */
   async function saveBeforeLeaving(): Promise<boolean> {
-    const outcome = await saveProjectNow()
+    const outcome = await saveProjectBeforeLeavingNow()
     const notice = saveOutcomeNotice(outcome, 'leaving')
     if (notice) window.alert(notice)
     return outcome.kind === 'saved'
@@ -1590,7 +1631,7 @@ function Frame(): React.JSX.Element {
    * docs/superpowers/specs/2026-08-14-explicit-save-model-design.md,
    * section 4. */
   function confirmDiscardIfDirty(): Promise<'save' | 'discard' | 'cancel'> {
-    if (!dirty) return Promise.resolve('discard')
+    if (!dirty && !shapeDirty) return Promise.resolve('discard')
     return new Promise((resolve) => {
       unsavedChangesResolveRef.current = resolve
       setUnsavedChangesPromptOpen(true)
@@ -1606,14 +1647,21 @@ function Frame(): React.JSX.Element {
   const [newProjectModal, setNewProjectModal] = useState<{ defaultName: string } | null>(null)
 
   async function handleNew(): Promise<void> {
+    beginProjectDeparture()
     const choice = await confirmDiscardIfDirty()
-    if (choice === 'cancel') return
+    if (choice === 'cancel') {
+      endProjectDeparture()
+      return
+    }
     if (choice === 'save') {
       const saved = await saveBeforeLeaving()
       // Save failed (saveBeforeLeaving already alerted) -- the live project is
       // still safely in the editor and unsaved, so bail out here rather
       // than opening the new-project modal, which would discard it.
-      if (!saved) return
+      if (!saved) {
+        endProjectDeparture()
+        return
+      }
     } else {
       // 'discard' -- the user just explicitly threw away unsaved work.
       // The debounced autosave effect may still have a stale crash-recovery
@@ -1622,7 +1670,19 @@ function Frame(): React.JSX.Element {
       // discarded.
       clearAutosaveNow()
     }
-    setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
+    let defaultName: string
+    try {
+      defaultName = await window.rifffApi.generateDefaultProjectName()
+    } catch (error) {
+      console.error('App: failed to prepare a new project:', error)
+      endProjectDeparture()
+      return
+    }
+    if (!projectDepartureIsCurrent()) {
+      endProjectDeparture()
+      return
+    }
+    setNewProjectModal({ defaultName })
   }
 
   function commitNewProject(name: string, bpm: number): void {
@@ -1634,16 +1694,25 @@ function Frame(): React.JSX.Element {
       // project is created. The same goes for the sound settings: a new
       // project starts from the app-wide defaults (native radio sound plan,
       // Task 2; fetched once, at mount, below), and that is not an edit.
-      const sound = await appSoundDefaults()
-      // Its own seed, so its timeline throws are its own (@shared/timelineThrows).
-      const freshState = { ...initialState, bpm, sound, projectSeed: newProjectSeed() }
-      dispatch({ type: 'LOAD_STATE', state: freshState })
-      // The previous project's saved plugin settings are not this one's, nor its missing copies.
-      replacePendingPluginStates({})
-      setReonedMissing([])
-      lastSavedJsonRef.current = dirtyCheckJson(freshState)
-      setCurrentSketch({ kind: 'library', name })
-      setNewProjectModal(null)
+      try {
+        const sound = await appSoundDefaults()
+        if (!projectDepartureIsCurrent()) return
+        // Its own seed, so its timeline throws are its own (@shared/timelineThrows).
+        const freshState = { ...initialState, bpm, sound, projectSeed: newProjectSeed() }
+        invalidateShapeSession()
+        projectSessionEpochRef.current = crypto.randomUUID()
+        dispatch({ type: 'LOAD_STATE', state: freshState })
+        // The previous project's saved plugin settings are not this one's, nor its missing copies.
+        replacePendingPluginStates({})
+        setReonedMissing([])
+        lastSavedJsonRef.current = dirtyCheckJson(freshState)
+        setCurrentSketch({ kind: 'library', name })
+        setNewProjectModal(null)
+      } catch (error) {
+        console.error('App: failed to create a new project:', error)
+      } finally {
+        endProjectDeparture()
+      }
     })()
   }
   // Guards the startup effect below against StrictMode's dev-only
@@ -1769,6 +1838,8 @@ function Frame(): React.JSX.Element {
     const opened = await openWithReonedRepair(loaded)
     try {
       await warmStemCaches(opened.state)
+      invalidateShapeSession()
+      projectSessionEpochRef.current = crypto.randomUUID()
       restoreState(opened.state, pluginStates)
     } catch (err) {
       reonedOpenFailed()
@@ -1940,11 +2011,70 @@ function Frame(): React.JSX.Element {
   // draft, so opening another pair never needs a discard confirmation.
   const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
   const [crossOpen, setCrossOpen] = useState(false)
+  // Shape is also a disposable working copy. Only Add to Shelf publishes a
+  // new riff; closing leaves the source and the shared riff selection intact.
+  const [shapeDraft, setShapeDraft] = useState<ShapeDraft | null>(null)
+  const [shapeProcessRacks, setShapeProcessRacks] = useState<
+    Record<string, ShapeProcessRackUnit[]>
+  >({})
+  const [shapeOpen, setShapeOpen] = useState(false)
+  const [shapeDiscardPromptOpen, setShapeDiscardPromptOpen] = useState(false)
+  const shapeDraftRef = useRef<ShapeDraft | null>(null)
+  const shapeOpenRef = useRef(false)
+  const shapeProjectKeyRef = useRef('')
+  shapeDraftRef.current = shapeDraft
+  shapeOpenRef.current = shapeOpen
+  shapeProjectKeyRef.current = shapeProjectKey(projectSessionEpochRef.current)
+  const shapePreviewStopRef = useRef<(() => void) | null>(null)
+  const shapeOpenGenerationRef = useRef(0)
+  const shapeSavedFingerprintRef = useRef('')
+  const shapePublishedRiffIdRef = useRef<string | null>(null)
+  const shapeDepartureSaveRef = useRef(false)
+  const shapeOpeningSelectionRef = useRef<{
+    ids: Set<string>
+    anchorId: string | null
+  } | null>(null)
+  function invalidateShapeSession(): void {
+    shapeOpenGenerationRef.current += 1
+    shapePreviewStopRef.current?.()
+    shapePreviewStopRef.current = null
+    shapeOpeningSelectionRef.current = null
+    shapePublishedRiffIdRef.current = null
+    shapeSavedFingerprintRef.current = ''
+    setShapeDirty(false)
+    setShapeDiscardPromptOpen(false)
+    setShapeOpen(false)
+    setShapeDraft(null)
+  }
+  function beginProjectDeparture(): void {
+    const current = shapeDraftRef.current
+    departureShapeSnapshotRef.current = {
+      projectKey: shapeProjectKeyRef.current,
+      draftId: current?.id ?? null,
+      fingerprint: current ? shapeContentFingerprint(current) : null
+    }
+    setProjectDepartureLocked(true)
+  }
+  function projectDepartureIsCurrent(): boolean {
+    const expected = departureShapeSnapshotRef.current
+    if (!expected) return false
+    const current = shapeDraftRef.current
+    return (
+      shapeProjectKeyRef.current === expected.projectKey &&
+      (current?.id ?? null) === expected.draftId &&
+      (current ? shapeContentFingerprint(current) : null) === expected.fingerprint
+    )
+  }
+  function endProjectDeparture(): void {
+    departureShapeSnapshotRef.current = null
+    setProjectDepartureLocked(false)
+  }
   // The re-oned copies cleanup counts what Cross and Discover hold as in use (reonedInUse.ts).
   // The saved preview level, before the first preview plays (audio/previewOutput.ts).
   useEffect(() => loadSavedPreviewLevel(), [])
   useEffect(() => setReonedSessionRoot('cross', crossDraft), [crossDraft])
   useEffect(() => setReonedSessionRoot('discover', discoverSlots), [discoverSlots])
+  useEffect(() => setReonedSessionRoot('shape', shapeDraft), [shapeDraft])
   // One shared, session-only riff selection for both Sketch and Shelf.
   // Keeping this above the fullscreen Cross/Discover workspaces means the
   // exact working set remains highlighted when either workspace closes;
@@ -1959,6 +2089,10 @@ function Frame(): React.JSX.Element {
     ids: Set<string>
     anchorId: string | null
   }>(() => ({ ids: new Set(), anchorId: null }))
+  // Hover correspondence is intentionally independent of the working
+  // selection above. It is a momentary visual answer to "where else is
+  // this same riff?" and must never collapse a two-riff Cross selection.
+  const [hoveredRiffKey, setHoveredRiffKey] = useState<string | null>(null)
   const selectedRiffIds = useMemo(() => {
     const valid = new Set([...riffSelection.ids].filter((id) => state.rifffs[id] !== undefined))
     // A loaded project already has an Inspector selection. Until the user
@@ -1979,6 +2113,13 @@ function Frame(): React.JSX.Element {
     },
     []
   )
+  const selectPublishedShelfRiff = useCallback(
+    (groupId: string) => {
+      setRiffSelection({ ids: new Set([groupId]), anchorId: groupId })
+      dispatch({ type: 'SELECT', groupId })
+    },
+    [dispatch]
+  )
   const inspectorCrossPair = useMemo<[Rifff, Rifff] | null>(() => {
     if (selectedRiffIds.size !== 2) return null
     const [leftId, rightId] = [...selectedRiffIds]
@@ -1986,6 +2127,34 @@ function Frame(): React.JSX.Element {
     const right = state.rifffs[rightId]
     return left && right ? [left, right] : null
   }, [selectedRiffIds, state.rifffs])
+  const inspectorEditRifff = useMemo<Rifff | null>(() => {
+    // The Inspector already has one concrete riff (`state.sel`). Use that as
+    // Edit's source instead of making the button depend on the separate
+    // shared-selection bookkeeping. The latter can briefly lag the visible
+    // Sketch selection (especially after leaving another full-screen mode),
+    // which made Edit disappear even though the Inspector showed a riff.
+    // Exactly two selected riffs still belong to Cross, so keep Edit out of
+    // that deliberately multi-riff state.
+    if (inspectorCrossPair) return null
+    return state.sel ? (state.rifffs[state.sel] ?? null) : null
+  }, [inspectorCrossPair, state.rifffs, state.sel])
+  useEffect(() => {
+    if (!shapeDraft) return
+    if (shapeDraft.projectKey === shapeProjectKey(projectSessionEpochRef.current)) return
+    shapeOpenGenerationRef.current += 1
+    shapePreviewStopRef.current?.()
+    shapePreviewStopRef.current = null
+    shapeOpeningSelectionRef.current = null
+    setShapeDiscardPromptOpen(false)
+    setShapeOpen(false)
+    setShapeDraft(null)
+  }, [currentSketch, shapeDraft, state.projectSeed])
+  useEffect(() => {
+    setShapeDirty(
+      shapeDraft !== null &&
+        shapeContentFingerprint(shapeDraft) !== shapeSavedFingerprintRef.current
+    )
+  }, [shapeDraft])
   // Discover artist mode: the chosen artists (combine artists, spec
   // 2026-10-06), `[null]` = me. Session-only, the same lifetime as
   // discoverSlots -- Discover opens on `me` at launch.
@@ -2325,6 +2494,7 @@ function Frame(): React.JSX.Element {
    * discover ... i think they should be distinct buttons instead of tabs."
    */
   function openRiffLibrary(entry: LibraryEntryPoint): void {
+    shapePreviewStopRef.current?.()
     setLibraryBrowserOpen(false)
     setRiffLibraryInitialMode(libraryModeForEntryPoint(entry))
     setRiffLibraryOpen(true)
@@ -2405,6 +2575,7 @@ function Frame(): React.JSX.Element {
     ) {
       return
     }
+    shapePreviewStopRef.current?.()
     // Discover's library/Keep formats do not carry runtime phase, so the
     // exact effective phase of every source stem is made physical first, as
     // one immutable all-or-nothing batch, and Discover is seeded from those
@@ -2449,7 +2620,10 @@ function Frame(): React.JSX.Element {
     // on 'browse'); now that every opener names its half, this one should
     // too.
     setRiffLibraryInitialMode('discover')
-    setDiscoverSlots(buildSeedSlotsFromStems(seedRifff.stems))
+    const sourceGainBySlot = Object.fromEntries(
+      rifff.stems.map((stem) => [stem.slot, state.vol[stemKey(rifff.groupId, stem.slot)] ?? 1])
+    )
+    setDiscoverSlots(buildSeedSlotsFromStems(seedRifff.stems, sourceGainBySlot))
     setDiscoverChaos(DEFAULT_DISCOVER_CHAOS)
     setDiscoverUndoStack([[]])
     setDiscoverRedoStack([])
@@ -2470,6 +2644,7 @@ function Frame(): React.JSX.Element {
       existingIds.size === 2 &&
       [...selectedIds].every((id) => existingIds.has(id))
 
+    shapePreviewStopRef.current?.()
     stopActivePreview()
     dispatch({ type: 'PAUSE' })
     if (samePair) {
@@ -2509,6 +2684,320 @@ function Frame(): React.JSX.Element {
       )
     } finally {
       setBusy(null)
+    }
+  }
+
+  async function openShapeFromRifff(rifff: Rifff): Promise<void> {
+    const generation = ++shapeOpenGenerationRef.current
+    const projectKey = shapeProjectKey(projectSessionEpochRef.current)
+    shapeOpeningSelectionRef.current = {
+      ids: new Set(selectedRiffIds),
+      anchorId: riffSelectionAnchorId
+    }
+    stopActivePreview()
+    shapePreviewStopRef.current?.()
+    dispatch({ type: 'PAUSE' })
+    setBusy('preparing edit…')
+    try {
+      const prepared = await rifffForSketchCross(
+        rifff,
+        state.off,
+        SNAP_DIVS[state.snapIdx],
+        (jobs) => window.rifffApi.bakeOffset(jobs)
+      )
+      if (shapeOpenGenerationRef.current !== generation) return
+      if (shapeProjectKeyRef.current !== projectKey) {
+        shapeOpeningSelectionRef.current = null
+        return
+      }
+      if (!prepared) {
+        shapeOpeningSelectionRef.current = null
+        window.alert('could not prepare every stem for EEEDIT. nothing was changed; try again.')
+        return
+      }
+      // A nonzero runtime Re-1 was physically baked above. That establishes
+      // a fresh incoming baseline: an older Shape recipe points at the
+      // pre-bake source coordinates and must not silently discard the phase
+      // adjustment when this riff is reopened.
+      const baseline =
+        prepared === rifff
+          ? prepared
+          : {
+              ...prepared,
+              stems: prepared.stems.map((stem) => ({ ...stem, shape: undefined }))
+            }
+      const nextDraft = createShapeDraft(projectKey, baseline, state.vol, undefined, state.bpm)
+      setShapeDraft(nextDraft)
+      shapeSavedFingerprintRef.current = shapeContentFingerprint(nextDraft)
+      setShapeDirty(false)
+      shapePublishedRiffIdRef.current = null
+      setShapeOpen(true)
+    } catch (err) {
+      if (shapeOpenGenerationRef.current !== generation) return
+      shapeOpeningSelectionRef.current = null
+      console.error('App: failed to prepare riff for Shape:', err)
+      window.alert(err instanceof Error ? err.message : 'could not open EEEDIT.')
+    } finally {
+      if (shapeOpenGenerationRef.current === generation) setBusy(null)
+    }
+  }
+
+  function shapeDraftIsCurrent(draft: ShapeDraft): boolean {
+    return (
+      shapeOpenRef.current &&
+      shapeDraftRef.current?.id === draft.id &&
+      shapeDraftRef.current.revision === draft.revision &&
+      shapeProjectKeyRef.current === draft.projectKey
+    )
+  }
+
+  async function materializeCurrentShape(draft: ShapeDraft): Promise<ShapeAssembly | null> {
+    const projectKey = shapeProjectKey(projectSessionEpochRef.current)
+    if (draft.projectKey !== projectKey)
+      throw new Error('this EEEDIT draft belongs to another project.')
+    const jobId = `${draft.id}:${draft.revision}:commit:${crypto.randomUUID()}`
+    const result = await window.rifffApi.materializeShape({
+      jobId,
+      mode: 'commit',
+      targetBpm: draft.targetBpm,
+      loopBars: draft.loopBars,
+      lanes: draft.lanes.map((lane) => ({
+        source: lane.source,
+        segments: shapeRenderSegments(lane)
+      }))
+    })
+    if (!shapeDraftIsCurrent(draft)) {
+      await window.rifffApi.cleanupUncommittedShapeAssets(result.stems.map((stem) => stem.path))
+      return null
+    }
+    return assembleShapeRifff(draft, result.stems)
+  }
+
+  // One EEEDIT publish at a time (publishGate.ts).
+  const shapePublishGateRef = useRef(createPublishGate())
+  const trackShapePublish = <T,>(work: () => Promise<T>): Promise<T> =>
+    shapePublishGateRef.current.track(work)
+
+  async function publishShape(
+    draft: ShapeDraft,
+    destination: 'keep' | 'shelf' | 'timeline'
+  ): Promise<'✓ kept' | 'already kept' | void> {
+    // Queued behind any publish in flight (a departure save's included); the check runs once it
+    // is this one's turn, so it sees everything published before it.
+    return trackShapePublish(async () => {
+      // A departure save that ran meanwhile already added exactly this draft to the shelf, and
+      // that riff is still there: adding it again would duplicate it. If it was deleted since,
+      // add it again.
+      const publishedId = shapePublishedRiffIdRef.current
+      if (
+        destination === 'shelf' &&
+        publishedId !== null &&
+        stateRef.current.rifffs[publishedId] !== undefined &&
+        shapeContentFingerprint(draft) === shapeSavedFingerprintRef.current
+      )
+        return
+      setBusy(destination === 'keep' ? 'keeping the edit…' : 'adding the edit…')
+      try {
+        return await publishShapeNow(draft, destination)
+      } finally {
+        setBusy(null)
+      }
+    })
+  }
+
+  async function publishShapeNow(
+    draft: ShapeDraft,
+    destination: 'keep' | 'shelf' | 'timeline'
+  ): Promise<'✓ kept' | 'already kept' | void> {
+    try {
+      const assembled = await materializeCurrentShape(draft)
+      if (!assembled) return
+      if (destination === 'keep') {
+        let saved: Awaited<ReturnType<typeof window.rifffApi.saveDiscoveredRifff>> = null
+        try {
+          saved = await window.rifffApi.saveDiscoveredRifff(
+            assembled.rifff.stems.map((stem) => ({
+              path: stem.path,
+              gain: assembled.vol[stemKey(assembled.rifff.groupId, stem.slot)] ?? 1,
+              name: stem.name,
+              author: stem.author,
+              barLength: stem.barLength,
+              durationSec: stem.durationSec
+            })),
+            assembled.rifff.bpm,
+            assembled.rifff.barLength,
+            []
+          )
+        } finally {
+          await window.rifffApi.cleanupUncommittedShapeAssets(
+            assembled.rifff.stems.map((stem) => stem.path)
+          )
+        }
+        if (!shapeDraftIsCurrent(draft)) return
+        if (!saved || !('duplicate' in saved)) throw new Error('could not keep the edited riff.')
+        shapeSavedFingerprintRef.current = shapeContentFingerprint(draft)
+        setShapeDirty(false)
+        return saved.duplicate ? 'already kept' : '✓ kept'
+      }
+      if (destination === 'shelf') {
+        const action = { type: 'ADD_TO_SHELF' as const, rifff: assembled.rifff, vol: assembled.vol }
+        // A save right after must write this result even before React renders it.
+        stateRef.current = reducer(stateRef.current, action)
+        dispatch(action)
+        shapePublishedRiffIdRef.current = assembled.rifff.groupId
+        setRiffSelection({
+          ids: new Set([assembled.rifff.groupId]),
+          anchorId: assembled.rifff.groupId
+        })
+      } else {
+        const ends = Object.values(state.rifffs)
+          .filter((rifff) => rifff.startBar !== undefined)
+          .map(
+            (rifff) =>
+              (rifff.startBar ?? 0) +
+              resolvedPlayedBarsFromFields(state.playedBars[rifff.groupId], rifff.barLength)
+          )
+        const action = {
+          type: 'PLACE_LOOP_ON_TIMELINE' as const,
+          stems: [assembled.rifff],
+          startBar: ends.length > 0 ? Math.max(...ends) : 0,
+          vol: assembled.vol
+        }
+        stateRef.current = reducer(stateRef.current, action)
+        dispatch(action)
+      }
+      shapeSavedFingerprintRef.current = shapeContentFingerprint(draft)
+      setShapeDirty(false)
+    } catch (err) {
+      console.error('App: failed to save Shape result:', err)
+      window.alert('could not render every edited stem. the source riff was not changed.')
+      throw err
+    }
+  }
+
+  /** The save before something that closes or replaces the live project (quit's
+   * Save, and Save in the discard guard before New or opening another), and the
+   * Save item while EEEDIT is open, without telling the user anything itself. An unpublished EEEDIT draft is first
+   * materialized onto the shelf, and that exact reducer result is what gets
+   * written. 'saved' only when the write holds the newest edits, the draft's
+   * included; a draft that changed meanwhile reads as 'changed'. */
+  async function saveProjectBeforeLeavingNow(): Promise<SaveOutcome> {
+    if (shapeDepartureSaveRef.current) return { kind: 'busy' }
+    shapeDepartureSaveRef.current = true
+    try {
+      // Queued behind an add to shelf already running; this save then finds the draft published.
+      return await trackShapePublish(departureSaveNow)
+    } finally {
+      shapeDepartureSaveRef.current = false
+    }
+  }
+
+  async function departureSaveNow(): Promise<SaveOutcome> {
+    const draft = shapeDraftRef.current
+    const draftFingerprint = draft ? shapeContentFingerprint(draft) : null
+    const departureSnapshot = {
+      projectKey: shapeProjectKeyRef.current,
+      draftId: draft?.id ?? null,
+      fingerprint: draftFingerprint
+    }
+    const shapeSessionIsUnchanged = (): boolean => {
+      const current = shapeDraftRef.current
+      return (
+        shapeProjectKeyRef.current === departureSnapshot.projectKey &&
+        (current?.id ?? null) === departureSnapshot.draftId &&
+        (current ? shapeContentFingerprint(current) : null) === departureSnapshot.fingerprint
+      )
+    }
+    const needsShapePublish =
+      draft !== null && draftFingerprint !== shapeSavedFingerprintRef.current
+
+    setDepartureSaveBusy(true)
+    setBusy(needsShapePublish ? 'saving edit…' : 'saving…')
+    try {
+      if (!needsShapePublish || !draft || draftFingerprint === null) {
+        const outcome = await saveProjectNow()
+        if (outcome.kind === 'saved' && !shapeSessionIsUnchanged()) return { kind: 'changed' }
+        return outcome
+      }
+      let savedState: AppState
+      try {
+        const assembled = await materializeCurrentShape(draft)
+        if (!assembled || !shapeDraftIsCurrent(draft)) return { kind: 'changed' }
+        const action = {
+          type: 'ADD_TO_SHELF' as const,
+          rifff: assembled.rifff,
+          vol: assembled.vol
+        }
+        savedState = reducer(stateRef.current, action)
+        // The disk save below must serialize and validate the exact shelf
+        // result even before React has had a chance to render the dispatched
+        // action. Keep the live mirror transactionally in step with it.
+        stateRef.current = savedState
+        dispatch(action)
+        shapePublishedRiffIdRef.current = assembled.rifff.groupId
+        setRiffSelection({
+          ids: new Set([assembled.rifff.groupId]),
+          anchorId: assembled.rifff.groupId
+        })
+        shapeSavedFingerprintRef.current = draftFingerprint
+        setShapeDirty(false)
+      } catch (err) {
+        console.error('App: failed to publish the EEEDIT draft during project save:', err)
+        return {
+          kind: 'failed',
+          error: "couldn't add the edited riff to the shelf, so the project wasn't saved"
+        }
+      }
+      const outcome = await saveProjectNow(savedState)
+      if (
+        outcome.kind === 'saved' &&
+        !(shapeSessionIsUnchanged() && shapeProjectKeyRef.current === draft.projectKey)
+      )
+        return { kind: 'changed' }
+      return outcome
+    } finally {
+      setDepartureSaveBusy(false)
+      setBusy(null)
+    }
+  }
+
+  function closeShape(): void {
+    const currentDraft = shapeDraftRef.current
+    if (
+      currentDraft &&
+      shapeContentFingerprint(currentDraft) !== shapeSavedFingerprintRef.current
+    ) {
+      setShapeDiscardPromptOpen(true)
+      return
+    }
+    finishCloseShape()
+  }
+
+  function finishCloseShape(): void {
+    setShapeDiscardPromptOpen(false)
+    shapeOpenGenerationRef.current += 1
+    shapePreviewStopRef.current?.()
+    shapePreviewStopRef.current = null
+    const opening = shapeOpeningSelectionRef.current
+    shapeOpeningSelectionRef.current = null
+    setShapeOpen(false)
+    setShapeDraft(null)
+    const publishedId = shapePublishedRiffIdRef.current
+    shapePublishedRiffIdRef.current = null
+    if (publishedId && state.rifffs[publishedId]) {
+      setRiffSelection({ ids: new Set([publishedId]), anchorId: publishedId })
+      dispatch({ type: 'SELECT', groupId: publishedId })
+      return
+    }
+    if (opening) {
+      const valid = new Set([...opening.ids].filter((id) => state.rifffs[id] !== undefined))
+      setRiffSelection({
+        ids: valid,
+        anchorId: opening.anchorId && valid.has(opening.anchorId) ? opening.anchorId : null
+      })
+      const inspectorId =
+        opening.anchorId && valid.has(opening.anchorId) ? opening.anchorId : [...valid][0]
+      if (inspectorId) dispatch({ type: 'SELECT', groupId: inspectorId })
     }
   }
 
@@ -2989,8 +3478,8 @@ function Frame(): React.JSX.Element {
   // its own declaration above), so this effect only fires then, not on
   // every keystroke.
   useEffect(() => {
-    void window.rifffApi.setDirtyState(dirty)
-  }, [dirty])
+    void window.rifffApi.setDirtyState(dirty || shapeDirty, shapeDirty)
+  }, [dirty, shapeDirty])
 
   // Main pushes 'request-save-before-quit' when the user picks "Save" on
   // the native quit-time dialog (index.ts's before-quit handler) -- run the
@@ -3002,7 +3491,7 @@ function Frame(): React.JSX.Element {
   // into its timeout and a misleading "still saving" dialog.
   useEffect(() => {
     return window.rifffApi.onRequestSaveBeforeQuit((requestId) => {
-      void saveProjectNow().then(
+      void saveProjectBeforeLeavingNow().then(
         (outcome) => {
           window.rifffApi.notifySaveBeforeQuitComplete(requestId, outcome.kind === 'saved')
           const notice = saveOutcomeNotice(outcome, 'leaving')
@@ -3291,20 +3780,66 @@ function Frame(): React.JSX.Element {
           selectedRiffIds={selectedRiffIds}
           selectionAnchorId={riffSelectionAnchorId}
           onSelectionChange={handleRiffSelectionChange}
+          onBeforePreview={() => shapePreviewStopRef.current?.()}
+          hoveredRiffKey={hoveredRiffKey}
+          onRiffHover={setHoveredRiffKey}
         />
-        <TransportBar
-          onEnableGatedRecording={() => void enableGatedRecording()}
-          onDisableGatedRecording={() => void disableGatedRecording()}
-          onStop={() => void handleStop()}
-          onShowWelcome={showWelcomeAgain}
-          onOpenEndlesss={() => openRiffLibrary('import')}
-          onStartTour={replayTour}
-          discoverConsented={discoverConsented}
-          toggleDiscoverConsent={toggleDiscoverConsent}
-          traitMatchBar={traitMatchBar}
-          cycleTraitMatchBar={cycleTraitMatchBar}
-        />
-        {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
+        {shapeOpen && shapeDraft?.projectKey === shapeProjectKey(projectSessionEpochRef.current) ? (
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <ShapePanel
+              draft={shapeDraft}
+              setDraft={setShapeDraft}
+              processRack={shapeProcessRacks[shapeDraft.projectKey] ?? []}
+              onProcessRackChange={(rack) =>
+                setShapeProcessRacks((current) => ({
+                  ...current,
+                  [shapeDraft.projectKey]: rack
+                }))
+              }
+              onPreviewStopReady={(stop) => {
+                shapePreviewStopRef.current = stop
+              }}
+              active={
+                !riffLibraryOpen &&
+                !crossOpen &&
+                !shapeDiscardPromptOpen &&
+                !departureSaveBusy &&
+                !projectDepartureLocked &&
+                !unsavedChangesPromptOpen &&
+                newProjectModal === null &&
+                !libraryBrowserOpen
+              }
+              onKeep={async (draft) => {
+                const label = await publishShape(draft, 'keep')
+                if (!label) throw new Error('the draft changed before keep finished.')
+                return label
+              }}
+              onAddToShelf={async (draft) => {
+                await publishShape(draft, 'shelf')
+              }}
+              onAddToTimeline={async (draft) => {
+                await publishShape(draft, 'timeline')
+              }}
+              initialSourceLean={radioSourceOf(discoverSettingsRef.current.radio)}
+              onSourceLeanCommit={(source) => void setRadioSettings({ source })}
+              onClose={closeShape}
+            />
+          </div>
+        ) : (
+          <>
+            <TransportBar
+              onEnableGatedRecording={() => void enableGatedRecording()}
+              onDisableGatedRecording={() => void disableGatedRecording()}
+              onStop={() => void handleStop()}
+              onShowWelcome={showWelcomeAgain}
+              onOpenEndlesss={() => openRiffLibrary('import')}
+              onStartTour={replayTour}
+              discoverConsented={discoverConsented}
+              toggleDiscoverConsent={toggleDiscoverConsent}
+              traitMatchBar={traitMatchBar}
+              cycleTraitMatchBar={cycleTraitMatchBar}
+            />
+            {/* flex:1 (down the column .ra-frame now is) + minHeight:0 makes this
           row consume all the vertical space left after the header/Shelf/
           TransportBar rows above take their own natural heights — the row's
           own children then stretch to fill THAT (flex row's default
@@ -3312,154 +3847,163 @@ function Frame(): React.JSX.Element {
           horizontal scrollbar to the bottom of the visible frame regardless
           of how many rows are actually placed, instead of it sitting right
           after however much content happens to exist. */}
-        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          {/* minWidth:0 lets this flex item shrink below its content's intrinsic
+            <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+              {/* minWidth:0 lets this flex item shrink below its content's intrinsic
             width, which is what allows overflow-x:auto to actually kick in
             instead of the row silently stretching .ra-frame's fixed width. */}
-          <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
-            <div
-              ref={scrollContainerRef}
-              // Where sssketchy stands for the whole of phase two (see
-              // coachSteps.ts's TIMELINE), and what makes him WALK out of
-              // Discover when phase one ends: the anchor selector changes,
-              // useAnchorLeft measures a different left, and the walk plays.
-              data-coach-anchor="timeline"
-              onWheel={handleTimelineWheel}
-              style={{ height: '100%', overflowX: 'auto', overflowY: 'auto' }}
-            >
-              {/* One arrangement, two zoom levels (spec, "The map"). The
+              <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+                <div
+                  ref={scrollContainerRef}
+                  // Where sssketchy stands for the whole of phase two (see
+                  // coachSteps.ts's TIMELINE), and what makes him WALK out of
+                  // Discover when phase one ends: the anchor selector changes,
+                  // useAnchorLeft measures a different left, and the walk plays.
+                  data-coach-anchor="timeline"
+                  onWheel={handleTimelineWheel}
+                  style={{ height: '100%', overflowX: 'auto', overflowY: 'auto' }}
+                >
+                  {/* One arrangement, two zoom levels (spec, "The map"). The
                   coach anchor stays on the scroll container rather than on
                   either child, so sssketchy does not jump across the screen
                   when the view flips. */}
-              {state.mode === 'map' ? (
-                // The map's own "what is this?" keeps the SKETCH population --
-                // it is asking about the rows on THIS map.
-                <ArrangementMap onWhatIsThis={() => openClusterStems('sketch')} />
-              ) : (
-                <Timeline
-                  onOpenClipMenu={openClipMenu}
-                  onOpenRiserMenu={openRiserMenu}
-                  onOpenPasteMenu={openPasteMenu}
-                  onBackgroundMouseDown={handlePanMouseDown}
-                  riserArm={riserArm}
-                  onCancelRiserArm={cancelRiserArm}
-                  onCreateRiser={createRiserFromGesture}
-                  openRiserLaneId={openRiserLaneId}
-                  onCloseRiserLane={closeRiserLane}
-                  selectedRiffIds={selectedRiffIds}
-                  riffSelectionAnchorId={riffSelectionAnchorId}
-                  onRiffSelectionChange={handleRiffSelectionChange}
-                />
-              )}
-            </div>
-            {state.mode === 'normal' && (
-              // The mixer rail: the column every row's m/s/fx and gain
-              // controls are pinned into (MixerRailAnchor), docked at the
-              // viewport's right edge beside the inspector. It's drawn here,
-              // outside the scroller, so it never scrolls; the controls
-              // themselves live in their rows (so they line up with them
-              // vertically) and sit above this at zIndex 5/6. It sits just
-              // left of the scroller's own scrollbars, where the sticky
-              // controls land, rather than over them.
-              //
-              // It takes the pointer, so a click in a gap between controls
-              // doesn't scrub or grab a clip hidden underneath. Being
-              // outside the scroller, it hands wheel gestures back to it.
-              <div
-                onWheel={(e) => {
-                  const gesture = railWheelGesture(e)
-                  if (gesture.kind === 'zoom') handleTimelineWheel(e)
-                  else
-                    scrollContainerRef.current?.scrollBy({ left: gesture.left, top: gesture.top })
-                }}
-                style={{
-                  position: 'absolute',
-                  zIndex: 4,
-                  top: 0,
-                  right: scrollbarInsets.right,
-                  bottom: scrollbarInsets.bottom,
-                  width: ARRANGEMENT_MIXER_RAIL_WIDTH,
-                  boxSizing: 'border-box',
-                  borderLeft: '1px solid var(--ra-border)',
-                  background: 'var(--ra-bg-bar)'
-                }}
-              />
-            )}
-            {state.mode === 'normal' && (
-              // The rail's heading, over the ruler's right end (the ruler is
-              // zIndex 10, above the rail itself).
-              <div
-                aria-hidden="true"
-                style={{
-                  position: 'absolute',
-                  zIndex: 11,
-                  top: 0,
-                  right: scrollbarInsets.right,
-                  width: ARRANGEMENT_MIXER_RAIL_WIDTH,
-                  height: 24,
-                  boxSizing: 'border-box',
-                  display: 'grid',
-                  placeItems: 'center',
-                  borderLeft: '1px solid var(--ra-border)',
-                  borderBottom: '1px solid var(--ra-border)',
-                  background: 'var(--ra-bg-bar)',
-                  color: 'var(--ra-text-4)',
-                  fontSize: 8,
-                  pointerEvents: 'none'
-                }}
-              >
-                mix
+                  {state.mode === 'map' ? (
+                    // The map's own "what is this?" keeps the SKETCH population --
+                    // it is asking about the rows on THIS map.
+                    <ArrangementMap onWhatIsThis={() => openClusterStems('sketch')} />
+                  ) : (
+                    <Timeline
+                      onOpenClipMenu={openClipMenu}
+                      onOpenRiserMenu={openRiserMenu}
+                      onOpenPasteMenu={openPasteMenu}
+                      onBackgroundMouseDown={handlePanMouseDown}
+                      riserArm={riserArm}
+                      onCancelRiserArm={cancelRiserArm}
+                      onCreateRiser={createRiserFromGesture}
+                      openRiserLaneId={openRiserLaneId}
+                      onCloseRiserLane={closeRiserLane}
+                      selectedRiffIds={selectedRiffIds}
+                      riffSelectionAnchorId={riffSelectionAnchorId}
+                      onRiffSelectionChange={handleRiffSelectionChange}
+                      hoveredRiffKey={hoveredRiffKey}
+                      onRiffHover={setHoveredRiffKey}
+                    />
+                  )}
+                </div>
+                {state.mode === 'normal' && (
+                  // The mixer rail: the column every row's m/s/fx and gain
+                  // controls are pinned into (MixerRailAnchor), docked at the
+                  // viewport's right edge beside the inspector. It's drawn here,
+                  // outside the scroller, so it never scrolls; the controls
+                  // themselves live in their rows (so they line up with them
+                  // vertically) and sit above this at zIndex 5/6. It sits just
+                  // left of the scroller's own scrollbars, where the sticky
+                  // controls land, rather than over them.
+                  //
+                  // It takes the pointer, so a click in a gap between controls
+                  // doesn't scrub or grab a clip hidden underneath. Being
+                  // outside the scroller, it hands wheel gestures back to it.
+                  <div
+                    onWheel={(e) => {
+                      const gesture = railWheelGesture(e)
+                      if (gesture.kind === 'zoom') handleTimelineWheel(e)
+                      else
+                        scrollContainerRef.current?.scrollBy({
+                          left: gesture.left,
+                          top: gesture.top
+                        })
+                    }}
+                    style={{
+                      position: 'absolute',
+                      zIndex: 4,
+                      top: 0,
+                      right: scrollbarInsets.right,
+                      bottom: scrollbarInsets.bottom,
+                      width: ARRANGEMENT_MIXER_RAIL_WIDTH,
+                      boxSizing: 'border-box',
+                      borderLeft: '1px solid var(--ra-border)',
+                      background: 'var(--ra-bg-bar)'
+                    }}
+                  />
+                )}
+                {state.mode === 'normal' && (
+                  // The rail's heading, over the ruler's right end (the ruler is
+                  // zIndex 10, above the rail itself).
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      position: 'absolute',
+                      zIndex: 11,
+                      top: 0,
+                      right: scrollbarInsets.right,
+                      width: ARRANGEMENT_MIXER_RAIL_WIDTH,
+                      height: 24,
+                      boxSizing: 'border-box',
+                      display: 'grid',
+                      placeItems: 'center',
+                      borderLeft: '1px solid var(--ra-border)',
+                      borderBottom: '1px solid var(--ra-border)',
+                      background: 'var(--ra-bg-bar)',
+                      color: 'var(--ra-text-4)',
+                      fontSize: 8,
+                      pointerEvents: 'none'
+                    }}
+                  >
+                    mix
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          {/* Drawer handle — same subtle-strip visual language as the stem
+              {/* Drawer handle — same subtle-strip visual language as the stem
             resize handles (StemWaveformRow/CollapsedRifffRow), just click
             instead of drag. Always present, on either side of the drawer, so
             there's a consistent single place to grab regardless of the
             Inspector's current state. */}
-          <button
-            onClick={() => dispatch({ type: 'TOGGLE_INSPECTOR_COLLAPSED' })}
-            aria-label="toggle inspector panel"
-            title={state.inspectorCollapsed ? 'show inspector' : 'hide inspector'}
-            style={{
-              flex: 'none',
-              width: 10,
-              border: 'none',
-              borderLeft: '1px solid var(--ra-border)',
-              background: 'var(--ra-text)',
-              opacity: 0.12,
-              cursor: 'pointer'
-            }}
-          />
-          {/* Inspector itself stays a fixed 308px wide (its own inner layout
+              <button
+                onClick={() => dispatch({ type: 'TOGGLE_INSPECTOR_COLLAPSED' })}
+                aria-label="toggle inspector panel"
+                title={state.inspectorCollapsed ? 'show inspector' : 'hide inspector'}
+                style={{
+                  flex: 'none',
+                  width: 10,
+                  border: 'none',
+                  borderLeft: '1px solid var(--ra-border)',
+                  background: 'var(--ra-text)',
+                  opacity: 0.12,
+                  cursor: 'pointer'
+                }}
+              />
+              {/* Inspector itself stays a fixed 308px wide (its own inner layout
             doesn't reflow during the slide) — this wrapper is what actually
             animates, clipping it via overflow:hidden rather than
             mounting/unmounting, so collapsing/expanding reads as a drawer
             sliding shut rather than a hard cut. */}
-          <div
-            style={{
-              width: state.inspectorCollapsed ? 0 : 308,
-              flex: 'none',
-              // overflowX stays hidden for the slide animation (clips the
-              // fixed-width Inspector while this wrapper's own width
-              // transitions); overflowY is now 'auto' rather than hidden too
-              // — the frame no longer grows to fit tall content (see
-              // .ra-frame's own bounded height), so without this, Inspector
-              // content past the available height would just be invisibly
-              // clipped instead of scrollable.
-              overflowX: 'hidden',
-              overflowY: 'auto',
-              transition: 'width 150ms ease'
-            }}
-          >
-            <Inspector
-              onOpenBeatPicker={handleOpenBeatPickerForEdit}
-              onSeedDiscover={openRiffLibraryWithDiscoverSeed}
-              crossPair={inspectorCrossPair}
-              onCrossRiffs={(rifffs) => void openCrossFromRiffs(rifffs)}
-            />
-          </div>
-        </div>
+              <div
+                style={{
+                  width: state.inspectorCollapsed ? 0 : 308,
+                  flex: 'none',
+                  // overflowX stays hidden for the slide animation (clips the
+                  // fixed-width Inspector while this wrapper's own width
+                  // transitions); overflowY is now 'auto' rather than hidden too
+                  // — the frame no longer grows to fit tall content (see
+                  // .ra-frame's own bounded height), so without this, Inspector
+                  // content past the available height would just be invisibly
+                  // clipped instead of scrollable.
+                  overflowX: 'hidden',
+                  overflowY: 'auto',
+                  transition: 'width 150ms ease'
+                }}
+              >
+                <Inspector
+                  onOpenBeatPicker={handleOpenBeatPickerForEdit}
+                  onSeedDiscover={openRiffLibraryWithDiscoverSeed}
+                  crossPair={inspectorCrossPair}
+                  onCrossRiffs={(rifffs) => void openCrossFromRiffs(rifffs)}
+                  editRifff={inspectorEditRifff}
+                  onEditRifff={(rifff) => void openShapeFromRifff(rifff)}
+                />
+              </div>
+            </div>
+          </>
+        )}
         {pickerGroupId && state.rifffs[pickerGroupId] && (
           <BeatPicker
             groupId={pickerGroupId}
@@ -3522,6 +4066,7 @@ function Frame(): React.JSX.Element {
             setDiscoverSeedPhase={setDiscoverSeedPhase}
             initialMode={riffLibraryInitialMode}
             onCoachSlotsChange={handleCoachSlotsChange}
+            onPublishedToShelf={selectPublishedShelfRiff}
           />
         )}
         {crossOpen &&
@@ -3540,6 +4085,7 @@ function Frame(): React.JSX.Element {
                 setDraft={setCrossDraft}
                 currentProjectKey={crossProjectKey(currentSketch, state.projectSeed)}
                 onSourceLeanCommit={(source) => void setRadioSettings({ source })}
+                onPublishedToShelf={selectPublishedShelfRiff}
                 onBack={() => {
                   setCrossOpen(false)
                   setCrossDraft(null)
@@ -3554,17 +4100,28 @@ function Frame(): React.JSX.Element {
               currentSketch !== null && currentSketch.kind === 'library' ? currentSketch.name : null
             }
             onBeforeReplaceProject={async () => {
+              beginProjectDeparture()
               const choice = await confirmDiscardIfDirty()
-              if (choice === 'cancel') return 'cancel'
+              if (choice === 'cancel') {
+                endProjectDeparture()
+                return 'cancel'
+              }
               if (choice === 'save') {
                 const saved = await saveBeforeLeaving()
                 // Save failed (saveBeforeLeaving already alerted) -- abort the
                 // open/restore rather than replacing the still-unsaved
                 // live project.
-                if (!saved) return 'cancel'
+                if (!saved) {
+                  endProjectDeparture()
+                  return 'cancel'
+                }
               } else {
                 // 'discard' -- see handleNew's matching comment above.
                 clearAutosaveNow()
+              }
+              if (!projectDepartureIsCurrent()) {
+                endProjectDeparture()
+                return 'cancel'
               }
               return 'proceed'
             }}
@@ -3572,6 +4129,7 @@ function Frame(): React.JSX.Element {
               void (async () => {
                 setBusy('opening project…')
                 try {
+                  if (!projectDepartureIsCurrent()) return
                   const result = await window.rifffApi.openLibrarySketch(name)
                   if (!result) return
                   const { state: loaded, pluginStates } = deserializeProject(
@@ -3581,6 +4139,12 @@ function Frame(): React.JSX.Element {
                   setBusy('loading…')
                   const opened = await openWithReonedRepair(loaded)
                   await warmStemCaches(opened.state)
+                  if (!projectDepartureIsCurrent()) {
+                    reonedOpenFailed()
+                    return
+                  }
+                  invalidateShapeSession()
+                  projectSessionEpochRef.current = crypto.randomUUID()
                   restoreState(opened.state, pluginStates)
                   lastSavedJsonRef.current = opened.savedJson
                   setCurrentSketch({ kind: 'library', name })
@@ -3588,20 +4152,28 @@ function Frame(): React.JSX.Element {
                   console.error('App: failed to open library sketch:', err)
                   reonedOpenFailed()
                 } finally {
+                  endProjectDeparture()
                   setBusy(null)
                 }
               })()
             }}
             onOpenFromDisk={() => {
               void (async () => {
+                beginProjectDeparture()
                 const choice = await confirmDiscardIfDirty()
-                if (choice === 'cancel') return
+                if (choice === 'cancel') {
+                  endProjectDeparture()
+                  return
+                }
                 if (choice === 'save') {
                   const saved = await saveBeforeLeaving()
                   // Save failed (saveBeforeLeaving already alerted) -- bail out
                   // rather than proceeding to the disk-open flow, which
                   // would replace the still-unsaved live project.
-                  if (!saved) return
+                  if (!saved) {
+                    endProjectDeparture()
+                    return
+                  }
                 } else {
                   // 'discard' -- see handleNew's matching comment above.
                   clearAutosaveNow()
@@ -3620,6 +4192,12 @@ function Frame(): React.JSX.Element {
                   setBusy('loading…')
                   const opened = await openWithReonedRepair(loaded)
                   await warmStemCaches(opened.state)
+                  if (!projectDepartureIsCurrent()) {
+                    reonedOpenFailed()
+                    return
+                  }
+                  invalidateShapeSession()
+                  projectSessionEpochRef.current = crypto.randomUUID()
                   restoreState(opened.state, pluginStates)
                   lastSavedJsonRef.current = opened.savedJson
                   setCurrentSketch({ kind: 'external', path: result.path })
@@ -3627,6 +4205,7 @@ function Frame(): React.JSX.Element {
                   console.error('App: failed to open project from disk:', err)
                   reonedOpenFailed()
                 } finally {
+                  endProjectDeparture()
                   setBusy(null)
                 }
               })()
@@ -3657,14 +4236,28 @@ function Frame(): React.JSX.Element {
             defaultName={newProjectModal.defaultName}
             defaultBpm={loadLastProjectTempo(initialState.bpm)}
             onCreate={commitNewProject}
-            onCancel={() => setNewProjectModal(null)}
+            onCancel={() => {
+              setNewProjectModal(null)
+              endProjectDeparture()
+            }}
           />
         )}
         {unsavedChangesPromptOpen && (
           <UnsavedChangesDialog
+            hasShapeChanges={shapeDirty}
             onSave={() => resolveUnsavedChangesPrompt('save')}
             onDiscard={() => resolveUnsavedChangesPrompt('discard')}
             onCancel={() => resolveUnsavedChangesPrompt('cancel')}
+          />
+        )}
+        {shapeDiscardPromptOpen && (
+          <ConfirmationDialog
+            message="discard your EEEDIT changes?"
+            detail="anything not kept or added to the shelf is lost."
+            actions={[
+              { label: 'cancel', onClick: () => setShapeDiscardPromptOpen(false) },
+              { label: 'discard', onClick: finishCloseShape, danger: true, primary: true }
+            ]}
           />
         )}
         <LockInConfirmDialog />

@@ -48,6 +48,13 @@ describe('saveOutcomeNotice', () => {
     expect(saveOutcomeNotice({ kind: 'changed' }, 'save')).toBeNull()
     expect(saveOutcomeNotice({ kind: 'changed' }, 'leaving')).toMatch(/changed while it was saving/)
   })
+
+  it('says a save is already running instead of stopping without a word', () => {
+    expect(saveOutcomeNotice({ kind: 'busy' }, 'save')).toMatch(/already saving/)
+    expect(saveOutcomeNotice({ kind: 'busy' }, 'leaving')).toMatch(
+      /already saving.*nothing was closed/s
+    )
+  })
 })
 
 describe('saveCompletionIsCurrent', () => {

@@ -46,6 +46,12 @@ import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 import type { RemoteCommand, RemoteKeepOutcome, RemoteState } from '@shared/remoteState'
 import type { LanAddressCandidate } from '@shared/lanAddress'
+import type {
+  ShapeBakeProcessRequest,
+  ShapeBakeProcessResult,
+  ShapeMaterializeRequest,
+  ShapeMaterializeResult
+} from '@shared/shape'
 
 /** What the gear menu needs to show the phone remote's whole state: whether
  * it is on, the URL to type, the pairing code, how many tries are left, and
@@ -145,6 +151,16 @@ const api = {
     jobs: ReoneBakeJob[]
   ): Promise<{ path: string; bakedPath: string; durationSec: number }[]> =>
     ipcRenderer.invoke('bake-offset', jobs),
+  materializeShape: (request: ShapeMaterializeRequest): Promise<ShapeMaterializeResult> =>
+    ipcRenderer.invoke('shape-materialize', request),
+  bakeShapeProcess: (request: ShapeBakeProcessRequest): Promise<ShapeBakeProcessResult> =>
+    ipcRenderer.invoke('shape-bake-process', request),
+  cancelShapeMaterialization: (jobId: string): Promise<void> =>
+    ipcRenderer.invoke('shape-cancel', jobId),
+  cleanupShapePreview: (paths: string[]): Promise<void> =>
+    ipcRenderer.invoke('shape-cleanup-preview', paths),
+  cleanupUncommittedShapeAssets: (paths: string[]): Promise<void> =>
+    ipcRenderer.invoke('shape-cleanup-uncommitted', paths),
   // The re-oned copies cleanup (src/main/reonedCopiesIpc.ts).
   rebuildReonedCopies: (batches: ReonedRepairBatch[]): Promise<ReonedRepairOutcome[][]> =>
     ipcRenderer.invoke('rebuild-reoned-copies', batches),
@@ -176,7 +192,8 @@ const api = {
   // One-way: main just stores the boolean, no reply expected. Fired from
   // App.tsx's Frame whenever hasUnsavedChanges's own value transitions, not
   // on every keystroke -- see index.ts's rendererHasUnsavedChanges.
-  setDirtyState: (dirty: boolean): Promise<void> => ipcRenderer.invoke('set-dirty-state', dirty),
+  setDirtyState: (dirty: boolean, eeeditUnpublished = false): Promise<void> =>
+    ipcRenderer.invoke('set-dirty-state', dirty, eeeditUnpublished),
   // Main pushes this when the quit dialog's "Save" choice is picked (see
   // index.ts's requestSaveBeforeQuit) -- the renderer's own listener (Frame)
   // runs handleSave() and reports its boolean result. Main quits only after
@@ -305,6 +322,10 @@ const api = {
     ipcRenderer.invoke('export-stem-tracks-next-to-source', stateJson, sourcePath),
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
+  /** EEEDIT's preview loads: resolves once the engine has published the
+   * project; `fadeSwap` asks for the swap dip (Transport.h requestSwapDip). */
+  engineLoadProjectAcked: (project: unknown, options?: { fadeSwap?: boolean }): Promise<void> =>
+    ipcRenderer.invoke('engine-load-project-acked', project, options),
   /** Radio's scheduled swap -- hand the engine a project now, have it
    * become real exactly at the next loop top, or at `atBars` of the
    * current lap when one is given (radio's mid-lap bare cuts, the one
@@ -378,7 +399,8 @@ const api = {
     ipcRenderer.on('engine-project-applied', listener)
     return () => ipcRenderer.removeListener('engine-project-applied', listener)
   },
-  enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
+  enginePlay: (fromPos: number, fadeIn = false): Promise<void> =>
+    ipcRenderer.invoke('engine-play', fromPos, fadeIn),
   engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
   engineSetLiveParam: (field: LiveParamField, key: string, value: number): Promise<void> =>

@@ -5,6 +5,7 @@
 #include "EngineProject.h"
 #include "RenderExport.h"
 #include "BakeStem.h"
+#include "ShapeRender.h"
 #include "PluginChain.h"
 #include "ChannelChainRegistry.h"
 #include "LoopRecorder.h"
@@ -59,7 +60,7 @@ namespace sssketch
         // transport.play(fromPos), answering every stop still waiting for
         // silence as superseded first. Both play sites ("play" and
         // "arm-recording") go through it, so neither leaves a waiter to time out.
-        void playSupersedingStops(double fromPos);
+        void playSupersedingStops(double fromPos, bool fadeIn = false);
         // timerID is one of kPositionTimerId/kLinkPollTimerId/
         // kHaltAckTimerId (IpcServer.cpp) --
         // see this class's own doc comment above for why this is a MultiTimer
@@ -119,6 +120,7 @@ namespace sssketch
         juce::String audioThreadApplyVia() const;
 
         void sendStageResult(int token, const juce::String& status, const juce::String& reason);
+        void sendLoadResult(int token, bool success, const juce::String& error);
 
         /** Settles whatever is currently staged, for every reason one gets
          * settled other than landing on its own: a newer stage superseding

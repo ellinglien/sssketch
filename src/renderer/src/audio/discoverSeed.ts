@@ -71,9 +71,14 @@ export function discoverHasRealContent(slots: readonly DiscoverSlot[]): boolean 
  *
  * Every slot starts unlocked and `hasRerolled: true` (there is no
  * meaningful "hasn't rolled yet" state for a slot that already has real
- * content) and `gain: 1` (full volume, matching every other fresh slot's
- * own default). Returns `[]` for an empty input. */
-export function buildSeedSlotsFromStems(stems: readonly Stem[]): DiscoverSlot[] {
+ * content). Its gain comes from `gainBySlot` when supplied so "Discover
+ * This Riff" opens with the source riff's audible balance rather than
+ * silently resetting every reused stem to full volume. Browse/fresh seeds
+ * still default to 1. Returns `[]` for an empty input. */
+export function buildSeedSlotsFromStems(
+  stems: readonly Stem[],
+  gainBySlot: Readonly<Partial<Record<number, number>>> = {}
+): DiscoverSlot[] {
   return stems.slice(0, MAX_SEED_SLOTS).map((stem) => {
     const seedStem: ResolvedCandidateStem = {
       author: stem.author,
@@ -95,7 +100,7 @@ export function buildSeedSlotsFromStems(stems: readonly Stem[]): DiscoverSlot[] 
       locked: false,
       candidate: null,
       hasRerolled: true,
-      gain: 1,
+      gain: gainBySlot[stem.slot] ?? 1,
       seedStem
     }
   })

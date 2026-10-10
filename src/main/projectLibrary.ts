@@ -118,6 +118,18 @@ export function bakeAssetsDir(root: string = libraryRootPath()): string {
   return join(root, '.bakes')
 }
 
+/** EEEDIT's (Shape Riff's) renders: a riff's lanes (`<uuid>.shape.wav`), its
+ * intervention bakes (`<uuid>.shape-base.wav`) and the bounded preview cache
+ * (`.preview-cache`, at most 1 GB, least recently used first;
+ * shapeMaterialize.ts). The renders are project data, kept for good: unlike a
+ * re-oned copy they can't be rebuilt, so the re-oned copies cleanup never
+ * deletes one. It removes only leftovers more than a day old: a crashed
+ * render's staging folder and old preview cache files (reonedUsage.ts's
+ * surveyShapes). `root` as for bakeAssetsDir. */
+export function shapeAssetsDir(root: string = libraryRootPath()): string {
+  return join(root, '.shapes')
+}
+
 // A hard, reliable split rather than a probe/fallback -- matches
 // bakeOffset.ts's and exportAbleton.ts's own isWavPath exactly: a regular
 // drag-and-drop import is always a WAV, while a LORE-cached stem's path is

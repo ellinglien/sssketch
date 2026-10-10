@@ -495,14 +495,14 @@ function CenterRow({
 
   return (
     <div
-      draggable
-      onDragStart={(event) => {
-        event.dataTransfer.setData(ROW_DRAG_TYPE, row.id)
-        event.dataTransfer.effectAllowed = 'move'
-      }}
       onDragOver={(event) => event.preventDefault()}
-      onDrop={(event) => onDropAt(event, index)}
+      onDrop={(event) => {
+        const bounds = event.currentTarget.getBoundingClientRect()
+        const insertionIndex = index + (event.clientY >= bounds.top + bounds.height / 2 ? 1 : 0)
+        onDropAt(event, insertionIndex)
+      }}
       style={{
+        position: 'relative',
         minHeight: 54,
         border: '1px solid var(--ra-border-strong)',
         background: 'var(--ra-bg-row-active)',
@@ -533,6 +533,35 @@ function CenterRow({
         className="ra-cross-row-button"
       >
         s
+      </button>
+      <button
+        draggable
+        aria-label={`reorder stem ${index + 1}`}
+        title="drag to reorder"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+        onDragStart={(event) => {
+          event.stopPropagation()
+          event.dataTransfer.setData(ROW_DRAG_TYPE, row.id)
+          event.dataTransfer.effectAllowed = 'move'
+        }}
+        style={{
+          position: 'absolute',
+          zIndex: 2,
+          right: 133,
+          bottom: 8,
+          width: 13,
+          height: 13,
+          padding: 0,
+          border: 'none',
+          background: 'var(--ra-bg-bar)',
+          color: 'var(--ra-text-3)',
+          fontSize: 9,
+          lineHeight: '13px',
+          cursor: 'grab'
+        }}
+      >
+        ⋮
       </button>
       <button
         onPointerDown={beginGainDrag}
@@ -616,6 +645,7 @@ export function CrossPanel({
   setDraft,
   currentProjectKey,
   onSourceLeanCommit,
+  onPublishedToShelf,
   onBack
 }: {
   draft: CrossDraft
@@ -625,6 +655,7 @@ export function CrossPanel({
    * The draft still updates live while the knob moves; this fires once when
    * the gesture finishes so reopening Cross does not reset the choice. */
   onSourceLeanCommit: (sourceLean: number) => void
+  onPublishedToShelf: (groupId: string) => void
   onBack: () => void
 }): React.JSX.Element {
   const dispatch = useDispatch()
@@ -995,6 +1026,7 @@ export function CrossPanel({
           vol: assembly.vol,
           mute: assembly.mute
         })
+        onPublishedToShelf(assembly.rifff.groupId)
       } else {
         const ends = Object.values(rifffs)
           .filter((rifff) => rifff.startBar !== undefined)

@@ -55,6 +55,7 @@ export function Dial({
   size = 26,
   ariaLabel,
   tooltip,
+  inkColor,
   disabled = false
 }: {
   value: number
@@ -71,6 +72,9 @@ export function Dial({
   size?: number
   ariaLabel: string
   tooltip?: string
+  /** Optional active arc/pointer color for contexts whose surrounding
+   * controls use quieter ink than the app-wide dial default. */
+  inkColor?: string
   /** Shown but inert: its value still draws (fainter), and no pointer, wheel, key or
    * double-click changes it. Out of the Tab order. For a dial whose setting does nothing right
    * now (radio's level/reverb/filter while nothing sounds; a sound dial whose stage is off). */
@@ -128,7 +132,7 @@ export function Dial({
     onCommit?.(drag.latestValue)
   }
 
-  const ink = disabled ? 'var(--ra-text-4)' : 'var(--ra-text)'
+  const ink = disabled ? 'var(--ra-text-4)' : (inkColor ?? 'var(--ra-text)')
   const r = size / 2 - 3
   const pointer = dialPointAt(dialAngleDeg(value), r - 2)
   const half = size / 2

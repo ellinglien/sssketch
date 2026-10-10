@@ -186,6 +186,18 @@ textarea:focus-visible,
     box-shadow 120ms ease;
 }
 
+/* Riff correspondence supplies its own hover frame below.
+ * Suppress the app-wide rectangular button/drag hover tint here so it
+ * cannot sit underneath that frame and be mistaken for selection. The
+ * real square selection background remains controlled solely by
+ * data-selected. */
+button.ra-riff-tile:not(:disabled):hover,
+.ra-riff-tile[style*='cursor: pointer']:hover,
+.ra-riff-tile[style*='cursor: grab']:hover {
+  filter: none;
+  box-shadow: none;
+}
+
 /* The tiles use border-box sizing while their glyphs deliberately retain
  * their original dimensions. Center the glyph geometrically instead of
  * allowing the border/padding content origin to shift it one pixel down and
@@ -198,6 +210,24 @@ textarea:focus-visible,
   left: 50%;
   display: block;
   transform: translate(-50%, -50%);
+}
+
+/* Shelf availability dimming belongs to the glyph, not the whole tile.
+ * Keeping the tile itself fully composited lets the independent hover-
+ * correspondence frame remain readable without brightening the riff it
+ * points to. These are the same long-standing idle levels: unused 72%,
+ * already placed 40%, and a genuinely interactive lit state 100%. */
+.ra-shelf-riff-tile > .ra-polar-glyph {
+  opacity: 0.72;
+  transition: opacity 80ms ease;
+}
+
+.ra-shelf-riff-tile[data-placed='true'] > .ra-polar-glyph {
+  opacity: 0.4;
+}
+
+.ra-shelf-riff-tile[data-lit='true'] > .ra-polar-glyph {
+  opacity: 1;
 }
 
 .ra-riff-tile[data-selected='true'] {
@@ -216,6 +246,19 @@ textarea:focus-visible,
   mask-image: url('../assets/riff-selection-crosshatch.svg');
   mask-repeat: repeat;
   mask-size: 8px 8px;
+  pointer-events: none;
+}
+
+/* Hover correspondence ("the same riff over there", Shelf <-> Sketch) is not
+ * selection: a flat 1px frame inset inside the tile, where selection is the
+ * crosshatch fill on ::before. It lives on ::after so the two states can show
+ * together without one rule wiping the other. Flat by design: no radius, glow,
+ * blur or gradient. */
+.ra-riff-tile[data-corresponding='true']::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 1px solid var(--ra-text-3);
   pointer-events: none;
 }
 

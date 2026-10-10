@@ -13,6 +13,32 @@ namespace sssketch
         constexpr int kLinkPollTimerId = 1; // LinkSession::checkForExternalTempoChange -- always running
         constexpr int kHaltAckTimerId = 2; // short-lived poll until the audio thread's halt fade is silent
 
+        /** MESSAGE THREAD. Blocks until the audio thread has faded the swap dip
+         * to silence (Transport::requestSwapDip): normally one device block or
+         * two. Gives up when the device isn't calling back (HaltAck.h's stall
+         * rule) or after a second, so a dead device never hangs a load. */
+        void waitForSwapDipSilence(Transport& transport, unsigned long long request)
+        {
+            if (request == 0)
+                return;
+            HaltAckWait wait;
+            wait.commandGeneration = 1; // never "completed": only the stall rule ends it early
+            wait.lastSeenRenderedCallbacks = transport.renderedCallbacks();
+            wait.lastAdvanceMs = juce::Time::getMillisecondCounter();
+            const auto startMs = wait.lastAdvanceMs;
+            const auto stallMs = haltAckStallMs(transport.currentBlockSize(), transport.currentSampleRate());
+            while (!transport.swapDipIsSilent(request))
+            {
+                const auto nowMs = juce::Time::getMillisecondCounter();
+                if (haltAckDue(wait, 0, transport.audioDeviceRunning(), transport.renderedCallbacks(),
+                               nowMs, stallMs))
+                    return;
+                if ((std::uint32_t) (nowMs - startMs) >= 1000)
+                    return;
+                juce::Thread::sleep(1);
+            }
+        }
+
         // ~500ms-1s, per this feature's own design doc -- frequent enough that a
         // peer's tempo nudge reaches Maschine/Ableton/etc. via sssketch within
         // roughly a second, infrequent enough that a captureAppSessionState()
@@ -58,6 +84,50 @@ namespace sssketch
         obj->setProperty("type", "bake-stem-result");
         obj->setProperty("payload", juce::var(payload.get()));
         return juce::var(obj.get());
+    }
+
+    static juce::var makeShapeRenderResult(
+        bool success,
+        const ShapeRenderInfo& info,
+        const juce::String& error)
+    {
+        juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+        payload->setProperty("success", success);
+        if (success)
+        {
+            payload->setProperty("durationSec", info.durationSec);
+            payload->setProperty("sampleRate", info.sampleRate);
+            payload->setProperty("frames", info.frames);
+            payload->setProperty("channels", info.channels);
+        }
+        if (error.isNotEmpty())
+            payload->setProperty("error", error);
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("type", "render-shape-stem-result");
+        obj->setProperty("payload", juce::var(payload.get()));
+        return juce::var(obj.get());
+    }
+
+    static juce::var makeShapeRawRenderResult(
+        bool success,
+        const ShapeRenderInfo& info,
+        const juce::String& error)
+    {
+        auto result = makeShapeRenderResult(success, info, error);
+        if (auto* object = result.getDynamicObject())
+            object->setProperty("type", "render-shape-raw-source-result");
+        return result;
+    }
+
+    static juce::var makeShapeProcessRenderResult(
+        bool success,
+        const ShapeRenderInfo& info,
+        const juce::String& error)
+    {
+        auto result = makeShapeRenderResult(success, info, error);
+        if (auto* object = result.getDynamicObject())
+            object->setProperty("type", "render-shape-process-source-result");
+        return result;
     }
 
     IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc,
@@ -210,6 +280,19 @@ namespace sssketch
         sendJson(juce::var(obj.get()));
     }
 
+    void IpcConnection::sendLoadResult(int token, bool success, const juce::String& error)
+    {
+        juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+        payload->setProperty("token", token);
+        payload->setProperty("success", success);
+        if (error.isNotEmpty())
+            payload->setProperty("error", error);
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("type", "project-load-result");
+        obj->setProperty("payload", juce::var(payload.get()));
+        sendJson(juce::var(obj.get()));
+    }
+
     juce::String IpcConnection::audioThreadApplyVia() const
     {
         return transport.lastStagedApplyWasAtRequestedBar() ? "bar" : "wrap";
@@ -336,7 +419,7 @@ namespace sssketch
         sendMessage(block);
     }
 
-    void IpcConnection::playSupersedingStops(double fromPos)
+    void IpcConnection::playSupersedingStops(double fromPos, bool fadeIn)
     {
         // Play explicitly wins over an in-flight stop fade. Resolve any
         // silence waiters as cancelled now, rather than leaving them to
@@ -344,7 +427,7 @@ namespace sssketch
         stopTimer(kHaltAckTimerId);
         for (const int token : takeSupersededHaltAcks(pendingHaltAcks))
             sendTransportStopped(token, false);
-        transport.play(fromPos);
+        transport.play(fromPos, fadeIn);
     }
 
     void IpcConnection::sendTransportStopped(int token, bool stopped)
@@ -519,6 +602,26 @@ namespace sssketch
 
         if (type == "load-project")
         {
+            // Live renderer loads carry a token so its promise resolves only
+            // after this process has decoded and published the snapshot.
+            // Export/test clients that still send the project directly keep
+            // the original fire-and-forget protocol.
+            // `fadeSwap` (wrapper only, so the EngineProject wire twin is
+            // untouched) asks for the swap dip: EEEDIT's preview swaps fade
+            // out, swap under silence and fade back in. Every other load
+            // replaces the project under full level, as it always has.
+            int loadToken = -1;
+            bool fadeSwap = false;
+            auto projectPayload = payload;
+            if (auto* wrapper = payload.getDynamicObject())
+            {
+                if (wrapper->hasProperty("token") && wrapper->hasProperty("project"))
+                {
+                    loadToken = (int) wrapper->getProperty("token");
+                    fadeSwap = (bool) wrapper->getProperty("fadeSwap");
+                    projectPayload = wrapper->getProperty("project");
+                }
+            }
             // TEMP -- how far past its own loop top the transport already
             // is when this message lands. The whole point of the
             // measurement: the renderer's own trace stops at the socket
@@ -531,7 +634,7 @@ namespace sssketch
 
             EngineProject project;
             juce::String error;
-            const auto payloadJson = juce::JSON::toString(payload, true);
+            const auto payloadJson = juce::JSON::toString(projectPayload, true);
             const auto tTraceReserialized = juce::Time::getMillisecondCounterHiRes();
             if (parseEngineProject(payloadJson, project, error))
             {
@@ -551,7 +654,20 @@ namespace sssketch
                 // Same order as before this feature existed: transport
                 // settings, publish, then the post-publish pair.
                 applyProjectTransportSettings(project);
-                engine.setProject(project);
+                if (fadeSwap)
+                {
+                    unsigned long long dip = 0;
+                    engine.setProject(project, [this, &dip]
+                    {
+                        dip = transport.requestSwapDip();
+                        waitForSwapDipSilence(transport, dip);
+                    });
+                    transport.releaseSwapDip(dip);
+                }
+                else
+                {
+                    engine.setProject(project);
+                }
                 const auto tTraceSetProject = juce::Time::getMillisecondCounterHiRes();
                 int tTraceStems = 0;
                 for (const auto& r : project.rifffs)
@@ -568,10 +684,14 @@ namespace sssketch
                     + juce::String(tTraceStems) + " stems) · handler "
                     + juce::String(tTraceSetProject - tTraceEnter, 1) + "ms"); // TEMP (2026-09-28)
                 applyProjectPostPublish(project);
+                if (loadToken >= 0)
+                    sendLoadResult(loadToken, true, {});
             }
             else
             {
                 juce::Logger::writeToLog("IpcConnection: load-project failed: " + error);
+                if (loadToken >= 0)
+                    sendLoadResult(loadToken, false, error);
             }
         }
         else if (type == "stage-project")
@@ -735,7 +855,8 @@ namespace sssketch
         else if (type == "play")
         {
             const double fromPos = payload.isObject() ? (double) payload.getProperty("fromPos", 0.0) : 0.0;
-            playSupersedingStops(fromPos);
+            const bool fadeIn = payload.isObject() && (bool) payload.getProperty("fadeIn", false);
+            playSupersedingStops(fromPos, fadeIn);
             // ~33ms (~30Hz) position-update push rate — matches the renderer's
             // existing ~60fps rAF poll closely enough for a smooth playhead
             // without flooding the socket. kLinkPollTimerId is untouched here
@@ -1465,6 +1586,120 @@ namespace sssketch
             double durationSec = 0.0;
             const bool ok = bakeStemToWav(sourcePath, rotationSec, outputPath, durationSec, error);
             sendJson(makeBakeStemResult(ok, durationSec, ok ? juce::String() : error));
+        }
+        else if (type == "render-shape-raw-source")
+        {
+            ShapeRenderInfo info;
+            if (!payload.isObject())
+            {
+                sendJson(makeShapeRawRenderResult(false, info, "render-shape-raw-source payload must be an object"));
+                return;
+            }
+            juce::String error;
+            const bool ok = renderShapeRawSourceToWav(
+                payload.getProperty("sourcePath", "").toString(),
+                (double) payload.getProperty("rate", 0.0),
+                payload.getProperty("outputPath", "").toString(),
+                info,
+                error);
+            sendJson(makeShapeRawRenderResult(ok, info, ok ? juce::String() : error));
+        }
+        else if (type == "render-shape-process-source")
+        {
+            ShapeRenderInfo info;
+            if (!payload.isObject())
+            {
+                sendJson(makeShapeProcessRenderResult(false, info, "render-shape-process-source payload must be an object"));
+                return;
+            }
+            juce::String error;
+            const bool ok = renderShapeProcessSourceToWav(
+                payload.getProperty("sourcePath", "").toString(),
+                payload.getProperty("processType", "").toString(),
+                (double) payload.getProperty("primary", 0.0),
+                (double) payload.getProperty("secondary", 0.0),
+                (double) payload.getProperty("tertiary", 0.0),
+                (double) payload.getProperty("quaternary", 0.0),
+                (double) payload.getProperty("quinary", 0.0),
+                (double) payload.getProperty("mix", -1.0),
+                payload.getProperty("outputPath", "").toString(),
+                info,
+                error);
+            sendJson(makeShapeProcessRenderResult(ok, info, ok ? juce::String() : error));
+        }
+        else if (type == "render-shape-stem")
+        {
+            ShapeRenderInfo info;
+            if (!payload.isObject())
+            {
+                sendJson(makeShapeRenderResult(false, info, "render-shape-stem payload must be an object"));
+                return;
+            }
+
+            const auto outputPath = payload.getProperty("outputPath", "").toString();
+            const double sourceBarLength = (double) payload.getProperty("sourceBarLength", 0.0);
+            const double targetBpm = (double) payload.getProperty("targetBpm", 0.0);
+            const double loopBars = (double) payload.getProperty("loopBars", 0.0);
+            std::vector<ShapeRenderSource> sources;
+            if (auto* array = payload.getProperty("sources", juce::var()).getArray())
+            {
+                sources.reserve((size_t) array->size());
+                for (const auto& entry : *array)
+                {
+                    if (!entry.isObject())
+                    {
+                        sendJson(makeShapeRenderResult(false, info, "Shape source must be an object"));
+                        return;
+                    }
+                    sources.push_back({
+                        entry.getProperty("path", "").toString(),
+                        (double) entry.getProperty("durationSec", 0.0),
+                        (double) entry.getProperty("barLength", sourceBarLength)
+                    });
+                }
+            }
+            else
+            {
+                sendJson(makeShapeRenderResult(false, info, "Shape sources must be an array"));
+                return;
+            }
+            std::vector<ShapeRenderSegment> segments;
+            if (auto* array = payload.getProperty("segments", juce::var()).getArray())
+            {
+                segments.reserve((size_t) array->size());
+                for (const auto& entry : *array)
+                {
+                    if (!entry.isObject())
+                    {
+                        sendJson(makeShapeRenderResult(false, info, "Shape segment must be an object"));
+                        return;
+                    }
+                    segments.push_back({
+                        (double) entry.getProperty("sourceStartBars", -1.0),
+                        (double) entry.getProperty("sourceEndBars", -1.0),
+                        (double) entry.getProperty("destStartBars", -1.0),
+                        (bool) entry.getProperty("reversed", false),
+                        (int) entry.getProperty("sourceIndex", -1)
+                    });
+                }
+            }
+            else
+            {
+                sendJson(makeShapeRenderResult(false, info, "Shape segments must be an array"));
+                return;
+            }
+
+            juce::String error;
+            const bool ok = renderShapeStemToWav(
+                sources,
+                sourceBarLength,
+                targetBpm,
+                loopBars,
+                segments,
+                outputPath,
+                info,
+                error);
+            sendJson(makeShapeRenderResult(ok, info, ok ? juce::String() : error));
         }
         else if (type == "quit")
         {

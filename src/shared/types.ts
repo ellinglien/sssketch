@@ -101,6 +101,236 @@ export interface Stem {
    * correctly. Undefined for a one-shot/recorded-in-app stem (no
    * originating riff at all) or any import path that predates this field. */
   creationTime?: number
+  /** Non-destructive source recipe for a WAV materialized by Shape Riff.
+   * Ordinary playback uses this stem's `path`; Shape alone reads this
+   * versioned provenance to reopen the editable source fragments. */
+  shape?: ShapeStemProvenanceV1 | ShapeStemProvenanceV2
+}
+
+export interface ShapeClipTransformV1 {
+  /** Coarse duration-preserving pitch shift. */
+  pitchSemitones: number
+  /** Fine duration-preserving pitch shift. */
+  detuneCents: number
+  /** Independent spectral-envelope shift in semitones. Missing in early v2
+   * recipes means 0. */
+  formantSemitones: number
+  /** Tape/tracker playback-rate multiple. Changes duration and pitch
+   * together; missing in early v2 recipes means 1. */
+  rate: number
+  /** Original source bounds retained while a slower rate reaches the fixed
+   * riff edge. Internal recipe metadata; omitted at normal speed. */
+  rateSourceStartBars?: number
+  rateSourceEndBars?: number
+  /** Smooth is anti-aliased; Raw deliberately preserves tracker-style
+   * nearest-neighbour resampling artifacts. */
+  character: 'smooth' | 'raw'
+  /** At most one editable offline treatment. */
+  process?: ShapeClipProcessV1
+  /** Latest durable 32-bit-float base created by Bake. The lane's immutable
+   * source remains the reset root; this derived base replaces it only for
+   * this clip's render recipe. */
+  bakedBase?: ShapeBakedClipSource
+}
+
+export interface ShapeBakedClipSource {
+  path: string
+  durationSec: number
+  barLength: number
+}
+
+export interface ShapeWavefoldProcessV1 {
+  type: 'wavefold'
+  /** Input multiplication before triangle folding. */
+  drive: number
+  /** Input offset used to make folds asymmetric. */
+  bias: number
+  /** Dry/wet blend from 0 to 1. */
+  mix: number
+}
+
+export interface ShapeSaturationProcessV1 {
+  type: 'saturation'
+  drive: number
+  bias: number
+  /** Post-saturation output trim in decibels. */
+  outputDb: number
+  mix: number
+}
+
+export interface ShapeHardClipProcessV1 {
+  type: 'hard-clip'
+  /** Linear clipping threshold from 0.05 to 1. */
+  threshold: number
+  /** Positive values clip the positive half sooner; negative values do the reverse. */
+  symmetry: number
+  mix: number
+}
+
+export interface ShapeRectifyProcessV1 {
+  type: 'rectify'
+  mode: 'half' | 'full'
+  drive: number
+  mix: number
+}
+
+export interface ShapeBitCrushProcessV1 {
+  type: 'bit-crush'
+  bits: number
+  /** Deterministic dither in fractions of one quantization step. */
+  dither: number
+  mix: number
+}
+
+export interface ShapeRateCrushProcessV1 {
+  type: 'rate-crush'
+  /** Number of samples held per update. */
+  factor: number
+  /** Deterministic variation in each sample-hold interval. */
+  jitter: number
+  mix: number
+}
+
+export interface ShapeRingModProcessV1 {
+  type: 'ring-mod'
+  frequencyHz: number
+  /** Morphs the carrier from sine (0) to square (1). */
+  shape: number
+  mix: number
+}
+
+export interface ShapeCombProcessV1 {
+  type: 'comb'
+  delayMs: number
+  feedback: number
+  damping: number
+  mix: number
+}
+
+export interface ShapeSmearProcessV1 {
+  type: 'smear'
+  timeMs: number
+  scatter: number
+  mix: number
+}
+
+export interface ShapeCompandProcessV1 {
+  type: 'compand'
+  drive: number
+  compand: number
+  symmetry: number
+  outputDb: number
+  mix: number
+}
+
+export interface ShapeCodecDamageProcessV1 {
+  type: 'codec-damage'
+  quality: number
+  loss: number
+  packetMs: number
+  bandwidthHz: number
+  mix: number
+}
+
+export interface ShapeShortRoomProcessV1 {
+  type: 'short-room'
+  sizeMs: number
+  decay: number
+  damping: number
+  width: number
+  mix: number
+}
+
+export interface ShapeFrequencyShiftProcessV1 {
+  type: 'frequency-shift'
+  shiftHz: number
+  feedback: number
+  stereo: number
+  mix: number
+}
+
+export interface ShapeChorusProcessV1 {
+  type: 'chorus'
+  rateHz: number
+  depthMs: number
+  delayMs: number
+  feedback: number
+  stereo: number
+  mix: number
+}
+
+export interface ShapeDjEqProcessV1 {
+  type: 'dj-eq'
+  lowDb: number
+  midDb: number
+  highDb: number
+  mix: number
+}
+
+export interface ShapeToneProcessV1 {
+  type: 'tone'
+  cutoffHz: number
+  resonance: number
+  drive: number
+  mix: number
+}
+
+/** Shape deliberately has one editable treatment slot, not an effects
+ * chain. Choosing another member of this union replaces the current one. */
+export type ShapeClipProcessV1 =
+  | ShapeWavefoldProcessV1
+  | ShapeSaturationProcessV1
+  | ShapeHardClipProcessV1
+  | ShapeRectifyProcessV1
+  | ShapeBitCrushProcessV1
+  | ShapeRateCrushProcessV1
+  | ShapeRingModProcessV1
+  | ShapeCombProcessV1
+  | ShapeSmearProcessV1
+  | ShapeCompandProcessV1
+  | ShapeCodecDamageProcessV1
+  | ShapeShortRoomProcessV1
+  | ShapeFrequencyShiftProcessV1
+  | ShapeChorusProcessV1
+  | ShapeDjEqProcessV1
+  | ShapeToneProcessV1
+
+export interface ShapeFragmentRecipe {
+  id: string
+  sourceStartBars: number
+  sourceEndBars: number
+  destStartBars: number
+  disabled: boolean
+  /** Plays this clip's source interval from end to start. Missing in older
+   * Shape recipes means ordinary forward playback. */
+  reversed?: boolean
+  /** Missing on v1 recipes means the neutral Smooth transform. */
+  transform?: ShapeClipTransformV1
+}
+
+/** A deliberately non-recursive source snapshot. */
+export type ShapeSourceStem = Omit<Stem, 'slot' | 'shape'>
+
+export interface ShapeStemProvenanceV1 {
+  version: 1
+  source: ShapeSourceStem
+  loopBars: number
+  laneDisabled: boolean
+  gain: number
+  fragments: ShapeFragmentRecipe[]
+}
+
+/** Version 2 adds per-clip transform recipes. Source and rendered audio
+ * remain immutable; reopening Shape reconstructs these editable values. */
+export interface ShapeStemProvenanceV2 {
+  version: 2
+  source: ShapeSourceStem
+  loopBars: number
+  gain: number
+  /** Cumulative whole-lane phase rotation in destination bars. Optional so
+   * Shape riffs saved before the Rotate control reopen at the neutral phase. */
+  rotationBars?: number
+  fragments: ShapeFragmentRecipe[]
 }
 
 export interface Rifff {

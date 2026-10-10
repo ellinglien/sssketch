@@ -184,6 +184,7 @@ export function LibraryBrowser({
   discoverSeedPhase,
   setDiscoverSeedPhase,
   onCoachSlotsChange,
+  onPublishedToShelf,
   initialMode
 }: {
   onClose: () => void
@@ -250,6 +251,7 @@ export function LibraryBrowser({
   setDiscoverSeedPhase: (phase: DiscoverSeedPhase | null) => void
   /** Passed straight through to DiscoverPanel -- see its own doc comments. */
   onCoachSlotsChange?: (slots: CoachSlotSnapshot[]) => void
+  onPublishedToShelf: (groupId: string) => void
   /** Which half to open on. Required, and always honoured: the shelf now has
    * one button per half (see @shared/libraryEntryPoints), so the half a user
    * lands on is exactly the button they pressed -- never a guess.
@@ -2840,6 +2842,7 @@ export function LibraryBrowser({
             seedBpm={discoverSeedBpm}
             seedPhase={discoverSeedPhase}
             onCoachSlotsChange={onCoachSlotsChange}
+            onPublishedToShelf={onPublishedToShelf}
           />
         )}
       </div>

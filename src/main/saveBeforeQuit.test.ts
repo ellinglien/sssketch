@@ -3,6 +3,7 @@ import {
   afterSaveBeforeQuit,
   awaitSaveBeforeQuit,
   beforeQuitPlan,
+  saveBeforeQuitTimeoutMs,
   type BeforeQuitState
 } from './saveBeforeQuit'
 import {
@@ -184,5 +185,15 @@ describe('beforeQuitPlan', () => {
         quittingAfterSavePrompt: true
       })
     ).toEqual({ kind: 'quit', clearRecovery: false })
+  })
+})
+
+describe('saveBeforeQuitTimeoutMs', () => {
+  it("waits master's 5 s for a plain save", () => {
+    expect(saveBeforeQuitTimeoutMs(false)).toBe(5000)
+  })
+
+  it('waits longer only while an EEEDIT draft must be rendered onto the shelf first', () => {
+    expect(saveBeforeQuitTimeoutMs(true)).toBe(120_000)
   })
 })

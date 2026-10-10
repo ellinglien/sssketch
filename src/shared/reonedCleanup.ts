@@ -1,6 +1,7 @@
 // Part 3 of the re-oned copies spec, the pure half: when the launch notice offers a cleanup, how
 // long "not now" lasts, how old an unused copy must be, how sizes read, and every word the
-// cleanup shows. See docs/superpowers/specs/2026-10-09-reoned-copies-cleanup-design.md. All UI
+// cleanup shows. The leftovers are EEEDIT's crashed render folders and old preview cache files
+// (`.shapes`); the words don't name EEEDIT, which most people never see. See docs/superpowers/specs/2026-10-09-reoned-copies-cleanup-design.md. All UI
 // copy lives here, lowercase (AGENTS.md section 2).
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -32,7 +33,7 @@ export function formatCopySize(bytes: number): string {
 
 export function cleanupOfferText(bytes: number): string {
   const size = bytes >= 1e6 ? `about ${formatCopySize(bytes)}` : formatCopySize(bytes)
-  return `${size} of re-oned stem copies aren't used by any project. your rifffs, stems and projects aren't touched, and anything needed later is rebuilt automatically.`
+  return `${size} of re-oned stem copies and leftover render files aren't used by any project. your rifffs, stems and projects aren't touched, and anything needed later is rebuilt automatically.`
 }
 
 export function clearedText(bytes: number): string {

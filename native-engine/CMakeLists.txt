@@ -178,6 +178,8 @@ target_sources(sssketch_engine PRIVATE
   Source/RenderExport.cpp
   Source/BakeStem.cpp
   Source/BakeStemTests.cpp
+  Source/ShapeRender.cpp
+  Source/ShapeRenderTests.cpp
   Source/LoopRecorder.cpp
   Source/LoopRecorderTests.cpp
   Source/GatedLoopRecorder.cpp

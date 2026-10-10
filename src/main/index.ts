@@ -52,6 +52,7 @@ import {
   afterSaveBeforeQuit,
   awaitSaveBeforeQuit,
   beforeQuitPlan,
+  saveBeforeQuitTimeoutMs,
   type SaveBeforeQuitResult
 } from './saveBeforeQuit'
 import { jamNamesFor, stemJamsForPaths } from './stemJams'
@@ -271,6 +272,14 @@ import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
+import type { ShapeBakeProcessRequest, ShapeMaterializeRequest } from '@shared/shape'
+import {
+  bakeShapeProcess,
+  cancelShapeMaterialization,
+  cleanupShapePreview,
+  cleanupUncommittedShapeAssets,
+  materializeShape
+} from './shapeMaterialize'
 import { restrictStems } from '@shared/discoverFaves'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
@@ -289,6 +298,7 @@ import {
   listLibrarySketches,
   libraryRootPath,
   bakeAssetsDir,
+  shapeAssetsDir,
   isDefaultLibraryRoot,
   setLibraryRootPath,
   shouldWarnBeforeOverwrite,
@@ -436,6 +446,9 @@ let engineStartupDone = false
 // every keystroke) -- read from the before-quit handler to decide whether
 // Cmd+Q needs to ask before discarding real unsaved work.
 let rendererHasUnsavedChanges = false
+// An open EEEDIT draft with unpublished edits: the quit prompt's Save renders it onto the shelf
+// first, so it waits longer (saveBeforeQuitTimeoutMs).
+let rendererEeeditUnpublished = false
 
 // What main knows of the crash-recovery file: whether a save landed in this
 // window and whether an autosave was written since (recoveryFileTracker.ts).
@@ -714,7 +727,10 @@ function createWindow(): BrowserWindow {
     windowNotices.windowGone(win)
     // Its unsaved work goes with it: what survives is the recovery file, which
     // a later quit must neither ask about nor delete (beforeQuitPlan).
-    if (win === mainWindow) rendererHasUnsavedChanges = false
+    if (win === mainWindow) {
+      rendererHasUnsavedChanges = false
+      rendererEeeditUnpublished = false
+    }
   })
 
   win.webContents.setWindowOpenHandler((details) => {
@@ -1383,6 +1399,20 @@ app.whenReady().then(async () => {
   )
   registerReonedCopiesIpc(ipcMain)
 
+  ipcMain.handle('shape-materialize', (_event, request: ShapeMaterializeRequest) =>
+    materializeShape(request, shapeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
+  )
+  ipcMain.handle('shape-bake-process', (_event, request: ShapeBakeProcessRequest) =>
+    bakeShapeProcess(request, shapeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
+  )
+  ipcMain.handle('shape-cancel', (_event, jobId: string) => cancelShapeMaterialization(jobId))
+  ipcMain.handle('shape-cleanup-preview', (_event, paths: string[]) =>
+    cleanupShapePreview(paths, shapeAssetsDir())
+  )
+  ipcMain.handle('shape-cleanup-uncommitted', (_event, paths: string[]) =>
+    cleanupUncommittedShapeAssets(paths, shapeAssetsDir())
+  )
+
   ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     // "save a copy to a file…": the open project stays unsaved, so its recovery file stays.
@@ -1426,8 +1456,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('load-autosave-sketch', () => loadAutosaveSketchInfo())
 
-  ipcMain.handle('set-dirty-state', (_event, dirty: boolean) => {
+  ipcMain.handle('set-dirty-state', (_event, dirty: boolean, eeeditUnpublished = false) => {
     rendererHasUnsavedChanges = dirty
+    rendererEeeditUnpublished = dirty && eeeditUnpublished === true
   })
 
   ipcMain.handle('export-mix', (event, bytes: Uint8Array, defaultName?: string) => {
@@ -1648,6 +1679,14 @@ app.whenReady().then(async () => {
     playbackEngine?.sendLoadProject(project)
   })
 
+  // EEEDIT's preview loads: answered once the engine has published the project,
+  // optionally with the swap dip (playbackEngineLifecycle.ts).
+  ipcMain.handle(
+    'engine-load-project-acked',
+    (_event, project: unknown, options?: { fadeSwap?: boolean }) =>
+      playbackEngine?.sendLoadProjectAcked(project, options)
+  )
+
   // Radio's scheduled swap. The project rides NESTED inside the payload
   // rather than being the payload, because EngineClient matches replies by
   // message TYPE and not by request id -- the token is what pairs an ack
@@ -1681,13 +1720,13 @@ app.whenReady().then(async () => {
     }
   )
 
-  ipcMain.handle('engine-play', (_event, fromPos: number) => {
+  ipcMain.handle('engine-play', (_event, fromPos: number, fadeIn = false) => {
     // A new Play deliberately supersedes any halt still fading. Let a
     // subsequent stop create a fresh request rather than inheriting the
     // superseded handoff promise; the engine answers the old waiter
     // stopped=false.
     engineStopper.supersede()
-    playbackEngine?.client.send('play', { fromPos })
+    playbackEngine?.client.send('play', { fromPos, fadeIn })
   })
 
   ipcMain.handle('engine-stop', () => engineStopper.stop())
@@ -2891,7 +2930,8 @@ function requestSaveBeforeQuit(): Promise<SaveBeforeQuitResult> {
       }
       ipcMain.on('save-before-quit-complete', listener)
       return () => ipcMain.removeListener('save-before-quit-complete', listener)
-    }
+    },
+    saveBeforeQuitTimeoutMs(rendererEeeditUnpublished)
   )
 }
 
@@ -2942,7 +2982,9 @@ app.on('before-quit', (event) => {
       defaultId: 0,
       cancelId: 2,
       message: 'This project has unsaved changes.',
-      detail: 'Do you want to save before quitting?'
+      detail: rendererEeeditUnpublished
+        ? 'Do you want to save before quitting? The open EEEDIT riff will be added to the shelf.'
+        : 'Do you want to save before quitting?'
     })
     if (choice === 2) {
       // Cancel -- stay open; the next quit checks for plugin edits again.

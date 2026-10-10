@@ -233,23 +233,29 @@ so the timer stops once nothing is left to retry. A copy rebuilt under a new nam
 `REPAIR_REONED_PATHS` in the present and every undo and redo step (`history.ts`): it is the same
 audio, and no undo step is added. Unused copies are cleaned by the launch notice
 (`ReonedCopiesNotice.tsx`, from 200 MB, "not now" for 7 days) and the gear menu's "clean up
-re-oned stem copies…". Their IPC (rebuild, library check, survey, clean, not now) is in
-`src/main/reonedCopiesIpc.ts`, registered from `index.ts`.
+unused stem copies…". Their IPC (rebuild, library check, survey, clean, not now) is in
+`src/main/reonedCopiesIpc.ts`, registered from `index.ts`. The same survey and clean also remove
+EEEDIT's leftovers in `<library>/.shapes` (a crashed render's dot-named staging folder and preview
+cache files, each more than a day old; `surveyShapes`/`cleanShapes` in `reonedUsage.ts`). EEEDIT's
+renders themselves (`<uuid>.shape.wav` lanes, `<uuid>.shape-base.wav` bakes) are kept, never
+cleaned: they can't be rebuilt (a bake doesn't even record what made it), so even one no project
+names may still be needed. A copy named only by an EEEDIT recipe (`stem.shape.source`) is rebuilt
+on open like any other, but not reported missing: nothing plays it.
 
 "Used" means named by:
 - the autosave or its aside snapshot, read first (a recover deletes the autosave; it is written to
   a temporary and renamed over, so it is never read half-written);
 - any project file under the library root: the scan walks the whole tree (`reonedUsage.ts`), every
   `.sssketchproj` at any depth, dot-named and symlinked folders included (each real folder once),
-  and every file in any `.backups` folder. It skips only `.bakes`, `.samples-cache` and macOS's
+  and every file in any `.backups` folder. It skips only `.bakes`, `.shapes`, `.samples-cache` and macOS's
   volume folders (`.Trashes`, `.Spotlight-V100`, ...), and stops at a folder it can't list or a
   symlink whose target is away. `isInsideLibrary` (`projectFile.ts`) uses the walk's own rule
   (`isReadByLibraryWalk`), so a project the walk doesn't read is remembered instead;
 - a remembered outside project (`reonedCopiesStore.ts`, 50 kept). A store that can't be read is
   never written over; a corrupt one is moved aside to `reonedCopies.corrupt-<time>.json`, and the
   survey and the clean stop until that file is deleted;
-- the open project, its undo history, Cross, Discover and Discover's undo and redo
-  (`state/reonedInUse.ts`);
+- the open project, its undo history, Cross, Discover and Discover's undo and redo, and the open
+  EEEDIT draft with its undo and redo (`state/reonedInUse.ts`);
 - this session (`reonedCopiesSession.ts`, read again inside the `.bakes` lock at delete time):
   copies handed out, and copies named by any project text main handed to the renderer or wrote
   (open, library open, backup read or restore, autosave offer, save, autosave). That covers a
@@ -263,7 +269,8 @@ A copy is deleted only if it is unused and more than a day old (`reonedUsage.ts`
 - Anything new that can hold a stem path, such as a new session type or a new saved file, must
   join the used set.
 - A failed bake never deletes a copy it didn't create.
-- Never delete outside `.bakes`, and leave the legacy `.sssketch-bakes/` folders alone.
+- Never delete outside `.bakes` (and `.shapes`' leftovers, never its renders), and leave the legacy
+  `.sssketch-bakes/` folders alone.
 - `bakeOffset` and the scans are async and yield between stems and slices: the library is often
   on a USB drive.
 
@@ -293,6 +300,38 @@ plays a throwaway engine project under an engine-ownership token and restores th
 stop, Back or unmount. The draft is session-only and disposable (closing discards it), and nothing
 in Cross touches the project until "add to shelf" / "add to timeline". That includes its tempo
 control, which changes only `draft.targetBpm`.
+
+### EEEDIT (one-riff editor; "Shape" in the code)
+
+EEEDIT edits inside one riff: cut, move, copy, disable, repitch (Transpose, Detune, Formant), Rate
+with Smooth or Raw, Reverse, Rotate, and offline treatments ("interventions") baked into a clip.
+Opened from the Inspector with one riff selected, always available (deliberately not behind the
+advanced features switch: the owner's call). The draft is pure, in `src/shared/shape.ts` (fragments, transforms, undo and
+redo, the saved recipe `stem.shape`); `components/ShapePanel.tsx` is the UI. Like Cross, it never
+edits the project until "add to shelf" / "add to timeline" (its Cmd+S adds to the shelf); a save
+that leaves the project (quit, New, open) or the Save item while it is open first adds an
+unpublished draft to the shelf (`saveProjectBeforeLeavingNow` in `App.tsx`). Drafts are
+session-only: no crash recovery for them. Cmd+Z goes to EEEDIT's history through `useClaimUndo`.
+
+- **Rendering:** `src/main/shapeMaterialize.ts` renders through engine processes it spawns (at
+  most two at once, never `--link`) with `render-shape-stem`, `render-shape-raw-source` and
+  `render-shape-process-source` (`IpcServer.cpp`, `ShapeRender.cpp`), replying `*-result`.
+  Preview and commit use the same float-WAV path; a commit is all or nothing. Staging folders sit
+  beside their destination (a rename across volumes fails), and file work is async.
+- **`.shapes`:** `<library>/.shapes` holds committed lanes (`<uuid>.shape.wav`), intervention
+  bakes (`<uuid>.shape-base.wav`) and `.preview-cache` (1 GB, least recently used first). The
+  renders are kept, not cleaned, because they aren't rebuildable; the re-oned copies cleanup removes
+  only crashed render folders and old preview cache files (see above).
+- **Preview loads:** `load-project` is fire-and-forget for everyone else. EEEDIT's previews use
+  `engine-load-project-acked`: wrapped `{ token, project, fadeSwap }`, answered by
+  `project-load-result` once the engine has published the project. `fadeSwap` is the swap dip
+  (`Transport::requestSwapDip`): the output fades to silence over 3 ms, the load handler swaps under
+  it and the next block fades back in. Nothing else dips: radio's staged swaps and live edits
+  replace the project under full level. Separately, every Play from the app fades in over 3 ms
+  (`play`'s `fadeIn`, sent by StoreContext, Cross, Discover and EEEDIT), after holding silent for
+  the master stage's latency so the audio arrives at the start of the fade. A seek fades as before.
+  Discover's and radio's Solo halts and resumes from the position reported before the halt, so it
+  steps back up to the 15 ms halt plus one position update (about 33 ms): known, left as is.
 
 ### Metronome
 

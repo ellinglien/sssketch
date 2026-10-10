@@ -1586,7 +1586,11 @@ export function reducer(state: AppState, action: Action): AppState {
             path: result?.bakedPath ?? s.path,
             durationSec: result?.durationSec ?? s.durationSec,
             phaseSourcePath: result?.phaseSourcePath ?? s.phaseSourcePath,
-            phaseBars: result?.phaseBars ?? s.phaseBars
+            phaseBars: result?.phaseBars ?? s.phaseBars,
+            // Re-1 establishes a new immutable editing baseline. Retaining
+            // the old Shape recipe would reopen against pre-bake audio and
+            // could materialize a stale alignment over the newly baked file.
+            shape: undefined
           }
         })
         rifffs[groupId] = { ...rifff, stems }

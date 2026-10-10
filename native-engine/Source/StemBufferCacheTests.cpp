@@ -163,6 +163,35 @@ namespace sssketch
                 noExtFile.deleteFile();
             }
 
+            beginTest("prunes only unpinned Shape preview buffers");
+            {
+                auto previewFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                    .getChildFile("sssketch_cache_prune.shape-preview.wav");
+                juce::WavAudioFormat wavFormat;
+                std::unique_ptr<juce::FileOutputStream> out(previewFile.createOutputStream());
+                expect(out != nullptr);
+                std::unique_ptr<juce::AudioFormatWriter> writer(
+                    wavFormat.createWriterFor(out.get(), 44100.0, 1, 16, {}, 0));
+                expect(writer != nullptr);
+                out.release();
+                juce::AudioBuffer<float> source(1, 64);
+                source.clear();
+                writer->writeFromAudioSampleBuffer(source, 0, source.getNumSamples());
+                writer.reset();
+
+                StemBufferCache cache;
+                expect(cache.load(previewFile.getFullPathName()));
+                auto pinned = cache.getEntry(previewFile.getFullPathName()).owner;
+                cache.pruneUnusedShapePreviews();
+                expect(cache.get(previewFile.getFullPathName()) != nullptr);
+
+                pinned.reset();
+                cache.pruneUnusedShapePreviews();
+                expect(cache.get(previewFile.getFullPathName()) == nullptr);
+                expectEquals((int) cache.entryCount(), 0);
+                previewFile.deleteFile();
+            }
+
             tempFile.deleteFile();
         }
     };

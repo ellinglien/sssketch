@@ -64,3 +64,25 @@ describe('reoned-copies-clean', () => {
     expect(existsSync(copy)).toBe(true)
   })
 })
+
+describe('EEEDIT renders in .shapes', () => {
+  it('are never counted or cleaned; only an old preview cache file is', async () => {
+    const lib = join(dir, 'L')
+    const shapes = join(lib, '.shapes')
+    mkdirSync(join(shapes, '.preview-cache'), { recursive: true })
+    const render = 'ffffffff-bbbb-cccc-dddd-eeeeeeeeeeee.shape.wav'
+    const cached = join(shapes, '.preview-cache', 'abc.shape-preview.wav')
+    const old = (Date.now() - 3 * 24 * 60 * 60 * 1000) / 1000
+    writeFileSync(join(shapes, render), Buffer.alloc(100))
+    writeFileSync(cached, Buffer.alloc(40))
+    utimesSync(join(shapes, render), old, old)
+    utimesSync(cached, old, old)
+    rootReads.roots = [lib]
+    const survey = await handlers.get('reoned-copies-survey')!({}, { inMemoryNames: [] })
+    expect(survey).toMatchObject({ status: 'ok', unusedBytes: 40, unusedCount: 1 })
+    const result = await handlers.get('reoned-copies-clean')!({}, [])
+    expect(result).toMatchObject({ status: 'ok', freedBytes: 40, deletedCount: 1 })
+    expect(existsSync(join(shapes, render))).toBe(true)
+    expect(existsSync(cached)).toBe(false)
+  })
+})

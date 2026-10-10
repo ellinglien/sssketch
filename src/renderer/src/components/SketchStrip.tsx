@@ -9,8 +9,11 @@ import type { Rifff } from '@shared/types'
 import {
   sketchRiffClickAction,
   sketchRiffPlaybackHit,
+  sketchRemovalActions,
+  sketchRemovalTargets,
   toggleRiffBatchSelection
 } from './sketchRiffInteraction'
+import { riffCorrespondenceKey } from './riffCorrespondence'
 
 export const TILE_SIZE = 64
 export const TILE_GAP = 10
@@ -31,11 +34,15 @@ const BARS_DRAG_PX_PER_STEP = 20
 export function SketchStrip({
   selectedRiffIds,
   selectionAnchorId,
-  onSelectionChange
+  onSelectionChange,
+  hoveredRiffKey,
+  onRiffHover
 }: {
   selectedRiffIds: ReadonlySet<string>
   selectionAnchorId: string | null
   onSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
+  hoveredRiffKey: string | null
+  onRiffHover: (correspondenceKey: string | null) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -116,13 +123,18 @@ export function SketchStrip({
     return Math.max(0, Math.min(sequence.length, row * itemsPerRow + col))
   }
 
-  // Removes one or more tiles and re-packs whatever remains, in one
-  // SEQUENCE_RIFFFS dispatch regardless of how many were removed.
+  // Removes one or more tiles and re-packs whatever remains as ONE history
+  // action. The previous loop pushed one undo checkpoint per riff plus a
+  // final sequencing checkpoint, so an accidental multi-delete looked
+  // catastrophic and needed several Command-Z presses to restore.
   const removeTiles = useCallback(
-    (groupIds: ReadonlySet<string>) => {
-      const remaining = sequence.map((r) => r.groupId).filter((id) => !groupIds.has(id))
-      for (const groupId of groupIds) dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })
-      dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: remaining })
+    (groupIds: ReadonlySet<string>, shelfOnlyGroupIds: readonly string[] = []) => {
+      const actions = sketchRemovalActions(
+        sequence.map((rifff) => rifff.groupId),
+        groupIds,
+        shelfOnlyGroupIds
+      )
+      dispatch({ type: 'BATCH', actions })
     },
     [sequence, dispatch]
   )
@@ -132,17 +144,41 @@ export function SketchStrip({
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
-      const targets =
+      const targets = sketchRemovalTargets(
+        selectedRiffIds,
+        state.sel,
+        sequence.map((rifff) => rifff.groupId)
+      )
+      const selectedTargets =
         selectedRiffIds.size > 0
-          ? selectedRiffIds
-          : new Set(state.sel && sequence.some((r) => r.groupId === state.sel) ? [state.sel] : [])
-      if (targets.size === 0) return
-      removeTiles(targets)
+          ? [...selectedRiffIds].filter((id) => state.rifffs[id] !== undefined)
+          : state.sel && state.rifffs[state.sel]
+            ? [state.sel]
+            : []
+      const shelfOnlyTargets = selectedTargets.filter(
+        (id) => state.rifffs[id]?.startBar === undefined
+      )
+      const totalTargets = targets.size + shelfOnlyTargets.length
+      if (totalTargets === 0) return
+      if (
+        (totalTargets > 1 || shelfOnlyTargets.length > 0) &&
+        !window.confirm(
+          shelfOnlyTargets.length > 0
+            ? targets.size > 0
+              ? `remove ${targets.size} selected riff${targets.size === 1 ? '' : 's'} from sketch and delete ${shelfOnlyTargets.length} shelf-only riff${shelfOnlyTargets.length === 1 ? '' : 's'} from this project? you can undo this as one step.`
+              : `delete ${shelfOnlyTargets.length} selected shelf-only riff${shelfOnlyTargets.length === 1 ? '' : 's'} from this project? you can undo this.`
+            : `remove ${targets.size} selected riffs from sketch? they stay in the shelf.`
+        )
+      ) {
+        return
+      }
+      e.preventDefault()
+      removeTiles(targets, shelfOnlyTargets)
       updateSelection(new Set(), null)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state.sel, sequence, selectedRiffIds, removeTiles, updateSelection])
+  }, [state.sel, state.rifffs, sequence, selectedRiffIds, removeTiles, updateSelection])
 
   // Shift-click extends/shrinks a range from the shared selection anchor;
   // cmd/ctrl-click toggles just the clicked tile in/out of the batch — same
@@ -431,6 +467,8 @@ export function SketchStrip({
         const bars = effectiveBars(rifff)
         const isCurrent = playing && pos >= start && pos < start + bars
         const isSelected = selectedRiffIds.has(rifff.groupId)
+        const correspondenceKey = riffCorrespondenceKey(rifff)
+        const isCorresponding = hoveredRiffKey === correspondenceKey
         // 0..1 progress through this rifff's own play window — only
         // meaningful while isCurrent, but harmless to compute either way.
         const fraction = (pos - start) / bars
@@ -447,7 +485,10 @@ export function SketchStrip({
             key={rifff.groupId}
             className="ra-riff-tile ra-sketch-riff-tile"
             data-selected={isSelected}
+            data-corresponding={isCorresponding}
             draggable
+            onMouseEnter={() => onRiffHover(correspondenceKey)}
+            onMouseLeave={() => onRiffHover(null)}
             onDragStart={(e) => {
               nativeTileDragRef.current = true
               suppressNextSyntheticClick()

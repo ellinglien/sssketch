@@ -28,7 +28,8 @@ The sections that matter most:
 - **Faust DSPs**: the `.dsp` files are shared with the web radio and golden-tested bit-exact.
   Follow the regeneration steps exactly.
 - **One running app, the stop handshake, Disable/Mute/Solo, phase lineage and `.bakes`, Cross,
-  the metronome**: how each works and what it relies on. Read the matching section before
+  EEEDIT (its renders, `.shapes` and the engine's swap dip), the metronome**: how each works and
+  what it relies on. Read the matching section before
   touching any of them.
 
 ## 2. Design system (hard rules)
@@ -95,7 +96,8 @@ a merge.
 
 - **Who "me" is:** a typed name, else the Endlesss login, else nobody. Never a default username.
 - **The advanced-features switch** (`src/shared/features.ts`) gates plugins, recording, the
-  phone remote, sound defaults and hearts. New power features go behind it.
+  phone remote, sound defaults and hearts. New power features go behind it, unless Elling
+  decides otherwise (EEEDIT is deliberately always available).
 - **Plugin settings safety:** every save path goes through `serializeForSave()`. Plugin on/off
   goes through `src/shared/pluginSwitch.ts`.
 - **Crash recovery:** the autosave/recovery file is never disabled or deleted while work is
@@ -128,7 +130,9 @@ a merge.
   anything new that holds stem paths joins the used set (`reonedUsage.ts` /
   `state/reonedInUse.ts`, and `noteSessionProjectText` for any new way main hands a project to
   the renderer or writes one); `BAKER_VERSION` is bumped when the baker's output changes; and
-  cleanup deletes only unused copies more than a day old, never outside `.bakes`.
+  cleanup deletes only unused copies more than a day old, never outside `.bakes`. In `.shapes` it
+  removes only EEEDIT's leftovers (crashed render folders, old preview cache files): EEEDIT's
+  renders can't be rebuilt, so they are never cleaned.
 - **Re-oned copies:** a missing copy is rebuilt on open and before export without marking the
   project unsaved, and a failed bake never deletes a copy it didn't create.
 

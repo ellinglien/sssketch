@@ -54,8 +54,8 @@ namespace sssketch
         if (cache.find(key) != cache.end())
             return true;
 
-        Entry entry;
-        if (!decodeRawAudioFile(path, entry.buffer, entry.sampleRate))
+        auto entry = std::make_shared<SharedStemBuffer>();
+        if (!decodeRawAudioFile(path, entry->buffer, entry->sampleRate))
             return false;
         ++gStemDecodeCount; // TEMP (2026-09-28), see stemDecodeCount()
 
@@ -67,11 +67,11 @@ namespace sssketch
         // buffer's own length when no usable duration was given, or it
         // doesn't make sense (non-positive, or longer than what actually
         // got decoded).
-        int loopEndSample = entry.buffer.getNumSamples();
+        int loopEndSample = entry->buffer.getNumSamples();
         if (trueDurationSec > 0.0)
         {
-            const int candidate = (int) std::llround(trueDurationSec * entry.sampleRate);
-            if (candidate > 0 && candidate <= entry.buffer.getNumSamples())
+            const int candidate = (int) std::llround(trueDurationSec * entry->sampleRate);
+            if (candidate > 0 && candidate <= entry->buffer.getNumSamples())
                 loopEndSample = candidate;
         }
 
@@ -83,7 +83,10 @@ namespace sssketch
         // Uses applyLoopSewingBlend's own default window (matching
         // OUROVEON's fixed 128-sample tuning exactly — see its doc comment
         // for why a bigger, per-stem-adaptive window was tried and reverted).
-        applyLoopSewingBlend(entry.buffer, loopEndSample);
+        const bool alreadySewnByShape =
+            path.endsWithIgnoreCase(".shape.wav") || path.endsWithIgnoreCase(".shape-preview.wav");
+        if (!alreadySewnByShape)
+            applyLoopSewingBlend(entry->buffer, loopEndSample);
 
         cache.emplace(key, std::move(entry));
         return true;
@@ -92,13 +95,13 @@ namespace sssketch
     const juce::AudioBuffer<float>* StemBufferCache::get(const juce::String& path) const
     {
         auto it = cache.find(path.toStdString());
-        return it == cache.end() ? nullptr : &it->second.buffer;
+        return it == cache.end() ? nullptr : &it->second->buffer;
     }
 
     double StemBufferCache::sampleRateFor(const juce::String& path) const
     {
         auto it = cache.find(path.toStdString());
-        return it == cache.end() ? 44100.0 : it->second.sampleRate;
+        return it == cache.end() ? 44100.0 : it->second->sampleRate;
     }
 
     StemBufferEntry StemBufferCache::getEntry(const juce::String& path) const
@@ -106,6 +109,19 @@ namespace sssketch
         auto it = cache.find(path.toStdString());
         if (it == cache.end())
             return {};
-        return { &it->second.buffer, it->second.sampleRate };
+        return { &it->second->buffer, it->second->sampleRate, it->second };
+    }
+
+    void StemBufferCache::pruneUnusedShapePreviews()
+    {
+        for (auto it = cache.begin(); it != cache.end();)
+        {
+            const juce::String path(it->first);
+            const bool isPreview = path.endsWithIgnoreCase(".shape-preview.wav");
+            if (isPreview && it->second.use_count() == 1)
+                it = cache.erase(it);
+            else
+                ++it;
+        }
     }
 }

@@ -12,6 +12,7 @@ import { emptyLibraryNote } from '@shared/emptyLibraryNote'
 import { BracketToggle } from './BracketToggle'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { warmEngineBuffer } from '../audio/warmEngineBuffer'
+import { PreviewHaltBarrier } from '../state/useCrossPreview'
 import { getPeaks, peekPeaks } from '../audio/peakCache'
 import {
   assembleDiscoverRifff,
@@ -927,7 +928,8 @@ export function DiscoverPanel({
   setDiscoverConsented,
   seedBpm,
   seedPhase,
-  onCoachSlotsChange
+  onCoachSlotsChange,
+  onPublishedToShelf
 }: {
   currentSketch: ProjectRef
   /** Lifted up into LibraryBrowser.tsx (the parent, which does NOT unmount
@@ -1021,6 +1023,7 @@ export function DiscoverPanel({
    * "a step completes when a slot with those kinds resolves" can only be
    * answered from here. Must be referentially stable (useCallback). */
   onCoachSlotsChange?: (slots: CoachSlotSnapshot[]) => void
+  onPublishedToShelf: (groupId: string) => void
 }): React.JSX.Element {
   // Synchronously-current mirror of the `slots` prop -- same reason
   // previewingSlotIdsRef exists (see its own comment below): rerollAll is a
@@ -1056,6 +1059,14 @@ export function DiscoverPanel({
   // the loop right now" line is simple enough to restore immediately using
   // the real position the engine now already reports).
   const pos = usePos()
+  const positionRef = useRef(pos)
+  const playingRef = useRef(playing)
+  useEffect(() => {
+    positionRef.current = pos
+  }, [pos])
+  useEffect(() => {
+    playingRef.current = playing
+  }, [playing])
   const rifffsState = useAppSelector((s) => s.rifffs)
   // Real bug, live-reported 2026-09-17 ("two sections were playing at the
   // same time... i had extended the original loop for the 16 one"):
@@ -1603,11 +1614,13 @@ export function DiscoverPanel({
   // real async round trip to the native engine instead of a synchronous Web
   // Audio call.
   const previewSyncGenerationRef = useRef(0)
+  const previewHaltBarrierRef = useRef(new PreviewHaltBarrier())
   // The ownership token from the claim the LAST ordinary push made. A
   // staged swap does not claim -- a claim bumps the generation and would
   // invalidate an ordinary push that is mid-await -- so it asks this
   // instead: is the claim this panel already holds still the current one.
   const engineClaimTokenRef = useRef(-1)
+
   // How many ordinary pushes are between their first line and their
   // socket write. A staged swap must not overtake one: a load-project
   // makes the engine drop whatever is staged (IpcServer.cpp's
@@ -1818,6 +1831,7 @@ export function DiscoverPanel({
     // no-op when nothing is currently held, so calling it unconditionally
     // here covers every caller of this function uniformly.
     const releaseToken = releaseEngine()
+    previewHaltBarrierRef.current.cancelResume()
     if (!previewLoadedRef.current) return
     previewLoadedRef.current = false
     currentPreviewMappingRef.current = null
@@ -1843,7 +1857,13 @@ export function DiscoverPanel({
     // stops, instead of silently handing off to a different project's
     // audio.
     dispatch({ type: 'PAUSE' })
-    void flushEngineSyncNow(undefined, () => !stillOwnEngine(releaseToken))
+    void previewHaltBarrierRef.current
+      .reachSilence(() => window.rifffApi.engineStop(), false)
+      .then(() => flushEngineSyncNow(undefined, () => !stillOwnEngine(releaseToken)))
+      .catch((err) => {
+        if (stillOwnEngine(releaseToken))
+          console.error('DiscoverPanel: failed to reach silence before restore:', err)
+      })
   }, [dispatch, flushEngineSyncNow, releaseEngine, stillOwnEngine])
 
   useEffect(() => {
@@ -2133,7 +2153,11 @@ export function DiscoverPanel({
    * The bookkeeping lives out here, in this wrapper, because the body
    * below has a dozen early returns and every one of them has to leave
    * liveSyncInFlightRef where it found it. */
-  async function syncPreviewToEngine(ids: Set<string>, stage?: RadioStageRequest): Promise<void> {
+  async function syncPreviewToEngine(
+    ids: Set<string>,
+    stage?: RadioStageRequest,
+    smoothSwap = false
+  ): Promise<void> {
     const soloed = soloedSlotIdRef.current
     const effectiveIds = soloed === null ? ids : new Set([soloed])
     if (stage !== undefined) {
@@ -2160,7 +2184,7 @@ export function DiscoverPanel({
     cancelStagedSwap('load-project')
     liveSyncInFlightRef.current += 1
     try {
-      await buildAndPushPreview(effectiveIds, undefined)
+      await buildAndPushPreview(effectiveIds, undefined, smoothSwap)
     } finally {
       liveSyncInFlightRef.current -= 1
     }
@@ -2168,7 +2192,8 @@ export function DiscoverPanel({
 
   async function buildAndPushPreview(
     ids: Set<string>,
-    stage: RadioStageRequest | undefined
+    stage: RadioStageRequest | undefined,
+    smoothSwap = false
   ): Promise<void> {
     if (unmountedRef.current) return
     // A stage does not bump the generation: it is a second message under
@@ -2831,6 +2856,28 @@ export function DiscoverPanel({
       radioTraceMark('remote') // TEMP
       if (!stillOwnEngine(engineToken)) return
 
+      // Solo is an immediate audition change, not a radio change aimed at a
+      // musical boundary. Let Transport finish its short halt ramp before
+      // replacing the project snapshot, then resume from this same point
+      // below. Other rebuilds retain their existing uninterrupted timing.
+      const smoothResumeAt =
+        smoothSwap && previewLoadedRef.current && playingRef.current ? positionRef.current : null
+      if (smoothResumeAt !== null) {
+        await previewHaltBarrierRef.current.reachSilence(() => window.rifffApi.engineStop())
+        if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+        if (!stillOwnEngine(engineToken)) return
+      } else {
+        // A newer rebuild can supersede the Solo request that started this
+        // fade. It still has to wait for the shared halt before replacing
+        // the project, and later resume native playback explicitly.
+        const pendingHalt = previewHaltBarrierRef.current.pendingSilence()
+        if (pendingHalt) {
+          await pendingHalt
+          if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+          if (!stillOwnEngine(engineToken)) return
+        }
+      }
+
       radioTraceMarkPush() // TEMP -- numbers this push for the engine's own line
       await window.rifffApi.engineLoadProject(project)
       radioTraceMark('acked') // TEMP
@@ -2885,18 +2932,35 @@ export function DiscoverPanel({
         )
       }
 
+      if (previewHaltBarrierRef.current.consumeResume() && playingRef.current) {
+        void window.rifffApi.enginePlay(smoothResumeAt ?? positionRef.current, true)
+      }
+
       // Only on the empty-to-non-empty transition -- a later rebuild of an
       // already-loaded preview just keeps playing through it, matching every
       // other "audition something else" flow in this app (no auto-resume once
       // a preview stops).
       if (!previewLoadedRef.current) {
         previewLoadedRef.current = true
-        if (playing) dispatch({ type: 'PAUSE' })
-        void window.rifffApi.engineSetPosition(0)
-        dispatch({ type: 'PLAY' })
+        dispatch({ type: 'PLAY', nativeStart: { fromPos: 0, fadeIn: true } })
       }
     } catch (err) {
       console.error('DiscoverPanel: syncPreviewToEngine failed:', err)
+      // If this request had already halted a previously healthy preview,
+      // keep Redux/native transport truthful even though the replacement
+      // failed to build or load.
+      const requestStillCurrent =
+        !unmountedRef.current &&
+        previewSyncGenerationRef.current === myGeneration &&
+        stillOwnEngine(engineToken)
+      if (
+        requestStillCurrent &&
+        previewLoadedRef.current &&
+        playingRef.current &&
+        previewHaltBarrierRef.current.consumeResumeIf(requestStillCurrent)
+      ) {
+        void window.rifffApi.enginePlay(positionRef.current, true)
+      }
       // A failed build/send must not leave this claim dangling forever --
       // but UNLIKE useStemPreviewPlayback.ts's own equivalent fix, whether
       // it's safe to release here depends on `previewLoadedRef.current`:
@@ -2943,7 +3007,18 @@ export function DiscoverPanel({
     soloedSlotIdRef.current = next
     setSoloedSlotId(next)
     if (next !== null) radioRestReturnsByHand(id)
-    void syncPreviewToEngine(previewingSlotIdsRef.current)
+    void syncPreviewToEngine(previewingSlotIdsRef.current, undefined, true)
+  }
+
+  function togglePreviewPlayback(): void {
+    if (playing) {
+      dispatch({ type: 'PAUSE' })
+      return
+    }
+    dispatch({
+      type: 'PLAY',
+      nativeStart: { fromPos: positionRef.current, fadeIn: true }
+    })
   }
 
   // Called by each DiscoverSlotRow whenever its OWN resolved stem changes
@@ -13308,6 +13383,7 @@ export function DiscoverPanel({
       if (!assembly) return
       const { rifff, vol, mute } = assembly
       dispatch({ type: 'ADD_TO_SHELF', rifff, vol, mute })
+      onPublishedToShelf(rifff.groupId)
       setJustAddedToShelf(true)
       window.setTimeout(() => setJustAddedToShelf(false), 500)
     } finally {
@@ -13667,7 +13743,7 @@ export function DiscoverPanel({
         <RadioTopLine
           playing={playing}
           canPlay={effectivePreviewingSlotIds.size > 0}
-          onPlayToggle={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
+          onPlayToggle={togglePreviewPlayback}
           onStopRadio={() => {
             focusAfterSwitchRef.current = 'header'
             stopRadio()
@@ -13712,7 +13788,7 @@ export function DiscoverPanel({
                 track of what was toggled on. Moved to the front of the settings
                 row (was the actions row) -- direct request, 2026-09-17. */}
             <button
-              onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
+              onClick={togglePreviewPlayback}
               disabled={effectivePreviewingSlotIds.size === 0}
               data-tooltip={playing ? 'stop' : 'play'}
               aria-label={playing ? 'stop' : 'play'}

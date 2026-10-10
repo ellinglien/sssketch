@@ -1,6 +1,7 @@
 // The IPC surface of the re-oned copies cleanup (docs/superpowers/specs/
 // 2026-10-09-reoned-copies-cleanup-design.md): the open-time and retry rebuilds, the library
 // check behind the gear item, the survey behind the launch notice, the clean, and "not now".
+// The survey and the clean also cover EEEDIT's leftovers in `.shapes` (never its renders).
 // Wiring only; the rules live in reonedRebuild.ts, reonedUsage.ts and reonedCopiesStore.ts.
 // Registered from index.ts. Every handler with an unreachable library answers
 // "library-missing" (or false) before reading anything else.
@@ -10,10 +11,17 @@ import { app, type IpcMain } from 'electron'
 import type { ReonedRepairBatch, ReonedRepairOutcome } from '@shared/reonedRepair'
 import type { ReonedCleanResult, ReonedSurvey } from '@shared/reonedCleanup'
 import { rebuildReonedCopies } from './reonedRebuild'
-import { cleanBakes, collectUsedNames, surveyBakes, type UsedScan } from './reonedUsage'
+import {
+  cleanBakes,
+  cleanShapes,
+  collectUsedNames,
+  surveyBakes,
+  surveyShapes,
+  type UsedScan
+} from './reonedUsage'
 import { knownProjects, notNowUntil, setNotNow } from './reonedCopiesStore'
 import { sessionKeptNames } from './reonedCopiesSession'
-import { bakeAssetsDir, libraryRootPath } from './projectLibrary'
+import { bakeAssetsDir, libraryRootPath, shapeAssetsDir } from './projectLibrary'
 import { AUTOSAVE_FILENAME, AUTOSAVE_PREVIOUS_FILENAME } from './projectFile'
 
 async function libraryAvailable(root: string): Promise<boolean> {
@@ -94,12 +102,17 @@ export function registerReonedCopiesIpc(ipcMain: IpcMain): void {
       try {
         const scan = await scanUsed(root, stringArray(request?.inMemoryNames))
         if (!scan.ok) return { status: 'unreadable', path: scan.path }
-        const { unused, unusedBytes } = await surveyBakes(
-          bakeAssetsDir(root),
-          scan.used,
-          Date.now()
-        )
-        return { status: 'ok', unusedBytes, unusedCount: unused.length, notNowUntil: snoozedUntil }
+        const now = Date.now()
+        // EEEDIT's leftovers (.shapes staging folders and preview cache, never its renders) count
+        // with the re-oned copies: one notice, one clean.
+        const bakes = await surveyBakes(bakeAssetsDir(root), scan.used, now)
+        const shapes = await surveyShapes(shapeAssetsDir(root), now)
+        return {
+          status: 'ok',
+          unusedBytes: bakes.unusedBytes + shapes.unusedBytes,
+          unusedCount: bakes.unused.length + shapes.unused.length,
+          notNowUntil: snoozedUntil
+        }
       } catch (err) {
         console.error('reoned-copies-survey failed:', err)
         return { status: 'unreadable', path: bakeAssetsDir(root) }
@@ -119,7 +132,15 @@ export function registerReonedCopiesIpc(ipcMain: IpcMain): void {
       try {
         const scan = await scanUsed(root, stringArray(inMemoryNames))
         if (!scan.ok) return { status: 'unreadable', path: scan.path }
-        return { status: 'ok', ...(await cleanBakes(bakeAssetsDir(root), scan.used, Date.now())) }
+        const now = Date.now()
+        const bakes = await cleanBakes(bakeAssetsDir(root), scan.used, now)
+        const shapes = await cleanShapes(shapeAssetsDir(root), now)
+        return {
+          status: 'ok',
+          freedBytes: bakes.freedBytes + shapes.freedBytes,
+          deletedCount: bakes.deletedCount + shapes.deletedCount,
+          failedCount: bakes.failedCount + shapes.failedCount
+        }
       } catch (err) {
         console.error('reoned-copies-clean failed:', err)
         return { status: 'unreadable', path: bakeAssetsDir(root) }

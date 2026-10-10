@@ -51,6 +51,10 @@ export class EngineClient {
       socket.connect(port, '127.0.0.1', () => {
         socket.off('error', onError)
         socket.on('error', (err) => this.failAllWaiters(err))
+        socket.on('close', () => {
+          if (this.socket === socket) this.socket = null
+          this.failAllWaiters(new Error('engine connection closed'))
+        })
         socket.on('data', (chunk) => this.onData(chunk))
         this.socket = socket
         resolve()
@@ -59,6 +63,7 @@ export class EngineClient {
   }
 
   disconnect(): void {
+    this.failAllWaiters(new Error('engine client disconnected'))
     this.socket?.destroy()
     this.socket = null
   }

@@ -11,7 +11,14 @@ class ShutdownAbort extends Error {}
 
 export interface PlaybackEngineHandle {
   client: EngineClient
+  /** Fire-and-forget, as every caller but EEEDIT wants: Discover, radio and the
+   * arrangement keep their push timing. */
   sendLoadProject: (project: unknown) => void
+  /** Resolves only after the native engine has parsed and published this
+   * exact project, so the caller may release temporary source files (EEEDIT's
+   * preview renders). `fadeSwap` asks for the swap dip (Transport.h's
+   * requestSwapDip): fade out, replace under silence, fade back in. */
+  sendLoadProjectAcked: (project: unknown, options?: { fadeSwap?: boolean }) => Promise<void>
   /** Radio's scheduled swap: hands the engine a project NOW and asks it to
    * make it real at the next loop top -- or, with `atBars`, at that bar
    * of the current lap (IpcServer.cpp's stage-project handler). Deliberately a sibling of sendLoadProject rather than a flag
@@ -101,6 +108,10 @@ export async function startPlaybackEngine(
   let engineHandle: EngineHandle
   let client: EngineClient
   let lastProject: unknown = null
+  let loadToken = 0
+  // Bumped by every load and promoted stage: an acknowledged load answered after a newer one
+  // must not become the project a respawn resends (only the latest load wins).
+  let loadSequence = 0
   // Staged projects the engine has been handed but has not yet said it
   // applied, by token. Normally holds at most one -- the engine supersedes
   // an older stage with a newer one -- but it is a Map rather than a
@@ -185,12 +196,43 @@ export async function startPlaybackEngine(
       return client
     },
     sendLoadProject(project: unknown) {
+      loadSequence += 1
       lastProject = project
       // A load-project makes the engine drop whatever is staged
       // (resolveStagedBefore("load-project")), so nothing here can still
       // be waiting to become the live project.
       stagedProjects.clear()
       client.send('load-project', project)
+    },
+    async sendLoadProjectAcked(project: unknown, options?: { fadeSwap?: boolean }): Promise<void> {
+      // As sendLoadProject: the engine drops whatever is staged.
+      stagedProjects.clear()
+      const token = ++loadToken
+      const sequence = ++loadSequence
+      const result = await client.sendAndAwaitType(
+        'load-project',
+        { token, project, fadeSwap: options?.fadeSwap === true },
+        'project-load-result',
+        30000,
+        (payload) =>
+          typeof payload === 'object' &&
+          payload !== null &&
+          (payload as { token?: unknown }).token === token
+      )
+      if (
+        typeof result !== 'object' ||
+        result === null ||
+        (result as { success?: unknown }).success !== true
+      ) {
+        const error =
+          typeof result === 'object' && result !== null
+            ? (result as { error?: unknown }).error
+            : undefined
+        throw new Error(typeof error === 'string' ? error : 'native engine rejected project')
+      }
+      // Crash recovery must only resurrect a snapshot the native process
+      // confirmed it actually published, and only if no newer load came since.
+      if (sequence === loadSequence) lastProject = project
     },
     sendStageProject(token: number, project: unknown, atBars?: number) {
       stagedProjects.set(token, project)
@@ -208,6 +250,7 @@ export async function startPlaybackEngine(
     },
     promoteStagedProject(token: number) {
       if (!stagedProjects.has(token)) return
+      loadSequence += 1
       lastProject = stagedProjects.get(token)
       stagedProjects.clear()
     },

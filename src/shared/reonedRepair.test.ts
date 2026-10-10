@@ -185,3 +185,74 @@ describe('applyReonedRepair', () => {
     expect(out.missing).toEqual([])
   })
 })
+
+describe('EEEDIT provenance naming a re-oned copy', () => {
+  const SOURCE_COPY = '/lib/.bakes/fedcba9876543210fedcba9876543210.baked.wav'
+  function shaped(): Record<string, Rifff> {
+    return {
+      e: {
+        groupId: 'e',
+        name: 'edited',
+        bpm: 120,
+        barLength: 4,
+        folderPath: '',
+        stems: [
+          {
+            slot: 1,
+            author: '',
+            name: 'd',
+            type: 'drums',
+            path: '/lib/.shapes/6f1c2a9e-1b2c-4d5e-8f90-123456789abc.shape.wav',
+            durationSec: 8,
+            barLength: 4,
+            shape: {
+              version: 2,
+              loopBars: 4,
+              gain: 1,
+              fragments: [],
+              source: {
+                author: '',
+                name: 'd',
+                type: 'drums',
+                path: SOURCE_COPY,
+                durationSec: 8,
+                barLength: 4,
+                phaseSourcePath: '/src/d.wav',
+                phaseBars: 1
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+
+  it("plans a copy named only in a stem's EEEDIT source, so a reset can find it", () => {
+    const [batch] = planReonedRepair(shaped())
+    expect(batch.stems.map((s) => s.path)).toEqual([SOURCE_COPY])
+    expect(batch.stems[0].sourcePath).toBe('/src/d.wav')
+  })
+
+  it('not for an export: only what plays is rendered', () => {
+    const placed = shaped()
+    placed.e = { ...placed.e, startBar: 0 }
+    expect(planReonedRepair(placed, { placedOnly: true })).toEqual([])
+  })
+
+  it('repoints the EEEDIT source when its copy is rebuilt under a new name', () => {
+    const moved = '/lib/.bakes/00000000000000000000000000000001.baked.wav'
+    const { rifffs: next } = applyReonedRepair(shaped(), [
+      [{ path: SOURCE_COPY, status: 'rebuilt', bakedPath: moved, durationSec: 8 }]
+    ])
+    const stem = next.e.stems[0]
+    expect(stem.shape?.source.path).toBe(moved)
+    expect(stem.path).toBe(shaped().e.stems[0].path)
+  })
+
+  it('a missing copy only EEEDIT provenance names is not reported missing: nothing plays it', () => {
+    const { missing } = applyReonedRepair(shaped(), [
+      [{ path: SOURCE_COPY, status: 'missing', reason: 'unreachable' }]
+    ])
+    expect(missing).toEqual([])
+  })
+})

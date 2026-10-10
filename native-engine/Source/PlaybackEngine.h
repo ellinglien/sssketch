@@ -11,8 +11,10 @@
 #include "MasterStage.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <atomic>
+#include <functional>
 #include <map>
 #include <memory>
+#include <unordered_map>
 
 namespace sssketch
 {
@@ -39,8 +41,13 @@ namespace sssketch
          * attempt at fixing it (raw atomic<T*> + a detached thread deleting
          * the superseded snapshot, mirroring ChannelChainRegistry's own
          * pattern) turned out to still be unsafe under sustained load --
-         * see published's own doc comment for why shared_ptr replaced it. */
-        void setProject(const EngineProject& project);
+         * see published's own doc comment for why shared_ptr replaced it.
+         * `beforePublish`, when set, runs on this thread after the snapshot is
+         * built (every decode done) and just before it is published: the
+         * load-project handler's swap dip (Transport::requestSwapDip) waits
+         * for silence there, so the dip lasts milliseconds, not a decode. */
+        void setProject(const EngineProject& project,
+                        const std::function<void()>& beforePublish = nullptr);
 
         /** What applyStagedProject() actually did -- three outcomes, not two,
          * because "nothing was waiting" and "something was waiting but this
@@ -437,6 +444,12 @@ namespace sssketch
         struct ProjectSnapshot
         {
             EngineProject project;
+
+            // Pins every decoded stem used by this immutable snapshot. The
+            // cache may prune obsolete Shape preview paths on the message
+            // thread, but an in-flight audio block keeps its buffers alive
+            // through this snapshot and never looks in the mutable cache.
+            std::unordered_map<std::string, StemBufferHandle> stemBuffers;
 
             // Groups project.rifffs by channelId. Pointers into THIS
             // snapshot's OWN project.rifffs vector -- never the previous

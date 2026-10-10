@@ -21,6 +21,7 @@ import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './LoopOrOneShotPr
 import { importPathsWithChoice } from '../audio/importPathsWithChoice'
 import { pauseArrangementBeforeShelfPreview } from '../audio/shelfPreviewHandoff'
 import { toggleRiffBatchSelection } from './sketchRiffInteraction'
+import { riffCorrespondenceKey } from './riffCorrespondence'
 
 const TILE_SIZE = 42
 
@@ -31,7 +32,10 @@ export function Shelf({
   sketchSoundingId,
   selectedRiffIds,
   selectionAnchorId,
-  onSelectionChange
+  onSelectionChange,
+  onBeforePreview,
+  hoveredRiffKey,
+  onRiffHover
 }: {
   onImported: (groupId: string) => void
   /** Opens the riff library on the half the pressed button names -- the two
@@ -63,6 +67,13 @@ export function Shelf({
   selectedRiffIds: ReadonlySet<string>
   selectionAnchorId: string | null
   onSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
+  /** Synchronous ownership handoff for fullscreen native-engine previews. */
+  onBeforePreview?: () => void
+  /** Separate from selection: hovering either surface lights every exact
+   * copy of the same riff on Shelf and in Sketch without collapsing the
+   * user's Cross/batch working set. */
+  hoveredRiffKey: string | null
+  onRiffHover: (correspondenceKey: string | null) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -134,6 +145,11 @@ export function Shelf({
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      // SketchStrip owns the entire shared selection while Sketch is open,
+      // including any mixed placed + shelf-only batch. Two independent
+      // window listeners here would let Shelf mutate before Sketch's
+      // confirmation and split one gesture across two undo frames.
+      if (state.mode === 'sketch') return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       const targetIds =
@@ -145,7 +161,7 @@ export function Shelf({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedRiffIds, state.sel, state.rifffs, dispatch, updateSelection])
+  }, [selectedRiffIds, state.mode, state.sel, state.rifffs, dispatch, updateSelection])
 
   // Shift-click extends/shrinks a range from the shared selection anchor;
   // cmd/ctrl-click toggles just the clicked tile in/out of the batch,
@@ -181,6 +197,7 @@ export function Shelf({
     }
     updateSelection(new Set([rifff.groupId]), rifff.groupId)
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
+    onBeforePreview?.()
     stopTilePreview()
     if (previewingGroupId === rifff.groupId) {
       return
@@ -348,7 +365,10 @@ export function Shelf({
           )}
         </div>
         <div
-          onMouseLeave={() => setHoverId(null)}
+          onMouseLeave={() => {
+            setHoverId(null)
+            onRiffHover(null)
+          }}
           style={{
             display: 'flex',
             flexWrap: 'wrap',
@@ -366,6 +386,8 @@ export function Shelf({
         >
           {library.map((rifff) => {
             const selected = selectedRiffIds.has(rifff.groupId)
+            const correspondenceKey = riffCorrespondenceKey(rifff)
+            const corresponding = hoveredRiffKey === correspondenceKey
             const hovered = hoverId === rifff.groupId
             const previewing = previewingGroupId === rifff.groupId
             // What you hear: this tile's own preview, or Sketch playing it
@@ -387,6 +409,9 @@ export function Shelf({
                 className="ra-riff-tile ra-shelf-riff-tile"
                 data-selected={selected}
                 data-previewing={previewing}
+                data-corresponding={corresponding}
+                data-placed={placed}
+                data-lit={lit}
                 data-sounding={sounding}
                 draggable
                 onDragStart={(e) => {
@@ -416,7 +441,14 @@ export function Shelf({
                   stopTilePreview()
                   setPreviewingGroupId(null)
                 }}
-                onMouseEnter={() => setHoverId(rifff.groupId)}
+                onMouseEnter={() => {
+                  setHoverId(rifff.groupId)
+                  onRiffHover(correspondenceKey)
+                }}
+                onMouseLeave={() => {
+                  setHoverId(null)
+                  onRiffHover(null)
+                }}
                 onClick={(e) => handleTileClick(e, rifff)}
                 aria-pressed={selected}
                 onContextMenu={(e) => {
@@ -446,8 +478,7 @@ export function Shelf({
                   // audio information, so colour is allowed, but not a glow.
                   border: `1px solid ${sounding ? 'var(--ra-playhead)' : 'transparent'}`,
                   cursor: 'grab',
-                  opacity: lit ? 1 : placed ? 0.4 : 0.72,
-                  transition: 'opacity 80ms ease'
+                  opacity: 1
                 }}
               >
                 <PolarGlyph

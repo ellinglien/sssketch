@@ -21,6 +21,7 @@
 export type EngineOwner =
   | 'discover-preview'
   | 'cross-preview'
+  | 'shape-preview'
   | 'stem-solo-preview'
   | 'coach-section-preview'
   | 'tidy-up-library-preview'

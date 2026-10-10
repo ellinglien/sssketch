@@ -19,14 +19,17 @@ vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
 
 import {
   cleanBakes,
+  cleanShapes,
   collectUsedNames,
   isReadByLibraryWalk,
   surveyBakes,
+  surveyShapes,
   type UsedNameSources
 } from './reonedUsage'
 import { bakeOffset } from './bakeOffset'
 import { resolveRecipe } from './reonedRecipe'
 import { sessionIssuedNames } from './reonedCopiesSession'
+import { pinShapeCachePaths } from './shapeCachePins'
 
 const DAY = 24 * 60 * 60 * 1000
 const name = (n: number): string => `${String(n).padStart(32, '0')}.baked.wav`
@@ -329,5 +332,78 @@ describe('surveyBakes and cleanBakes', () => {
     await clean
     expect(existsSync(made.bakedPath)).toBe(true)
     expect(readdirSync(bakes)).toContain(basename(made.bakedPath))
+  })
+})
+
+describe('surveyShapes and cleanShapes: EEEDIT leftovers only, never a render', () => {
+  const lane = (n: number): string =>
+    `${String(n).padStart(8, '0')}-aaaa-bbbb-cccc-dddddddddddd.shape.wav`
+  const base = (n: number): string =>
+    `${String(n).padStart(8, '0')}-aaaa-bbbb-cccc-dddddddddddd.shape-base.wav`
+  let shapes: string
+  function file(path: string, ageMs = 2 * DAY, bytes = 1000): void {
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, Buffer.alloc(bytes))
+    age(path, ageMs)
+  }
+  beforeEach(() => {
+    shapes = join(root, '.shapes')
+    file(join(shapes, lane(1)))
+    file(join(shapes, base(2)))
+    file(join(shapes, 'notes.txt'))
+    file(join(shapes, '.preview-cache', 'old.shape-preview.wav'), 2 * DAY, 400)
+    file(join(shapes, '.preview-cache', 'fresh.shape-preview.wav'), 0, 50)
+    file(join(shapes, '.job-1-uuid', '1.rendering.wav'), 2 * DAY, 300)
+    age(join(shapes, '.job-1-uuid'), 2 * DAY)
+    file(join(shapes, '.preview-cache', '.job-2-uuid', '1.rendering.wav'), 2 * DAY, 200)
+    age(join(shapes, '.preview-cache', '.job-2-uuid'), 2 * DAY)
+    file(join(shapes, '.job-3-uuid', '1.rendering.wav'), 0, 100)
+  })
+
+  it('counts and cleans stale render folders and old preview cache files, more than a day old', async () => {
+    const survey = await surveyShapes(shapes, now)
+    expect(survey.unusedBytes).toBe(400 + 300 + 200)
+    expect(survey.unused).toHaveLength(3)
+    const result = await cleanShapes(shapes, now)
+    expect(result).toEqual({ freedBytes: 900, deletedCount: 3, failedCount: 0 })
+    expect(readdirSync(shapes).sort()).toEqual(
+      ['.job-3-uuid', '.preview-cache', lane(1), base(2), 'notes.txt'].sort()
+    )
+    expect(readdirSync(join(shapes, '.preview-cache'))).toEqual(['fresh.shape-preview.wav'])
+  })
+
+  it('never counts or deletes a committed render or bake: they cannot be rebuilt', async () => {
+    const survey = await surveyShapes(shapes, now)
+    expect(survey.unused.map((e) => e.path)).not.toContain(lane(1))
+    expect(survey.unused.map((e) => e.path)).not.toContain(base(2))
+    await cleanShapes(shapes, now)
+    expect(existsSync(join(shapes, lane(1)))).toBe(true)
+    expect(existsSync(join(shapes, base(2)))).toBe(true)
+  })
+
+  it('leaves a preview cache file a running render has pinned, until it lets go', async () => {
+    const old = join(shapes, '.preview-cache', 'old.shape-preview.wav')
+    const release = pinShapeCachePaths([old])
+    const survey = await surveyShapes(shapes, now)
+    expect(survey.unused.map((e) => e.path)).not.toContain(
+      join('.preview-cache', 'old.shape-preview.wav')
+    )
+    await cleanShapes(shapes, now)
+    expect(existsSync(old)).toBe(true)
+    release()
+    await cleanShapes(shapes, now)
+    expect(existsSync(old)).toBe(false)
+  })
+
+  it('no .shapes folder at all: nothing unused, nothing cleaned', async () => {
+    rmSync(shapes, { recursive: true })
+    expect(await surveyShapes(shapes, now)).toEqual({ unused: [], unusedBytes: 0 })
+  })
+
+  it('the library walk never reads inside .shapes', async () => {
+    project(join(shapes, 'stray.sssketchproj'), 1)
+    const scan = await collectUsedNames(sources())
+    expect(scan.ok && sorted(scan.used)).toEqual([])
+    expect(isReadByLibraryWalk(join(shapes, 'stray.sssketchproj'), root)).toBe(false)
   })
 })

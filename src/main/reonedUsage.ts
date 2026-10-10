@@ -4,11 +4,12 @@
 // blocks (AGENTS.md section 6). No electron and no better-sqlite3: reonedCopiesIpc.ts passes
 // every root in, and this module's test stays off vitest.config.ts's CI exclude list.
 import type { Dirent } from 'node:fs'
-import { readdir, readFile, realpath, stat, unlink } from 'node:fs/promises'
+import { readdir, readFile, realpath, rm, stat, unlink } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { CLEANUP_GRACE_MS } from '@shared/reonedCleanup'
 import { isReonedCopyFileName, isStaleTempFileName, reonedNamesInText } from '@shared/reonedNames'
 import { sessionKeptNames, withReonedCopiesLock } from './reonedCopiesSession'
+import { isShapeCachePathPinned } from './shapeCachePins'
 import type { KnownProject } from './reonedCopiesStore'
 
 const SLICE_CHARS = 1_000_000
@@ -48,11 +49,13 @@ async function scanText(
 }
 
 /** Folders the walk never enters. The app's own caches hold audio, never a project:
- * `.bakes` (re-oned copies) and `.samples-cache` (export samples, projectLibrary.ts). The rest are
+ * `.bakes` (re-oned copies), `.shapes` (EEEDIT renders) and `.samples-cache` (export samples,
+ * projectLibrary.ts). The rest are
  * macOS's own bookkeeping at a volume's root, which can't be listed and would stop every pass for
  * a library kept at the top of a drive. */
 const SKIPPED_FOLDERS = new Set([
   '.bakes',
+  '.shapes',
   '.samples-cache',
   '.Trashes',
   '.Spotlight-V100',
@@ -231,6 +234,107 @@ export function cleanBakes(
       try {
         await unlink(join(bakesDir, file.name))
         freedBytes += file.size
+        deletedCount++
+      } catch (err) {
+        if (!isNotFound(err)) failedCount++
+      }
+      await yieldToEventLoop()
+    }
+    return { freedBytes, deletedCount, failedCount }
+  })
+}
+
+/** What can go from `.shapes` (EEEDIT, projectLibrary.ts's shapeAssetsDir): only leftovers that
+ * nothing can need, each more than a day old. A crashed render's staging folder (a dot-named folder
+ * in `.shapes` or its `.preview-cache`), and a preview cache file (any render there is rebuilt on
+ * demand). Never a committed lane render (`.shape.wav`) or intervention bake (`.shape-base.wav`):
+ * unlike a re-oned copy, those can't be rebuilt, so they are kept whether or not a project still
+ * names them. `path` is relative to `.shapes`. Anything else in the folder is left alone. */
+export interface ShapesEntry {
+  path: string
+  size: number
+  mtimeMs: number
+  folder: boolean
+}
+
+const PREVIEW_CACHE = '.preview-cache'
+
+async function folderBytes(path: string): Promise<number> {
+  let total = 0
+  for (const name of await readdir(path)) {
+    try {
+      const info = await stat(join(path, name))
+      if (info.isFile()) total += info.size
+    } catch {
+      // gone meanwhile
+    }
+  }
+  return total
+}
+
+export async function surveyShapes(
+  shapesDir: string,
+  now: number
+): Promise<{ unused: ShapesEntry[]; unusedBytes: number }> {
+  const unused: ShapesEntry[] = []
+  const look = async (relFolder: string): Promise<void> => {
+    let entries: Dirent[]
+    try {
+      entries = await readdir(join(shapesDir, relFolder), { withFileTypes: true })
+    } catch (err) {
+      if (isNotFound(err)) return
+      throw err
+    }
+    for (const entry of entries) {
+      const rel = relFolder === '' ? entry.name : join(relFolder, entry.name)
+      const staging =
+        entry.isDirectory() && entry.name.startsWith('.') && entry.name !== PREVIEW_CACHE
+      // A cache file a running render has pinned (shapeCachePins.ts) is in use, however old.
+      const cached =
+        relFolder === PREVIEW_CACHE &&
+        entry.isFile() &&
+        !isShapeCachePathPinned(join(shapesDir, rel))
+      if (!staging && !cached) continue
+      try {
+        const path = join(shapesDir, rel)
+        const info = await stat(path)
+        if (now - info.mtimeMs < CLEANUP_GRACE_MS) continue
+        unused.push({
+          path: rel,
+          size: staging ? await folderBytes(path) : info.size,
+          mtimeMs: info.mtimeMs,
+          folder: staging
+        })
+      } catch {
+        // gone meanwhile
+      }
+    }
+  }
+  await look('')
+  await look(PREVIEW_CACHE)
+  return { unused, unusedBytes: unused.reduce((sum, f) => sum + f.size, 0) }
+}
+
+/** Deletes surveyShapes' leftovers, under the `.bakes` lock (renders publish outside it, but a
+ * file a running render touches is younger than the grace day), surveying again inside it so age
+ * is checked right before each delete. Never deletes outside `.shapes`, and never a render. */
+export function cleanShapes(
+  shapesDir: string,
+  now: number
+): Promise<{ freedBytes: number; deletedCount: number; failedCount: number }> {
+  return withReonedCopiesLock(async () => {
+    const { unused } = await surveyShapes(shapesDir, now)
+    let freedBytes = 0
+    let deletedCount = 0
+    let failedCount = 0
+    for (const entry of unused) {
+      const path = join(shapesDir, entry.path)
+      // Checked again right before the delete: a render may have pinned it since the survey.
+      if (!entry.folder && isShapeCachePathPinned(path)) continue
+      try {
+        if (entry.folder) await rm(path, { recursive: true, force: true })
+        else await unlink(path)
+        freedBytes += entry.size
         deletedCount++
       } catch (err) {
         if (!isNotFound(err)) failedCount++
