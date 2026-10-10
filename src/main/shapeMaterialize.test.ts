@@ -112,7 +112,10 @@ import {
   cancelShapeMaterialization,
   cleanupShapePreview,
   cleanupUncommittedShapeAssets,
+  createSpawnLimiter,
   materializeShape,
+  safeJobName,
+  shapeJobStateSizeForTest,
   nativeShapeProcessPayload,
   shapeProcessSourceCacheKey,
   shapeRawSourceCacheKey
@@ -162,7 +165,7 @@ describe('materializeShape', () => {
     expect(result.stems).toHaveLength(2)
     expect(result.stems.every((stem) => stem.path.endsWith('.shape.wav'))).toBe(true)
     expect(readdirSync(durableRoot).filter((name) => name.endsWith('.shape.wav'))).toHaveLength(2)
-    cleanupUncommittedShapeAssets(
+    await cleanupUncommittedShapeAssets(
       result.stems.map((stem) => stem.path),
       durableRoot
     )
@@ -211,13 +214,40 @@ describe('materializeShape', () => {
     for (const output of outputs) expect(dirname(dirname(output))).toBe(durableRoot)
   })
 
-  it('cleans a preview staging folder but never the preview cache or its renders', () => {
+  it('keeps a job id from steering where a render is staged', async () => {
+    expect(safeJobName('../../etc/x:1/commit')).toBe('______etc_x_1_commit')
+    const hostile = { ...request('preview'), jobId: '../../outside' }
+    await materializeShape(hostile, durableRoot)
+    for (const payload of sentPayloads) {
+      const output = (payload as { outputPath: string }).outputPath
+      expect(dirname(dirname(output))).toBe(join(durableRoot, '.preview-cache'))
+    }
+  })
+
+  it('never recreates a custom library root that is away (an unplugged drive)', async () => {
+    const away = join(durableRoot, 'unplugged-library', '.shapes')
+    await expect(
+      materializeShape(request('commit'), away, { mayCreateRoot: false })
+    ).rejects.toThrow(/isn't reachable/)
+    expect(existsSync(join(durableRoot, 'unplugged-library'))).toBe(false)
+    expect(renderCount).toBe(0)
+  })
+
+  it('forgets a cancelled id once nothing runs under it', async () => {
+    const before = shapeJobStateSizeForTest()
+    cancelShapeMaterialization('never-started')
+    expect(shapeJobStateSizeForTest()).toBe(before)
+    await materializeShape(request('preview'), durableRoot)
+    expect(shapeJobStateSizeForTest()).toBe(before)
+  })
+
+  it('cleans a preview staging folder but never the preview cache or its renders', async () => {
     const cache = join(durableRoot, '.preview-cache')
     const staging = join(cache, '.job-preview-1')
     mkdirSync(staging, { recursive: true })
     writeFloatWav(join(staging, '1.rendering.wav'))
     writeFloatWav(join(cache, 'kept.shape-preview.wav'))
-    cleanupShapePreview([
+    await cleanupShapePreview([
       join(cache, 'kept.shape-preview.wav'),
       join(cache, 'missing.shape-preview.wav'),
       join(staging, '1.rendering.wav'),
@@ -519,7 +549,7 @@ describe('materializeShape', () => {
       }
     })
     expect(existsSync(result.bases[0].source.path)).toBe(true)
-    cleanupUncommittedShapeAssets([result.bases[0].source.path], durableRoot)
+    await cleanupUncommittedShapeAssets([result.bases[0].source.path], durableRoot)
     expect(existsSync(result.bases[0].source.path)).toBe(false)
   })
 
@@ -819,5 +849,33 @@ describe('materializeShape', () => {
         mix: 0.85
       }
     ])
+  })
+})
+
+describe('render engine limit', () => {
+  it('runs at most the limit at once and hands slots on in order', async () => {
+    const limiter = createSpawnLimiter(2)
+    const order: number[] = []
+    const releases = await Promise.all([limiter.acquire(), limiter.acquire()])
+    expect(limiter.active()).toBe(2)
+    const third = limiter.acquire().then((release) => {
+      order.push(3)
+      return release
+    })
+    const fourth = limiter.acquire().then((release) => {
+      order.push(4)
+      return release
+    })
+    await Promise.resolve()
+    expect(order).toEqual([])
+    releases[0]()
+    releases[0]() // a second release of the same slot does nothing
+    const releaseThird = await third
+    expect(order).toEqual([3])
+    expect(limiter.active()).toBe(2)
+    releases[1]()
+    ;(await fourth)()
+    releaseThird()
+    expect(limiter.active()).toBe(0)
   })
 })

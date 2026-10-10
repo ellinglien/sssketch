@@ -1,14 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  unlinkSync,
-  utimesSync
-} from 'node:fs'
+import { mkdir, open, readdir, rename, rm, stat, unlink, utimes } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { stretchRatioForStem, STRETCH_RATIO_EPSILON } from '@shared/stretchRatio'
@@ -40,6 +30,8 @@ const materializeAbortControllers = new Map<string, AbortController>()
 interface MaterializeNativeSession {
   engine: Awaited<ReturnType<typeof spawnEngine>> | null
   client: EngineClient | null
+  /** Frees this session's render-engine slot (renderEngines). */
+  release?: () => void
 }
 const materializeNativeSessions = new Map<string, MaterializeNativeSession>()
 const previewRoots = new Map<string, string>()
@@ -56,12 +48,74 @@ function inside(root: string, candidate: string): boolean {
   return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${sep}`)
 }
 
-function removePath(path: string): void {
+// Every file operation here is async: the library is often on a slow USB drive, and the main
+// thread must never block on it (AGENTS.md section 6).
+async function removePath(path: string): Promise<void> {
   try {
-    if (existsSync(path)) rmSync(path, { recursive: true, force: true })
+    await rm(path, { recursive: true, force: true })
   } catch (error) {
     console.error(`shapeMaterialize: failed to remove "${path}":`, error)
   }
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** A job id names a staging folder: only file-name-safe characters, bounded. */
+export function safeJobName(jobId: string): string {
+  return jobId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 96)
+}
+
+/** At most this many render engines at once (each is a whole engine process). */
+export const MAX_SHAPE_RENDER_ENGINES = 2
+
+/** A small FIFO semaphore: acquire() resolves with a release function once a slot is free. */
+export function createSpawnLimiter(max: number): {
+  acquire: () => Promise<() => void>
+  active: () => number
+} {
+  let active = 0
+  const waiting: (() => void)[] = []
+  const release = (): void => {
+    const next = waiting.shift()
+    if (next) next()
+    else active -= 1
+  }
+  return {
+    acquire: () =>
+      new Promise((resolve) => {
+        let released = false
+        const grant = (): void =>
+          resolve(() => {
+            if (released) return
+            released = true
+            release()
+          })
+        if (active < max) {
+          active += 1
+          grant()
+        } else {
+          waiting.push(grant)
+        }
+      }),
+    active: () => active
+  }
+}
+
+const renderEngines = createSpawnLimiter(MAX_SHAPE_RENDER_ENGINES)
+
+/** A custom library root that is away (an unplugged drive) must not be recreated as a stray
+ * folder on the system disk: only the default root may be created (bakeOffset's mayCreateRoot). */
+async function assertLibraryReachable(durableRoot: string, mayCreateRoot: boolean): Promise<void> {
+  if (mayCreateRoot) return
+  if (!(await exists(dirname(durableRoot))))
+    throw new Error("the project library folder isn't reachable. plug its drive back in.")
 }
 
 function throwIfCancelled(jobId: string): void {
@@ -73,6 +127,8 @@ function stopNativeSession(session: MaterializeNativeSession): void {
   session.client = null
   session.engine?.stop()
   session.engine = null
+  session.release?.()
+  session.release = undefined
 }
 
 export function shapeLanePreviewCacheKey(
@@ -289,35 +345,85 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
   }
 }
 
-function shapePreviewCacheDir(durableRoot: string): string {
+async function shapePreviewCacheDir(durableRoot: string): Promise<string> {
   const path = join(durableRoot, '.preview-cache')
-  mkdirSync(path, { recursive: true })
+  await mkdir(path, { recursive: true })
   return path
 }
 
-function touchCacheEntry(path: string): void {
+async function touchCacheEntry(path: string): Promise<void> {
   const now = new Date()
-  utimesSync(path, now, now)
-}
-
-function enforceShapePreviewCacheLimit(dir: string): void {
-  const entries = readdirSync(dir)
-    .map((name) => {
-      const path = join(dir, name)
-      const stat = statSync(path)
-      return { path, size: stat.size, mtimeMs: stat.mtimeMs, file: stat.isFile() }
-    })
-    .filter((entry) => entry.file)
-  for (const path of pathsToEvict(entries, MAX_SHAPE_PREVIEW_CACHE_BYTES)) {
-    unlinkSync(path)
-    previewMetadata.delete(path)
+  try {
+    await utimes(path, now, now)
+  } catch {
+    // A concurrent eviction only turns this hit into a future miss.
   }
 }
 
-function inspectShapeWav(path: string, loopBars: number, targetBpm: number): ShapeMaterializedStem {
-  if (!existsSync(path) || statSync(path).size === 0)
-    throw new Error('an EEEDIT render is missing.')
-  const wav = findWavChunks(new Uint8Array(readFileSync(path)))
+async function enforceShapePreviewCacheLimit(dir: string): Promise<void> {
+  try {
+    const entries: { path: string; size: number; mtimeMs: number }[] = []
+    for (const name of await readdir(dir)) {
+      const path = join(dir, name)
+      try {
+        const info = await stat(path)
+        if (info.isFile()) entries.push({ path, size: info.size, mtimeMs: info.mtimeMs })
+      } catch {
+        // gone meanwhile
+      }
+    }
+    for (const path of pathsToEvict(entries, MAX_SHAPE_PREVIEW_CACHE_BYTES)) {
+      previewMetadata.delete(path)
+      try {
+        await unlink(path)
+      } catch {
+        // gone meanwhile
+      }
+    }
+  } catch (error) {
+    console.error('shapeMaterialize: preview cache eviction failed:', error)
+  }
+}
+
+/** A WAV's format and data size from its header (the first 64 KB) and its size on disk, so a
+ * cache hit never reads a whole float file on the main thread. */
+async function readWavHeader(
+  path: string,
+  missing: string
+): Promise<{
+  audioFormat: number
+  bitsPerSample: number
+  sampleRate: number
+  numChannels: number
+  dataSize: number
+}> {
+  let handle: Awaited<ReturnType<typeof open>>
+  try {
+    handle = await open(path, 'r')
+  } catch {
+    throw new Error(missing)
+  }
+  try {
+    const size = (await handle.stat()).size
+    if (size === 0) throw new Error(missing)
+    const head = Buffer.alloc(Math.min(size, 64 * 1024))
+    await handle.read(head, 0, head.length, 0)
+    const wav = findWavChunks(new Uint8Array(head.buffer, head.byteOffset, head.length))
+    if (wav.dataOffset < 8) return { ...wav, dataSize: 0 }
+    // The header read is clamped to 64 KB: take the data size it declares, bounded by the file.
+    const declared = head.readUInt32LE(wav.dataOffset - 4)
+    return { ...wav, dataSize: Math.min(declared, Math.max(0, size - wav.dataOffset)) }
+  } finally {
+    await handle.close()
+  }
+}
+
+async function inspectShapeWav(
+  path: string,
+  loopBars: number,
+  targetBpm: number
+): Promise<ShapeMaterializedStem> {
+  const wav = await readWavHeader(path, 'an EEEDIT render is missing.')
   const bytesPerFrame = wav.numChannels * (wav.bitsPerSample / 8)
   const frames = bytesPerFrame > 0 ? wav.dataSize / bytesPerFrame : 0
   const expectedFrames = Math.ceil(loopBars * (240 / targetBpm) * wav.sampleRate)
@@ -340,10 +446,8 @@ function inspectShapeWav(path: string, loopBars: number, targetBpm: number): Sha
   }
 }
 
-function inspectShapeSourceWav(path: string): ShapeMaterializedStem {
-  if (!existsSync(path) || statSync(path).size === 0)
-    throw new Error('an EEEDIT source render is missing.')
-  const wav = findWavChunks(new Uint8Array(readFileSync(path)))
+async function inspectShapeSourceWav(path: string): Promise<ShapeMaterializedStem> {
+  const wav = await readWavHeader(path, 'an EEEDIT source render is missing.')
   const bytesPerFrame = wav.numChannels * (wav.bitsPerSample / 8)
   const frames = bytesPerFrame > 0 ? wav.dataSize / bytesPerFrame : 0
   if (
@@ -366,8 +470,10 @@ function inspectShapeSourceWav(path: string): ShapeMaterializedStem {
 }
 
 export function cancelShapeMaterialization(jobId: string): void {
-  cancelledJobs.add(jobId)
   const activeController = materializeAbortControllers.get(jobId)
+  // Only a running job can be cancelled; remembering any other id would leak it (a job clears
+  // its own id when it ends).
+  if (activeController) cancelledJobs.add(jobId)
   activeController?.abort()
   const nativeSession = materializeNativeSessions.get(jobId)
   if (nativeSession) stopNativeSession(nativeSession)
@@ -376,25 +482,33 @@ export function cancelShapeMaterialization(jobId: string): void {
   // finally block remove the batch directory so we never delete a file from
   // underneath a writer. Already-finished jobs can be cleaned immediately.
   if (!activeController) {
-    if (previewRoot) removePath(previewRoot)
+    if (previewRoot) void removePath(previewRoot)
     previewRoots.delete(jobId)
   }
+}
+
+/** For tests: how many job ids the module still holds. */
+export function shapeJobStateSizeForTest(): number {
+  return cancelledJobs.size + materializeAbortControllers.size + previewRoots.size
 }
 
 /** Removes preview staging folders (a dot-named folder directly inside a
  * `.preview-cache`) that hold any of `paths`. Never the cache itself or its
  * shared, LRU-evicted renders: those outlive any one preview. */
-export function cleanupShapePreview(paths: readonly string[]): void {
+export async function cleanupShapePreview(paths: readonly string[]): Promise<void> {
   const stagingRoots = new Set<string>()
   for (const path of paths) {
     const parent = dirname(resolve(path))
     if (basename(parent).startsWith('.') && basename(dirname(parent)) === '.preview-cache')
       stagingRoots.add(parent)
   }
-  for (const stagingRoot of stagingRoots) removePath(stagingRoot)
+  for (const stagingRoot of stagingRoots) await removePath(stagingRoot)
 }
 
-export function cleanupUncommittedShapeAssets(paths: readonly string[], durableRoot: string): void {
+export async function cleanupUncommittedShapeAssets(
+  paths: readonly string[],
+  durableRoot: string
+): Promise<void> {
   for (const path of paths) {
     if (
       inside(durableRoot, path) &&
@@ -402,7 +516,7 @@ export function cleanupUncommittedShapeAssets(paths: readonly string[], durableR
         path.toLowerCase().endsWith('.shape-base.wav')) &&
       !basename(path).startsWith('.')
     ) {
-      removePath(path)
+      await removePath(path)
     }
   }
 }
@@ -411,11 +525,14 @@ export function cleanupUncommittedShapeAssets(paths: readonly string[], durableR
  * Nothing is published if any item fails validation. */
 export async function bakeShapeProcess(
   request: ShapeBakeProcessRequest,
-  durableRoot: string
+  durableRoot: string,
+  options: { mayCreateRoot?: boolean } = {}
 ): Promise<ShapeBakeProcessResult> {
   if (!request.jobId || request.items.length === 0) throw new Error('nothing to bake.')
-  const batchRoot = join(durableRoot, `.${request.jobId}-${randomUUID()}`)
-  mkdirSync(batchRoot, { recursive: true })
+  await assertLibraryReachable(durableRoot, options.mayCreateRoot ?? true)
+  const batchRoot = join(durableRoot, `.${safeJobName(request.jobId)}-${randomUUID()}`)
+  await mkdir(batchRoot, { recursive: true })
+  const releaseEngine = await renderEngines.acquire()
   let engine: Awaited<ReturnType<typeof spawnEngine>> | null = null
   let client: EngineClient | null = null
   const pending: Array<{
@@ -452,7 +569,7 @@ export async function bakeShapeProcess(
       ) {
         throw new Error(reply.error || 'the bake failed to render.')
       }
-      const inspected = inspectShapeSourceWav(temporaryPath)
+      const inspected = await inspectShapeSourceWav(temporaryPath)
       if (
         inspected.sampleRate !== reply.sampleRate ||
         inspected.channels !== reply.channels ||
@@ -469,7 +586,7 @@ export async function bakeShapeProcess(
       })
     }
     for (const item of pending) {
-      renameSync(item.temporaryPath, item.finalPath)
+      await rename(item.temporaryPath, item.finalPath)
       // Handed to the renderer: the cleanup keeps it this session (reonedCopiesSession.ts).
       noteIssuedCopy(item.finalPath)
     }
@@ -485,12 +602,13 @@ export async function bakeShapeProcess(
       }))
     }
   } catch (error) {
-    for (const item of pending) removePath(item.finalPath)
+    for (const item of pending) await removePath(item.finalPath)
     throw error
   } finally {
     client?.disconnect()
     if (engine) await engine.stop()
-    removePath(batchRoot)
+    releaseEngine()
+    await removePath(batchRoot)
   }
 }
 
@@ -501,7 +619,8 @@ export async function bakeShapeProcess(
  */
 export async function materializeShape(
   request: ShapeMaterializeRequest,
-  durableRoot: string
+  durableRoot: string,
+  options: { mayCreateRoot?: boolean } = {}
 ): Promise<ShapeMaterializeResult> {
   assertFinitePositive(request.targetBpm, 'tempo')
   assertFinitePositive(request.loopBars, 'length')
@@ -513,21 +632,25 @@ export async function materializeShape(
   if (previousNativeSession) stopNativeSession(previousNativeSession)
   const abortController = new AbortController()
   materializeAbortControllers.set(request.jobId, abortController)
-  const batchId = `${request.jobId}-${randomUUID()}`
+  await assertLibraryReachable(durableRoot, options.mayCreateRoot ?? true)
+  const batchId = `${safeJobName(request.jobId)}-${randomUUID()}`
   // Staged beside where the results are renamed to (the preview cache, or the
   // library's .shapes for a commit), never in the system temp folder: a rename
   // across volumes fails (EXDEV), and the library is often on a USB drive.
   const batchRoot =
     request.mode === 'preview'
-      ? join(shapePreviewCacheDir(durableRoot), `.${batchId}`)
+      ? join(await shapePreviewCacheDir(durableRoot), `.${batchId}`)
       : join(durableRoot, `.${batchId}`)
-  mkdirSync(batchRoot, { recursive: true })
+  await mkdir(batchRoot, { recursive: true })
   if (request.mode === 'preview') previewRoots.set(request.jobId, batchRoot)
 
   const nativeSession: MaterializeNativeSession = { engine: null, client: null }
   materializeNativeSessions.set(request.jobId, nativeSession)
   const ensureClient = async (): Promise<EngineClient> => {
     if (!nativeSession.client) {
+      // Queued behind other renders' engines (renderEngines); stopNativeSession frees the slot.
+      if (!nativeSession.release) nativeSession.release = await renderEngines.acquire()
+      throwIfCancelled(request.jobId)
       nativeSession.engine = await spawnEngine()
       throwIfCancelled(request.jobId)
       nativeSession.client = new EngineClient()
@@ -552,22 +675,22 @@ export async function materializeShape(
       const previewCachePath =
         request.mode === 'preview'
           ? join(
-              shapePreviewCacheDir(durableRoot),
+              await shapePreviewCacheDir(durableRoot),
               shapeLanePreviewCacheKey(lane, request.targetBpm, request.loopBars)
             )
           : null
-      if (previewCachePath && existsSync(previewCachePath)) {
+      if (previewCachePath && (await exists(previewCachePath))) {
         try {
           const cached =
             previewMetadata.get(previewCachePath) ??
-            inspectShapeWav(previewCachePath, request.loopBars, request.targetBpm)
+            (await inspectShapeWav(previewCachePath, request.loopBars, request.targetBpm))
           previewMetadata.set(previewCachePath, cached)
-          touchCacheEntry(previewCachePath)
+          await touchCacheEntry(previewCachePath)
           stems.push(cached)
           continue
         } catch {
           previewMetadata.delete(previewCachePath)
-          removePath(previewCachePath)
+          await removePath(previewCachePath)
         }
       }
 
@@ -635,18 +758,18 @@ export async function materializeShape(
           durationSec: base.durationSec
         }
         if (process) {
-          const cacheDir = shapePreviewCacheDir(durableRoot)
+          const cacheDir = await shapePreviewCacheDir(durableRoot)
           const processPath = join(
             cacheDir,
             shapeProcessSourceCacheKey(processPrepared.path, process)
           )
           let processed: ShapeMaterializedStem | null = null
-          if (existsSync(processPath)) {
+          if (await exists(processPath)) {
             try {
-              processed = inspectShapeSourceWav(processPath)
-              touchCacheEntry(processPath)
+              processed = await inspectShapeSourceWav(processPath)
+              await touchCacheEntry(processPath)
             } catch {
-              removePath(processPath)
+              await removePath(processPath)
             }
           }
           if (!processed) {
@@ -672,7 +795,7 @@ export async function materializeShape(
             ) {
               throw new Error(processReply.error || 'a treatment failed to render.')
             }
-            const inspectedProcess = inspectShapeSourceWav(temporaryProcessPath)
+            const inspectedProcess = await inspectShapeSourceWav(temporaryProcessPath)
             if (
               inspectedProcess.sampleRate !== processReply.sampleRate ||
               inspectedProcess.channels !== processReply.channels ||
@@ -680,7 +803,7 @@ export async function materializeShape(
             ) {
               throw new Error('a treatment came back incomplete.')
             }
-            renameSync(temporaryProcessPath, processPath)
+            await rename(temporaryProcessPath, processPath)
             processed = { ...inspectedProcess, path: processPath }
           }
           processPrepared = processed
@@ -714,14 +837,14 @@ export async function materializeShape(
           const rawRate = 2 ** (renderedPitch / 12)
           let rawPrepared = tempoResolved
           if (Math.abs(rawRate - 1) >= STRETCH_RATIO_EPSILON) {
-            const cacheDir = shapePreviewCacheDir(durableRoot)
+            const cacheDir = await shapePreviewCacheDir(durableRoot)
             const rawPath = join(cacheDir, shapeRawSourceCacheKey(tempoResolved.path, rawRate))
-            if (existsSync(rawPath)) {
+            if (await exists(rawPath)) {
               try {
-                rawPrepared = inspectShapeSourceWav(rawPath)
-                touchCacheEntry(rawPath)
+                rawPrepared = await inspectShapeSourceWav(rawPath)
+                await touchCacheEntry(rawPath)
               } catch {
-                removePath(rawPath)
+                await removePath(rawPath)
               }
             }
             if (rawPrepared.path !== rawPath) {
@@ -747,7 +870,7 @@ export async function materializeShape(
               ) {
                 throw new Error(rawReply.error || 'a raw rate change failed to render.')
               }
-              const inspectedRaw = inspectShapeSourceWav(temporaryRawPath)
+              const inspectedRaw = await inspectShapeSourceWav(temporaryRawPath)
               if (
                 inspectedRaw.sampleRate !== rawReply.sampleRate ||
                 inspectedRaw.channels !== rawReply.channels ||
@@ -755,7 +878,7 @@ export async function materializeShape(
               ) {
                 throw new Error('a raw rate change came back incomplete.')
               }
-              renameSync(temporaryRawPath, rawPath)
+              await rename(temporaryRawPath, rawPath)
               rawPrepared = { ...inspectedRaw, path: rawPath }
             }
           }
@@ -853,13 +976,11 @@ export async function materializeShape(
       )
       if (
         Math.abs(reply.frames - expectedFrames) > 1 ||
-        Math.abs(reply.durationSec - reply.frames / reply.sampleRate) > 1 / reply.sampleRate ||
-        !existsSync(temporaryPath) ||
-        statSync(temporaryPath).size === 0
+        Math.abs(reply.durationSec - reply.frames / reply.sampleRate) > 1 / reply.sampleRate
       ) {
         throw new Error(`stem ${index + 1} came back with invalid audio.`)
       }
-      const inspected = inspectShapeWav(temporaryPath, request.loopBars, request.targetBpm)
+      const inspected = await inspectShapeWav(temporaryPath, request.loopBars, request.targetBpm)
       if (
         inspected.sampleRate !== reply.sampleRate ||
         inspected.channels !== reply.channels ||
@@ -868,11 +989,11 @@ export async function materializeShape(
         throw new Error(`stem ${index + 1} came back incomplete.`)
       }
       if (request.mode === 'preview') {
-        renameSync(temporaryPath, finalPath)
+        await rename(temporaryPath, finalPath)
         const stem = { ...inspected, path: finalPath }
         previewMetadata.set(finalPath, stem)
         stems.push(stem)
-        enforceShapePreviewCacheLimit(shapePreviewCacheDir(durableRoot))
+        await enforceShapePreviewCacheLimit(await shapePreviewCacheDir(durableRoot))
         continue
       }
       pending.push({
@@ -889,9 +1010,9 @@ export async function materializeShape(
     }
     throwIfCancelled(request.jobId)
     if (request.mode === 'commit') {
-      mkdirSync(durableRoot, { recursive: true })
+      await mkdir(durableRoot, { recursive: true })
       for (const item of pending) {
-        renameSync(item.temporaryPath, item.finalPath)
+        await rename(item.temporaryPath, item.finalPath)
         noteIssuedCopy(item.finalPath)
         stems.push(item.stem)
       }
@@ -899,13 +1020,13 @@ export async function materializeShape(
     return { jobId: request.jobId, stems }
   } catch (error) {
     for (const item of pending) {
-      removePath(item.temporaryPath)
-      removePath(item.finalPath)
+      await removePath(item.temporaryPath)
+      await removePath(item.finalPath)
     }
     throw error
   } finally {
     stopNativeSession(nativeSession)
-    removePath(batchRoot)
+    await removePath(batchRoot)
     previewRoots.delete(request.jobId)
     cancelledJobs.delete(request.jobId)
     if (materializeAbortControllers.get(request.jobId) === abortController) {

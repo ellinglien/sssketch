@@ -1393,10 +1393,10 @@ app.whenReady().then(async () => {
   registerReonedCopiesIpc(ipcMain)
 
   ipcMain.handle('shape-materialize', (_event, request: ShapeMaterializeRequest) =>
-    materializeShape(request, shapeAssetsDir())
+    materializeShape(request, shapeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
   )
   ipcMain.handle('shape-bake-process', (_event, request: ShapeBakeProcessRequest) =>
-    bakeShapeProcess(request, shapeAssetsDir())
+    bakeShapeProcess(request, shapeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
   )
   ipcMain.handle('shape-cancel', (_event, jobId: string) => cancelShapeMaterialization(jobId))
   ipcMain.handle('shape-cleanup-preview', (_event, paths: string[]) => cleanupShapePreview(paths))
