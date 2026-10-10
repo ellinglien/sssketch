@@ -26,7 +26,7 @@ is plan 1 of 4: 1 foundations (this), 2 core (the folder, turns, taking and rece
 
 **Tech stack:** TypeScript, vitest, React, Electron.
 
-**Repo:** `/Users/nickel/Claudecode/sssketch`. **Base:** `master` at `e06abc32`.
+**Repo:** `/Users/nickel/Claudecode/sssketch`. **Base:** `master` at `ffc83fd1` (after the eeedit merge).
 
 **Branch:** `bing-bong-1-foundations` (`git switch -c bing-bong-1-foundations`).
 
@@ -50,8 +50,7 @@ may share this working tree.
 ## How this plan's code was checked
 
 Every code block below is a file or `git diff` from a scratch copy of `src/` at the base commit,
-after `prettier --write`, with `npx vitest run` (the state suite: 27 files, 674 tests, plus the
-new tests), `npm run typecheck`-equivalent (`tsc -p tsconfig.web.json` and
+after `prettier --write`, with `npx vitest run` (the state suite, 686 tests with the new ones), `npm run typecheck`-equivalent (`tsc -p tsconfig.web.json` and
 `tsconfig.node.json`) and `eslint` passing on every touched file.
 
 ## Files
@@ -85,7 +84,7 @@ new tests), `npm run typecheck`-equivalent (`tsc -p tsconfig.web.json` and
 ```diff
 --- a/src/shared/types.ts
 +++ b/src/shared/types.ts
-@@ -124,6 +124,10 @@ export interface Rifff {
+@@ -354,6 +354,10 @@ export interface Rifff {
     * Purely informational (Inspector display); nothing in playback/
     * tiling/stretch reads it. */
    key?: string
@@ -483,10 +482,10 @@ export function LockedNotice(): React.JSX.Element | null {
  import { stopActivePreview } from '../audio/previewLoop'
 +import { LOCKED_RIFF_NOTICE, actionEditsLockedRiff } from './lockedRiffs'
 +import { showLockedNotice } from './lockedNotice'
+ import { nativePlayDispatchPlan } from './nativePlayDispatch'
  
  /** A slot's status text while its plugin failed to load: the slot keeps the plugin and its saved
-  * settings (@shared/pluginSwitch's `failed`), retried after a scan. */
-@@ -392,6 +394,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
+@@ -395,6 +397,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
    // exactly as before. Stable across renders (rawDispatch from useReducer and
    // the setState setters are both React-guaranteed stable), so this never
    // forces the position-update subscription effect below to resubscribe.
@@ -498,8 +497,8 @@ export function LockedNotice(): React.JSX.Element | null {
 +  })
    const dispatch = useCallback((action: DispatchableAction): void => {
      switch (action.type) {
-       case 'PLAY':
-@@ -424,6 +432,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
+       case 'PLAY': {
+@@ -440,6 +448,9 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
          rawDispatch(action)
          return
        default:
@@ -521,7 +520,7 @@ commit late at worst, which only affects whether the notice shows: `history.ts` 
 ```diff
 --- a/src/renderer/src/App.tsx
 +++ b/src/renderer/src/App.tsx
-@@ -104,6 +104,7 @@ import { ReonedCopyMissingNotice } from './components/ReonedCopyMissingNotice'
+@@ -106,6 +106,7 @@ import { ReonedCopyMissingNotice } from './components/ReonedCopyMissingNotice'
  import { ReonedCopiesNotice } from './components/ReonedCopiesNotice'
  import { ReoneNotice } from './components/ReoneNotice'
  import { SaveCopyNotice } from './components/SaveCopyNotice'
@@ -529,7 +528,7 @@ commit late at worst, which only affects whether the notice shows: `history.ts` 
  import { TopRightNotices } from './components/TopRightNotices'
  import { showSaveCopyNotice } from './state/saveCopyNotice'
  import { saveAsNewVersion } from './state/saveAsNewVersion'
-@@ -3238,6 +3239,7 @@ function Frame(): React.JSX.Element {
+@@ -3716,6 +3717,7 @@ function Frame(): React.JSX.Element {
          <ReonedCopiesNotice />
          <ReoneNotice />
          <SaveCopyNotice />
@@ -578,8 +577,8 @@ to the import from `./cross` and append the describe block:
    previewCrossGain,
    replaceCrossRowSource,
    redoCross,
-@@ -337,3 +338,25 @@ describe('assembleCrossRifff', () => {
-     expect(assembleCrossRifff(draft(), 'group-cross')).toBeNull()
+@@ -413,3 +414,25 @@ describe('assembleCrossRifff', () => {
+     expect(assembleCrossRifff(withLong, 'group-cross')!.rifff.stems[0].shape?.loopBars).toBe(8)
    })
  })
 +
@@ -653,7 +652,7 @@ same string as `stemKey`, so `mute[source.id]` reads `AppState.mute` directly.
 - [ ] **Step 4: Run the tests.**
 
 Run: `npx vitest run src/shared/cross.test.ts`
-Expected: PASS (24 tests).
+Expected: PASS (28 tests).
 
 - [ ] **Step 5: Commit.**
 
@@ -685,7 +684,7 @@ EOF
    type CrossCenterRow,
    type CrossDraft,
    type CrossParent,
-@@ -611,12 +612,19 @@ function CenterRow({
+@@ -640,13 +641,20 @@ function CenterRow({
    )
  }
  
@@ -700,15 +699,16 @@ EOF
    setDraft,
    currentProjectKey,
    onSourceLeanCommit,
+   onPublishedToShelf,
 -  onBack
 +  onBack,
 +  primaryAction
  }: {
    draft: CrossDraft
    setDraft: Dispatch<SetStateAction<CrossDraft | null>>
-@@ -626,6 +634,9 @@ export function CrossPanel({
-    * the gesture finishes so reopening Cross does not reset the choice. */
+@@ -657,6 +665,9 @@ export function CrossPanel({
    onSourceLeanCommit: (sourceLean: number) => void
+   onPublishedToShelf: (groupId: string) => void
    onBack: () => void
 +  /** Replaces "add to shelf" and "add to timeline" with one button (bing bong's "done in cross").
 +   * `run` gets the assembled center; Cross closes itself through onBack when it resolves true. */
@@ -716,7 +716,7 @@ EOF
  }): React.JSX.Element {
    const dispatch = useDispatch()
    const rifffs = useAppSelector((state) => state.rifffs)
-@@ -636,7 +647,7 @@ export function CrossPanel({
+@@ -667,7 +678,7 @@ export function CrossPanel({
    const [selectedTarget, setSelectedTarget] = useState<CrossTarget>(() =>
      draft.center.length > 0 ? 'center' : 'left'
    )
@@ -725,7 +725,7 @@ EOF
    const [committed, setCommitted] = useState<'shelf' | 'timeline' | null>(null)
    const [sideMuted, setSideMuted] = useState<Set<string>>(() => new Set())
    const [sideSoloed, setSideSoloed] = useState<Record<string, string>>(() => ({}))
-@@ -970,6 +981,22 @@ export function CrossPanel({
+@@ -1001,6 +1012,22 @@ export function CrossPanel({
      else if (rowId) setDraft((value) => (value ? moveCrossRow(value, rowId, index) : value))
    }
  
@@ -748,7 +748,7 @@ EOF
    async function commit(destination: 'shelf' | 'timeline'): Promise<void> {
      if (committingRef.current) return
      const revision = draft.revision
-@@ -1254,32 +1281,44 @@ export function CrossPanel({
+@@ -1286,32 +1313,44 @@ export function CrossPanel({
          >
            clear
          </button>
@@ -858,10 +858,10 @@ EOF
  import { SketchStrip } from './components/SketchStrip'
 -import { CrossPanel } from './components/CrossPanel'
 +import { CrossPanel, type CrossPrimaryAction } from './components/CrossPanel'
+ import { ShapePanel, type ShapeProcessRackUnit } from './components/ShapePanel'
  import { rifffForSketchCross } from './components/crossFromSketch'
  import { Playhead } from './components/Playhead'
- import { RiserExtentGesture } from './components/RiserExtentGesture'
-@@ -148,6 +148,7 @@ import type { BusId, Rifff } from '@shared/types'
+@@ -152,6 +152,7 @@ import { stemKey, type BusId, type Rifff } from '@shared/types'
  import {
    createCrossDraft,
    crossParentFromRifff,
@@ -869,17 +869,17 @@ EOF
    crossProjectKey,
    type CrossDraft
  } from '@shared/cross'
-@@ -1940,6 +1941,9 @@ function Frame(): React.JSX.Element {
+@@ -2012,6 +2013,9 @@ function Frame(): React.JSX.Element {
    // draft, so opening another pair never needs a discard confirmation.
    const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
    const [crossOpen, setCrossOpen] = useState(false)
 +  // Set only while Cross was opened for something other than the inspector's "cross riffs" (bing
 +  // bong's turn): its one button replaces add to shelf / add to timeline.
 +  const [crossPrimary, setCrossPrimary] = useState<CrossPrimaryAction | null>(null)
-   // The re-oned copies cleanup counts what Cross and Discover hold as in use (reonedInUse.ts).
-   // The saved preview level, before the first preview plays (audio/previewOutput.ts).
-   useEffect(() => loadSavedPreviewLevel(), [])
-@@ -2461,7 +2465,10 @@ function Frame(): React.JSX.Element {
+   // Shape is also a disposable working copy. Only Add to Shelf publishes a
+   // new riff; closing leaves the source and the shared riff selection intact.
+   const [shapeDraft, setShapeDraft] = useState<ShapeDraft | null>(null)
+@@ -2636,7 +2640,10 @@ function Frame(): React.JSX.Element {
    /** Opens Cross from exactly the two riffs selected in Sketch or Shelf. Cross is a
     * peer music-making workspace to Discover, not a library/import action:
     * its parents are the two project riffs exactly as currently heard. */
@@ -891,8 +891,8 @@ EOF
      const projectKey = crossProjectKey(currentSketch, state.projectSeed)
      const selectedIds = new Set([left.groupId, right.groupId])
      const existingIds = new Set(crossDraft?.parents.map((parent) => parent.id) ?? [])
-@@ -2472,7 +2479,8 @@ function Frame(): React.JSX.Element {
- 
+@@ -2648,7 +2655,8 @@ function Frame(): React.JSX.Element {
+     shapePreviewStopRef.current?.()
      stopActivePreview()
      dispatch({ type: 'PAUSE' })
 -    if (samePair) {
@@ -901,7 +901,7 @@ EOF
        setCrossOpen(true)
        return
      }
-@@ -2489,13 +2497,16 @@ function Frame(): React.JSX.Element {
+@@ -2665,13 +2673,16 @@ function Frame(): React.JSX.Element {
          window.alert('could not prepare every stem for cross. nothing was changed; try again.')
          return
        }
@@ -924,7 +924,7 @@ EOF
          // Cross and Discover expose the same source choice (instruments↔recorded). Seed a
          // disposable Cross draft from the persisted setting rather than
          // resetting the knob whenever a new pair is opened.
-@@ -3543,7 +3554,9 @@ function Frame(): React.JSX.Element {
+@@ -4091,7 +4102,9 @@ function Frame(): React.JSX.Element {
                  onBack={() => {
                    setCrossOpen(false)
                    setCrossDraft(null)
