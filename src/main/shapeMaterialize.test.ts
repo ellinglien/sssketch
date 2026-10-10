@@ -587,17 +587,200 @@ describe('materializeShape', () => {
         damping: 0.7,
         mix: 0.8
       }),
-      nativeShapeProcessPayload({ type: 'smear', timeMs: 90, scatter: 0.65, mix: 0.75 })
+      nativeShapeProcessPayload({ type: 'smear', timeMs: 90, scatter: 0.65, mix: 0.75 }),
+      nativeShapeProcessPayload({
+        type: 'compand',
+        drive: 16,
+        compand: 0.8,
+        symmetry: -0.2,
+        outputDb: -9,
+        mix: 1
+      }),
+      nativeShapeProcessPayload({
+        type: 'codec-damage',
+        quality: 23,
+        loss: 0.4,
+        packetMs: 32,
+        bandwidthHz: 6000,
+        mix: 0.9
+      }),
+      nativeShapeProcessPayload({
+        type: 'short-room',
+        sizeMs: 45,
+        decay: 0.7,
+        damping: 0.2,
+        width: 1.5,
+        mix: 0.4
+      }),
+      nativeShapeProcessPayload({
+        type: 'frequency-shift',
+        shiftHz: -340,
+        feedback: -0.3,
+        stereo: 1.2,
+        mix: 0.75
+      }),
+      nativeShapeProcessPayload({
+        type: 'chorus',
+        rateHz: 3.5,
+        depthMs: 18,
+        delayMs: 9,
+        feedback: 0.4,
+        stereo: 1.8,
+        mix: 0.6
+      }),
+      nativeShapeProcessPayload({ type: 'dj-eq', lowDb: 12, midDb: -24, highDb: 6, mix: 1 }),
+      nativeShapeProcessPayload({
+        type: 'tone',
+        cutoffHz: 900,
+        resonance: 0.8,
+        drive: 12,
+        mix: 0.85
+      })
     ]).toEqual([
-      { processType: 'wavefold', primary: 3, secondary: -0.2, tertiary: 0, mix: 0.8 },
-      { processType: 'saturation', primary: 5, secondary: 0.3, tertiary: -6, mix: 0.7 },
-      { processType: 'hard-clip', primary: 0.4, secondary: -0.5, tertiary: 0, mix: 1 },
-      { processType: 'rectify', primary: 0, secondary: 3, tertiary: 0, mix: 0.6 },
-      { processType: 'bit-crush', primary: 7, secondary: 0.4, tertiary: 0, mix: 1 },
-      { processType: 'rate-crush', primary: 9, secondary: 0.5, tertiary: 0, mix: 0.9 },
-      { processType: 'ring-mod', primary: 173, secondary: 0.6, tertiary: 0, mix: 0.5 },
-      { processType: 'comb', primary: 17, secondary: -0.4, tertiary: 0.7, mix: 0.8 },
-      { processType: 'smear', primary: 90, secondary: 0.65, tertiary: 0, mix: 0.75 }
+      {
+        processType: 'wavefold',
+        primary: 3,
+        secondary: -0.2,
+        tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
+        mix: 0.8
+      },
+      {
+        processType: 'saturation',
+        primary: 5,
+        secondary: 0.3,
+        tertiary: -6,
+        quaternary: 0,
+        quinary: 0,
+        mix: 0.7
+      },
+      {
+        processType: 'hard-clip',
+        primary: 0.4,
+        secondary: -0.5,
+        tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
+        mix: 1
+      },
+      {
+        processType: 'rectify',
+        primary: 0,
+        secondary: 3,
+        tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
+        mix: 0.6
+      },
+      {
+        processType: 'bit-crush',
+        primary: 7,
+        secondary: 0.4,
+        tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
+        mix: 1
+      },
+      {
+        processType: 'rate-crush',
+        primary: 9,
+        secondary: 0.5,
+        tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
+        mix: 0.9
+      },
+      {
+        processType: 'ring-mod',
+        primary: 173,
+        secondary: 0.6,
+        tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
+        mix: 0.5
+      },
+      {
+        processType: 'comb',
+        primary: 17,
+        secondary: -0.4,
+        tertiary: 0.7,
+        quaternary: 0,
+        quinary: 0,
+        mix: 0.8
+      },
+      {
+        processType: 'smear',
+        primary: 90,
+        secondary: 0.65,
+        tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
+        mix: 0.75
+      },
+      {
+        processType: 'compand',
+        primary: 16,
+        secondary: 0.8,
+        tertiary: -0.2,
+        quaternary: -9,
+        quinary: 0,
+        mix: 1
+      },
+      {
+        processType: 'codec-damage',
+        primary: 23,
+        secondary: 0.4,
+        tertiary: 32,
+        quaternary: 6000,
+        quinary: 0,
+        mix: 0.9
+      },
+      {
+        processType: 'short-room',
+        primary: 45,
+        secondary: 0.7,
+        tertiary: 0.2,
+        quaternary: 1.5,
+        quinary: 0,
+        mix: 0.4
+      },
+      {
+        processType: 'frequency-shift',
+        primary: -340,
+        secondary: -0.3,
+        tertiary: 1.2,
+        quaternary: 0,
+        quinary: 0,
+        mix: 0.75
+      },
+      {
+        processType: 'chorus',
+        primary: 3.5,
+        secondary: 18,
+        tertiary: 9,
+        quaternary: 0.4,
+        quinary: 1.8,
+        mix: 0.6
+      },
+      {
+        processType: 'dj-eq',
+        primary: 12,
+        secondary: -24,
+        tertiary: 6,
+        quaternary: 0,
+        quinary: 0,
+        mix: 1
+      },
+      {
+        processType: 'tone',
+        primary: 900,
+        secondary: 0.8,
+        tertiary: 12,
+        quaternary: 0,
+        quinary: 0,
+        mix: 0.85
+      }
     ])
   })
 })

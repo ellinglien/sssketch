@@ -263,6 +263,97 @@ export function normalizeShapeClipProcess(
         scatter: Number.isFinite(process.scatter) ? Math.max(0, Math.min(1, process.scatter)) : 0.5,
         mix
       }
+    case 'compand':
+      return {
+        type: process.type,
+        drive: Number.isFinite(process.drive) ? Math.max(1, Math.min(64, process.drive)) : 12,
+        compand: Number.isFinite(process.compand)
+          ? Math.max(0, Math.min(1, process.compand))
+          : 0.75,
+        symmetry: Number.isFinite(process.symmetry)
+          ? Math.max(-1, Math.min(1, process.symmetry))
+          : 0,
+        outputDb: Number.isFinite(process.outputDb)
+          ? Math.max(-36, Math.min(24, process.outputDb))
+          : -6,
+        mix
+      }
+    case 'codec-damage':
+      return {
+        type: process.type,
+        quality: Number.isFinite(process.quality)
+          ? Math.max(1, Math.min(100, process.quality))
+          : 35,
+        loss: Number.isFinite(process.loss) ? Math.max(0, Math.min(1, process.loss)) : 0.15,
+        packetMs: Number.isFinite(process.packetMs)
+          ? Math.max(1, Math.min(250, process.packetMs))
+          : 24,
+        bandwidthHz: Number.isFinite(process.bandwidthHz)
+          ? Math.max(200, Math.min(24000, process.bandwidthHz))
+          : 8000,
+        mix
+      }
+    case 'short-room':
+      return {
+        type: process.type,
+        sizeMs: Number.isFinite(process.sizeMs) ? Math.max(1, Math.min(250, process.sizeMs)) : 28,
+        decay: Number.isFinite(process.decay)
+          ? Math.max(-0.98, Math.min(0.98, process.decay))
+          : 0.55,
+        damping: Number.isFinite(process.damping)
+          ? Math.max(0, Math.min(1, process.damping))
+          : 0.45,
+        width: Number.isFinite(process.width) ? Math.max(0, Math.min(2, process.width)) : 1,
+        mix
+      }
+    case 'frequency-shift':
+      return {
+        type: process.type,
+        shiftHz: Number.isFinite(process.shiftHz)
+          ? Math.max(-12000, Math.min(12000, process.shiftHz))
+          : 35,
+        feedback: Number.isFinite(process.feedback)
+          ? Math.max(-0.95, Math.min(0.95, process.feedback))
+          : 0,
+        stereo: Number.isFinite(process.stereo) ? Math.max(0, Math.min(2, process.stereo)) : 0,
+        mix
+      }
+    case 'chorus':
+      return {
+        type: process.type,
+        rateHz: Number.isFinite(process.rateHz)
+          ? Math.max(0.05, Math.min(20, process.rateHz))
+          : 0.8,
+        depthMs: Number.isFinite(process.depthMs) ? Math.max(0, Math.min(50, process.depthMs)) : 4,
+        delayMs: Number.isFinite(process.delayMs)
+          ? Math.max(0.1, Math.min(50, process.delayMs))
+          : 7,
+        feedback: Number.isFinite(process.feedback)
+          ? Math.max(-0.95, Math.min(0.95, process.feedback))
+          : 0.15,
+        stereo: Number.isFinite(process.stereo) ? Math.max(0, Math.min(2, process.stereo)) : 1,
+        mix
+      }
+    case 'dj-eq':
+      return {
+        type: process.type,
+        lowDb: Number.isFinite(process.lowDb) ? Math.max(-72, Math.min(24, process.lowDb)) : 0,
+        midDb: Number.isFinite(process.midDb) ? Math.max(-72, Math.min(24, process.midDb)) : 0,
+        highDb: Number.isFinite(process.highDb) ? Math.max(-72, Math.min(24, process.highDb)) : 0,
+        mix
+      }
+    case 'tone':
+      return {
+        type: process.type,
+        cutoffHz: Number.isFinite(process.cutoffHz)
+          ? Math.max(20, Math.min(20000, process.cutoffHz))
+          : 12000,
+        resonance: Number.isFinite(process.resonance)
+          ? Math.max(0, Math.min(0.99, process.resonance))
+          : 0.15,
+        drive: Number.isFinite(process.drive) ? Math.max(1, Math.min(32, process.drive)) : 1,
+        mix
+      }
   }
 }
 

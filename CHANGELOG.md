@@ -12,6 +12,11 @@
 - Expanded **Process Clip** with a single-choice catalog of Saturation, Hard Clip, Rectify, Bit Crush, Rate Crush, Ring Mod, Comb, and Smear treatments. Every treatment has multiple sound-shaping knobs plus Mix and exact numeric entry, uses the same non-destructive audition and render cache, and auto-bakes when added so another treatment can be applied immediately.
 - Simplified processed-clip history: there is no separate Clear, Replace, Bake, or Original-reset state. Each added treatment is one Undo step, while Pitch/Rate/Raw controls remain editable and the immutable source audio is retained internally.
 - Added project-session **interventions** to Shape's inspector. Multiple reusable offline treatment cards can remain visible with their own settings; Preview auditions one card at a time, Bake renders it as a single undoable clip edit, **+ Stem** renders the same preview to a new parallel lane without changing the source clip, and × removes only the reusable intervention without touching rendered audio.
+- Expanded Shape interventions with extreme-range Compand Distortion, Codec Damage, Short Room, true Frequency Shift, warm stereo/mono Chorus, DJ EQ, and resonant Tone processors. Their wide controls support subtle correction through deliberately broken, feedback-heavy, or overdriven settings.
+- Added a Shape-only donor tray: dragging a shelf riff onto the inspector opens its stems in a compact audition view with non-destructive Mute/Solo and one-click inward controls for adding individual stems to the current Shape draft. Closing the tray restores the inspector without discarding an intervention in progress.
+- Renamed the user-facing Shape entry action to **EEEDIT** and made it follow the riff actually shown in the Sketch inspector, so stale shared-selection bookkeeping can no longer hide the button.
+- Edit's clip inspector now hides all transform and intervention controls when no clip or interior region is selected, replacing disabled controls with a quiet selection skeleton and brief interaction hint.
+- Intervention preview render failures now leave the last valid riff preview playing instead of stopping transport. The **+ Intervention** control also atomically collapses a clean expanded card and opens its picker, so reflow can no longer move the button out from under the click.
 - Added independent Shape **Formant** shifting from −12 to +12 semitones. It moves the spectral envelope without changing the clip's pitch, rate, or duration, works on clips and selected regions, remains editable after Bake, persists through project reopen, and uses cached high-quality R3 renders off the playback thread.
 - Added the first **Shape Riff** editing slice for a single selected riff: split at the playhead, snapped or free fragment moves, Option-copy, duplicate, durable fragment/stem Disable, temporary Mute/Solo, reset, undo/redo, original/shaped A/B playback, and non-destructive save as a new shelf riff. Shape keeps the shelf visible and stores a versioned recipe against immutable source audio so results can be reopened and reset without generational quality loss.
 - Added **Cross Riffs**, opened from exactly two selected riffs in Sketch, Arrange, Map, or the shelf. The three-column workspace can audition either source or the new center riff, move stems into the center by dragging or using inward buttons, generate matching stems, edit mute/solo/gain, undo and redo, change tempo, and add the result to the shelf or timeline.
@@ -21,6 +26,10 @@
 
 ### Changed
 
+- New Compand Distortion interventions now start at −16 dB output trim, providing safer headroom for their aggressive default drive without altering saved intervention settings.
+- Kept Shape/Edit's per-stem mute and solo controls available during live intervention previews while continuing to lock clip and stem edits, and removed the extra stop/restart cycle that caused a hitch when leaving solo.
+- Fixed the Edit donor tray's mute and solo buttons falling back to oversized native browser controls; they now match the compact in-app mixer styling.
+- Edit now auditions its working riff and donor riff as one mix. Donor stems start muted, share one Solo pool with the working lanes, provide a tray-level Mute All/Unmute All control, and transfer cleanly into the working riff without doubling their audio.
 - Compacted Shape's inspector: transform values now sit between their step buttons, intervention knobs and readouts use the quieter stem-gain styling, intervention A/B is one preview toggle, and clip-editor guidance lives in a collapsible bottom `?` tray.
 - Tightened Shape interventions further: inactive cards collapse to a compact clickable name with no separate activation button, the intervention picker uses a compact button, Comb's four controls share one horizontal row, and inspector numeric readouts are less visually dominant.
 - Clean intervention previews now collapse when clicking elsewhere and switch between cards in one click, while moving any intervention knob keeps that work open. Intervention headings avoid bright-white emphasis. Transform's Detune control uses −10/+10 steps around an editable center value, and Rate now uses cumulative ½×/2× buttons alongside an undo-style reset, Smooth, and the current value.
@@ -43,6 +52,7 @@
 
 ### Fixed
 
+- Shape intervention knobs now remain visually responsive while dragging but launch a single offline preview render when the gesture ends, preventing repeated mid-playback audio swaps and their crunchy zipper artifacts.
 - Hardened rapid Shape Transform editing: cancelled previews now stop their private native render process, shared pitch/stretch cache WAVs publish atomically only after validation, extreme pitch uses smaller safe stages, and repeated Add clicks cannot create duplicate baked assets.
 - Fixed Shape intervention Bake getting stranded after a development hot reload, and set Saturation's default Drive to 9×.
 - Live Shape render replacement now keeps the current playhead position and applies a microscopic native fade to the newly loaded audio instead of introducing a project-swap discontinuity.

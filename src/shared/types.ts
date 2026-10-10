@@ -214,6 +214,67 @@ export interface ShapeSmearProcessV1 {
   mix: number
 }
 
+export interface ShapeCompandProcessV1 {
+  type: 'compand'
+  drive: number
+  compand: number
+  symmetry: number
+  outputDb: number
+  mix: number
+}
+
+export interface ShapeCodecDamageProcessV1 {
+  type: 'codec-damage'
+  quality: number
+  loss: number
+  packetMs: number
+  bandwidthHz: number
+  mix: number
+}
+
+export interface ShapeShortRoomProcessV1 {
+  type: 'short-room'
+  sizeMs: number
+  decay: number
+  damping: number
+  width: number
+  mix: number
+}
+
+export interface ShapeFrequencyShiftProcessV1 {
+  type: 'frequency-shift'
+  shiftHz: number
+  feedback: number
+  stereo: number
+  mix: number
+}
+
+export interface ShapeChorusProcessV1 {
+  type: 'chorus'
+  rateHz: number
+  depthMs: number
+  delayMs: number
+  feedback: number
+  stereo: number
+  mix: number
+}
+
+export interface ShapeDjEqProcessV1 {
+  type: 'dj-eq'
+  lowDb: number
+  midDb: number
+  highDb: number
+  mix: number
+}
+
+export interface ShapeToneProcessV1 {
+  type: 'tone'
+  cutoffHz: number
+  resonance: number
+  drive: number
+  mix: number
+}
+
 /** Shape deliberately has one editable treatment slot, not an effects
  * chain. Choosing another member of this union replaces the current one. */
 export type ShapeClipProcessV1 =
@@ -226,6 +287,13 @@ export type ShapeClipProcessV1 =
   | ShapeRingModProcessV1
   | ShapeCombProcessV1
   | ShapeSmearProcessV1
+  | ShapeCompandProcessV1
+  | ShapeCodecDamageProcessV1
+  | ShapeShortRoomProcessV1
+  | ShapeFrequencyShiftProcessV1
+  | ShapeChorusProcessV1
+  | ShapeDjEqProcessV1
+  | ShapeToneProcessV1
 
 export interface ShapeFragmentRecipe {
   id: string

@@ -51,7 +51,7 @@ import {
   type ShapeLane,
   type ShapeMaterializedStem
 } from '@shared/shape'
-import type { ShapeClipProcessV1, ShapeSourceStem, Stem } from '@shared/types'
+import type { Rifff, ShapeClipProcessV1, ShapeSourceStem, Stem } from '@shared/types'
 import {
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
@@ -62,7 +62,7 @@ import {
 import { DEFAULT_DISCOVER_CHAOS, pickReroll, rankCandidates } from '@shared/discoverRanking'
 import { DEFAULT_SOURCE_LEAN, drawSoundSource } from '@shared/discoverSlotModifier'
 import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
-import { usePlaying, usePos } from '../state/StoreContext'
+import { useAppSelector, usePlaying, usePos } from '../state/StoreContext'
 import { useCrossPreview, type CrossPreviewMember } from '../state/useCrossPreview'
 import { RepeatedWaveform } from './RepeatedWaveform'
 import { typeColorVar } from '../theme/typeColor'
@@ -81,8 +81,16 @@ import { ContextMenu } from './ContextMenu'
 import { DiscoverKindPicker } from './DiscoverKindPicker'
 import { discoverSlotKindForSoundType } from '../audio/discoverSeed'
 import { ArrowCounterClockwise, Eye, EyeSlash, SkipForward } from '@phosphor-icons/react'
+import {
+  shapeDonorMembers,
+  shapeDonorRows,
+  shapeDonorStemIsPresent,
+  type ShapeDonorRow
+} from './shapeDonor'
+import { crossItemIsAudible, toggleCrossSoloedId } from '@shared/cross'
 
 const SHAPE_RENDER_IDLE_MS = 260
+const SHELF_RIFF_DRAG_TYPE = 'text/rifff-shelf-source-id'
 
 const SNAP_CHOICES = [
   { label: '1 bar', bars: 1 },
@@ -154,6 +162,7 @@ function InspectorNumber({
   defaultValue,
   disabled,
   compact = false,
+  decimals = 0,
   onCommit
 }: {
   value: number | null
@@ -164,6 +173,7 @@ function InspectorNumber({
   defaultValue?: number
   disabled?: boolean
   compact?: boolean
+  decimals?: number
   onCommit: (value: number) => void
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
@@ -182,7 +192,8 @@ function InspectorNumber({
       setEditing(false)
       return
     }
-    const next = Math.max(min, Math.min(max, Math.round(parsed)))
+    const scale = 10 ** decimals
+    const next = Math.max(min, Math.min(max, Math.round(parsed * scale) / scale))
     setText(String(next))
     setEditing(false)
     onCommit(next)
@@ -275,7 +286,14 @@ const SHAPE_PROCESS_CATALOG: ReadonlyArray<{ type: ShapeProcessType; label: stri
   { type: 'rate-crush', label: 'Rate Crush' },
   { type: 'ring-mod', label: 'Ring Mod' },
   { type: 'comb', label: 'Comb' },
-  { type: 'smear', label: 'Smear' }
+  { type: 'smear', label: 'Smear' },
+  { type: 'compand', label: 'Compand Distortion' },
+  { type: 'codec-damage', label: 'Codec Damage' },
+  { type: 'short-room', label: 'Short Room' },
+  { type: 'frequency-shift', label: 'Frequency Shift' },
+  { type: 'chorus', label: 'Chorus' },
+  { type: 'dj-eq', label: 'DJ EQ' },
+  { type: 'tone', label: 'Tone' }
 ]
 
 function shapeProcessLabel(type: ShapeProcessType): string {
@@ -302,6 +320,20 @@ function defaultShapeProcess(type: ShapeProcessType): ShapeClipProcessV1 {
       return { type, delayMs: 12, feedback: 0.5, damping: 0.5, mix: 0.5 }
     case 'smear':
       return { type, timeMs: 80, scatter: 0.5, mix: 1 }
+    case 'compand':
+      return { type, drive: 12, compand: 0.75, symmetry: 0, outputDb: -16, mix: 1 }
+    case 'codec-damage':
+      return { type, quality: 35, loss: 0.15, packetMs: 24, bandwidthHz: 8000, mix: 1 }
+    case 'short-room':
+      return { type, sizeMs: 28, decay: 0.55, damping: 0.45, width: 1, mix: 0.35 }
+    case 'frequency-shift':
+      return { type, shiftHz: 35, feedback: 0, stereo: 0, mix: 1 }
+    case 'chorus':
+      return { type, rateHz: 0.8, depthMs: 4, delayMs: 7, feedback: 0.15, stereo: 1, mix: 0.5 }
+    case 'dj-eq':
+      return { type, lowDb: 0, midDb: 0, highDb: 0, mix: 1 }
+    case 'tone':
+      return { type, cutoffHz: 12000, resonance: 0.15, drive: 1, mix: 1 }
   }
 }
 
@@ -313,6 +345,7 @@ function ProcessKnob({
   defaultValue,
   suffix,
   signed,
+  decimals = 0,
   onChange
 }: {
   label: string
@@ -322,12 +355,25 @@ function ProcessKnob({
   defaultValue: number
   suffix: string
   signed?: boolean
+  decimals?: number
   onChange: (value: number) => void
 }): React.JSX.Element {
-  const dialValue = ((value - min) / (max - min)) * 100
+  // Shape interventions render offline. Keep the control and readout live
+  // during a turn, but publish only the gesture's final value to the render
+  // recipe. Publishing every pointer move can start several preview renders
+  // during a slow drag, repeatedly replacing the playing WAV and sounding
+  // like crunchy zipper noise.
+  const [gesture, setGesture] = useState({ sourceValue: value, value })
+  const gestureValue = gesture.sourceValue === value ? gesture.value : value
+  const dialValue = ((gestureValue - min) / (max - min)) * 100
   const defaultDialValue = ((defaultValue - min) / (max - min)) * 100
-  const fromDial = (next: number): number =>
-    Math.max(min, Math.min(max, Math.round(min + (next / 100) * (max - min))))
+  const fromDial = (next: number): number => {
+    const scale = 10 ** decimals
+    return Math.max(
+      min,
+      Math.min(max, Math.round((min + (next / 100) * (max - min)) * scale) / scale)
+    )
+  }
   return (
     <div
       style={{
@@ -344,19 +390,28 @@ function ProcessKnob({
         defaultValue={defaultDialValue}
         size={28}
         inkColor="var(--ra-text-2)"
-        ariaLabel={`${label} ${value}${suffix}`}
-        onChange={(next) => onChange(fromDial(next))}
+        ariaLabel={`${label} ${gestureValue}${suffix}`}
+        onChange={(next) => setGesture({ sourceValue: value, value: fromDial(next) })}
+        onCommit={(next) => {
+          const committed = fromDial(next)
+          setGesture({ sourceValue: committed, value: committed })
+          if (committed !== value) onChange(committed)
+        }}
       />
       <InspectorNumber
-        key={`${label}-${value}`}
-        value={value}
+        key={`${label}-${gestureValue}`}
+        value={gestureValue}
         min={min}
         max={max}
         suffix={suffix}
         signed={signed}
         defaultValue={defaultValue}
         compact
-        onCommit={onChange}
+        decimals={decimals}
+        onCommit={(committed) => {
+          setGesture({ sourceValue: committed, value: committed })
+          if (committed !== value) onChange(committed)
+        }}
       />
     </div>
   )
@@ -617,6 +672,306 @@ function ShapeProcessControls({
         />
       )
       break
+    case 'compand':
+      controls.push(
+        <ProcessKnob
+          key="drive"
+          label="drive"
+          value={Math.round(process.drive)}
+          min={1}
+          max={64}
+          defaultValue={12}
+          suffix="×"
+          onChange={(drive) => onChange({ ...process, drive })}
+        />,
+        <ProcessKnob
+          key="compand"
+          label="compand"
+          value={Math.round(process.compand * 100)}
+          min={0}
+          max={100}
+          defaultValue={75}
+          suffix="%"
+          onChange={(compand) => onChange({ ...process, compand: compand / 100 })}
+        />,
+        <ProcessKnob
+          key="symmetry"
+          label="symmetry"
+          value={Math.round(process.symmetry * 100)}
+          min={-100}
+          max={100}
+          defaultValue={0}
+          suffix="%"
+          signed
+          onChange={(symmetry) => onChange({ ...process, symmetry: symmetry / 100 })}
+        />,
+        <ProcessKnob
+          key="output"
+          label="output"
+          value={Math.round(process.outputDb)}
+          min={-36}
+          max={24}
+          defaultValue={-16}
+          suffix="dB"
+          signed
+          onChange={(outputDb) => onChange({ ...process, outputDb })}
+        />
+      )
+      break
+    case 'codec-damage':
+      controls.push(
+        <ProcessKnob
+          key="quality"
+          label="quality"
+          value={Math.round(process.quality)}
+          min={1}
+          max={100}
+          defaultValue={35}
+          suffix="%"
+          onChange={(quality) => onChange({ ...process, quality })}
+        />,
+        <ProcessKnob
+          key="loss"
+          label="loss"
+          value={Math.round(process.loss * 100)}
+          min={0}
+          max={100}
+          defaultValue={15}
+          suffix="%"
+          onChange={(loss) => onChange({ ...process, loss: loss / 100 })}
+        />,
+        <ProcessKnob
+          key="packet"
+          label="packet"
+          value={Math.round(process.packetMs)}
+          min={1}
+          max={250}
+          defaultValue={24}
+          suffix="ms"
+          onChange={(packetMs) => onChange({ ...process, packetMs })}
+        />,
+        <ProcessKnob
+          key="bandwidth"
+          label="bandwidth"
+          value={Math.round(process.bandwidthHz)}
+          min={200}
+          max={24000}
+          defaultValue={8000}
+          suffix="Hz"
+          onChange={(bandwidthHz) => onChange({ ...process, bandwidthHz })}
+        />
+      )
+      break
+    case 'short-room':
+      controls.push(
+        <ProcessKnob
+          key="size"
+          label="size"
+          value={Math.round(process.sizeMs)}
+          min={1}
+          max={250}
+          defaultValue={28}
+          suffix="ms"
+          onChange={(sizeMs) => onChange({ ...process, sizeMs })}
+        />,
+        <ProcessKnob
+          key="decay"
+          label="decay"
+          value={Math.round(process.decay * 100)}
+          min={-98}
+          max={98}
+          defaultValue={55}
+          suffix="%"
+          signed
+          onChange={(decay) => onChange({ ...process, decay: decay / 100 })}
+        />,
+        <ProcessKnob
+          key="damping"
+          label="damping"
+          value={Math.round(process.damping * 100)}
+          min={0}
+          max={100}
+          defaultValue={45}
+          suffix="%"
+          onChange={(damping) => onChange({ ...process, damping: damping / 100 })}
+        />,
+        <ProcessKnob
+          key="width"
+          label="width"
+          value={Math.round(process.width * 100)}
+          min={0}
+          max={200}
+          defaultValue={100}
+          suffix="%"
+          onChange={(width) => onChange({ ...process, width: width / 100 })}
+        />
+      )
+      break
+    case 'frequency-shift':
+      controls.push(
+        <ProcessKnob
+          key="shift"
+          label="shift"
+          value={Math.round(process.shiftHz)}
+          min={-12000}
+          max={12000}
+          defaultValue={35}
+          suffix="Hz"
+          signed
+          onChange={(shiftHz) => onChange({ ...process, shiftHz })}
+        />,
+        <ProcessKnob
+          key="feedback"
+          label="feedback"
+          value={Math.round(process.feedback * 100)}
+          min={-95}
+          max={95}
+          defaultValue={0}
+          suffix="%"
+          signed
+          onChange={(feedback) => onChange({ ...process, feedback: feedback / 100 })}
+        />,
+        <ProcessKnob
+          key="stereo"
+          label="stereo"
+          value={Math.round(process.stereo * 100)}
+          min={0}
+          max={200}
+          defaultValue={0}
+          suffix="%"
+          onChange={(stereo) => onChange({ ...process, stereo: stereo / 100 })}
+        />
+      )
+      break
+    case 'chorus':
+      controls.push(
+        <ProcessKnob
+          key="rate"
+          label="rate"
+          value={process.rateHz}
+          min={0.05}
+          max={20}
+          defaultValue={0.8}
+          suffix="Hz"
+          decimals={2}
+          onChange={(rateHz) => onChange({ ...process, rateHz })}
+        />,
+        <ProcessKnob
+          key="depth"
+          label="depth"
+          value={Math.round(process.depthMs * 10) / 10}
+          min={0}
+          max={50}
+          defaultValue={4}
+          suffix="ms"
+          decimals={1}
+          onChange={(depthMs) => onChange({ ...process, depthMs })}
+        />,
+        <ProcessKnob
+          key="delay"
+          label="delay"
+          value={Math.round(process.delayMs * 10) / 10}
+          min={0.1}
+          max={50}
+          defaultValue={7}
+          suffix="ms"
+          decimals={1}
+          onChange={(delayMs) => onChange({ ...process, delayMs })}
+        />,
+        <ProcessKnob
+          key="feedback"
+          label="feedback"
+          value={Math.round(process.feedback * 100)}
+          min={-95}
+          max={95}
+          defaultValue={15}
+          suffix="%"
+          signed
+          onChange={(feedback) => onChange({ ...process, feedback: feedback / 100 })}
+        />,
+        <ProcessKnob
+          key="stereo"
+          label="stereo"
+          value={Math.round(process.stereo * 100)}
+          min={0}
+          max={200}
+          defaultValue={100}
+          suffix="%"
+          onChange={(stereo) => onChange({ ...process, stereo: stereo / 100 })}
+        />
+      )
+      break
+    case 'dj-eq':
+      controls.push(
+        <ProcessKnob
+          key="low"
+          label="low"
+          value={Math.round(process.lowDb)}
+          min={-72}
+          max={24}
+          defaultValue={0}
+          suffix="dB"
+          signed
+          onChange={(lowDb) => onChange({ ...process, lowDb })}
+        />,
+        <ProcessKnob
+          key="mid"
+          label="mid"
+          value={Math.round(process.midDb)}
+          min={-72}
+          max={24}
+          defaultValue={0}
+          suffix="dB"
+          signed
+          onChange={(midDb) => onChange({ ...process, midDb })}
+        />,
+        <ProcessKnob
+          key="high"
+          label="high"
+          value={Math.round(process.highDb)}
+          min={-72}
+          max={24}
+          defaultValue={0}
+          suffix="dB"
+          signed
+          onChange={(highDb) => onChange({ ...process, highDb })}
+        />
+      )
+      break
+    case 'tone':
+      controls.push(
+        <ProcessKnob
+          key="cutoff"
+          label="cutoff"
+          value={Math.round(process.cutoffHz)}
+          min={20}
+          max={20000}
+          defaultValue={12000}
+          suffix="Hz"
+          onChange={(cutoffHz) => onChange({ ...process, cutoffHz })}
+        />,
+        <ProcessKnob
+          key="resonance"
+          label="resonance"
+          value={Math.round(process.resonance * 100)}
+          min={0}
+          max={99}
+          defaultValue={15}
+          suffix="%"
+          onChange={(resonance) => onChange({ ...process, resonance: resonance / 100 })}
+        />,
+        <ProcessKnob
+          key="drive"
+          label="drive"
+          value={Math.round(process.drive)}
+          min={1}
+          max={32}
+          defaultValue={1}
+          suffix="×"
+          onChange={(drive) => onChange({ ...process, drive })}
+        />
+      )
+      break
   }
   controls.push(
     <ProcessKnob
@@ -634,7 +989,7 @@ function ShapeProcessControls({
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${controls.length}, minmax(0, 1fr))`,
+        gridTemplateColumns: `repeat(${Math.min(controls.length, 4)}, minmax(0, 1fr))`,
         alignItems: 'start',
         columnGap: 2,
         rowGap: 4
@@ -708,6 +1063,89 @@ function ShapeClipInspector({
       ? targets[0].transform.character
       : null
   const enabled = targets.length > 0
+  const inspectorShellStyle: React.CSSProperties = {
+    width: 248,
+    flex: 'none',
+    borderLeft: '1px solid var(--ra-border)',
+    background: 'var(--ra-bg-bar)',
+    padding: '12px 11px',
+    overflowY: 'auto'
+  }
+  const inspectorHeaderStyle: React.CSSProperties = {
+    height: 20,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 7,
+    borderBottom: '1px solid var(--ra-border)'
+  }
+  if (!enabled) {
+    return (
+      <aside aria-label="clip inspector — no selection" style={inspectorShellStyle}>
+        <div style={inspectorHeaderStyle}>
+          <span
+            style={{
+              fontSize: 9,
+              color: 'var(--ra-text-3)',
+              letterSpacing: '0.08em'
+            }}
+          >
+            INSPECTOR
+          </span>
+        </div>
+        <div
+          aria-hidden="true"
+          style={{
+            marginTop: 10,
+            padding: 8,
+            border: '1px solid color-mix(in srgb, var(--ra-border) 72%, transparent)',
+            background: 'color-mix(in srgb, var(--ra-bg-row-sub) 58%, transparent)',
+            opacity: 0.48
+          }}
+        >
+          <div
+            style={{
+              width: '38%',
+              height: 5,
+              background: 'var(--ra-border-strong)',
+              marginBottom: 9
+            }}
+          />
+          <div
+            style={{
+              height: 26,
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row)',
+              marginBottom: 6
+            }}
+          />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 0.7fr 1fr',
+              gap: 4
+            }}
+          >
+            <span style={{ height: 18, background: 'var(--ra-bg-row-active)' }} />
+            <span style={{ height: 18, background: 'var(--ra-bg-row-active)' }} />
+            <span style={{ height: 18, background: 'var(--ra-bg-row-active)' }} />
+          </div>
+        </div>
+        <div
+          style={{
+            marginTop: 10,
+            color: 'var(--ra-text-4)',
+            fontSize: 8,
+            lineHeight: 1.55,
+            letterSpacing: '0.04em'
+          }}
+        >
+          SELECT A CLIP HEADER
+          <br />
+          OR DRAG A REGION IN A CLIP
+        </div>
+      </aside>
+    )
+  }
   const targetLabel = rangeSelection
     ? `region · ${targets[0]?.lane.source.name ?? 'clip'}`
     : targets.length === 1
@@ -739,27 +1177,8 @@ function ShapeClipInspector({
   }
 
   return (
-    <aside
-      aria-label="clip inspector"
-      style={{
-        width: 248,
-        flex: 'none',
-        borderLeft: '1px solid var(--ra-border)',
-        background: 'var(--ra-bg-bar)',
-        padding: '12px 11px',
-        overflowY: 'auto'
-      }}
-    >
-      <div
-        title={targetLabel}
-        style={{
-          height: 20,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 7,
-          borderBottom: '1px solid var(--ra-border)'
-        }}
-      >
+    <aside aria-label="clip inspector" style={inspectorShellStyle}>
+      <div title={targetLabel} style={inspectorHeaderStyle}>
         <span
           style={{
             flex: 'none',
@@ -1163,15 +1582,23 @@ function ShapeClipInspector({
         )
       })}
       <button
-        disabled={processSession !== null || processBaking}
+        data-shape-intervention-picker="true"
+        disabled={(processSession?.dirty ?? false) || processBaking}
         style={{
           ...buttonStyle(),
           display: 'block',
           width: 'auto',
           marginTop: 8,
-          opacity: processSession === null && !processBaking ? 1 : 0.35
+          opacity: !processSession?.dirty && !processBaking ? 1 : 0.35
         }}
-        onClick={() => setProcessPickerOpen((open) => !open)}
+        onClick={() => {
+          // A clean expanded card normally collapses on an outside pointer
+          // down. Treat the picker as one atomic action instead: collapse the
+          // clean card and open the picker from this same registered click so
+          // layout movement cannot make the button dodge the pointer.
+          if (processSession) onProcessCancel()
+          setProcessPickerOpen((open) => !open)
+        }}
       >
         + intervention
       </button>
@@ -1266,12 +1693,213 @@ function laneMembers(
   })
 }
 
+function ShapeDonorTray({
+  rifff,
+  rows,
+  draft,
+  muted,
+  soloed,
+  playing,
+  playheadPct,
+  onClose,
+  onAdd,
+  onMute,
+  onSolo,
+  onToggleMuteAll
+}: {
+  rifff: Rifff
+  rows: readonly ShapeDonorRow[]
+  draft: ShapeDraft
+  muted: ReadonlySet<string>
+  soloed: string | null
+  playing: boolean
+  playheadPct: number
+  onClose: () => void
+  onAdd: (row: ShapeDonorRow) => void
+  onMute: (rowId: string) => void
+  onSolo: (rowId: string) => void
+  onToggleMuteAll: () => void
+}): React.JSX.Element {
+  const allMuted = rows.length > 0 && rows.every((row) => muted.has(row.id))
+  return (
+    <aside
+      aria-label="edit donor riff"
+      style={{
+        width: 248,
+        height: '100%',
+        flex: 'none',
+        borderLeft: '1px solid var(--ra-border)',
+        background: 'var(--ra-bg-bar)',
+        padding: '10px 8px',
+        overflowY: 'auto'
+      }}
+    >
+      <div
+        style={{
+          minHeight: 27,
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) auto',
+          alignItems: 'center',
+          gap: 5,
+          borderBottom: '1px solid var(--ra-border)',
+          marginBottom: 7,
+          paddingBottom: 6
+        }}
+      >
+        <div
+          style={{
+            minWidth: 0,
+            color: 'var(--ra-text-2)',
+            textAlign: 'left'
+          }}
+        >
+          <span
+            style={{
+              display: 'block',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontSize: 9,
+              letterSpacing: '0.08em'
+            }}
+          >
+            {rifff.name || 'untitled riff'}
+          </span>
+          <span style={{ display: 'block', marginTop: 2, fontSize: 7, color: 'var(--ra-text-4)' }}>
+            DONOR RIFF · {Math.round(rifff.bpm)} BPM
+          </span>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="close donor riff"
+          style={{ ...buttonStyle(), width: 25, padding: 0 }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {rows.map((row) => {
+          const underlyingMuted = muted.has(row.id)
+          const rowSoloed = soloed === row.id
+          const audible = crossItemIsAudible(row.id, underlyingMuted, soloed)
+          const added = shapeDonorStemIsPresent(draft, row)
+          const tileWidthPct = Math.max(
+            0.01,
+            (row.stem.barLength / Math.max(0.01, rifff.barLength)) * 100
+          )
+          return (
+            <div
+              key={row.id}
+              style={{
+                minHeight: 48,
+                display: 'grid',
+                gridTemplateColumns: '25px 25px 25px minmax(0, 1fr)',
+                gap: 3,
+                padding: 4,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row)',
+                opacity: audible ? 1 : 0.58,
+                transition: 'opacity 100ms ease-out'
+              }}
+            >
+              <button
+                onClick={() => onAdd(row)}
+                disabled={added || draft.lanes.length >= MAX_RIFFF_STEM_SLOTS}
+                title={added ? 'already in edited riff' : 'add stem to edited riff'}
+                aria-label={added ? 'stem already in edited riff' : 'add stem to edited riff'}
+                style={{
+                  ...buttonStyle(added),
+                  width: 25,
+                  padding: 0,
+                  opacity: added || draft.lanes.length >= MAX_RIFFF_STEM_SLOTS ? 0.5 : 1
+                }}
+              >
+                {added ? '✓' : '<'}
+              </button>
+              <button
+                onClick={() => onMute(row.id)}
+                title={underlyingMuted ? 'unmute' : 'mute'}
+                data-active={underlyingMuted}
+                data-control="mute"
+                className="ra-shape-donor-row-button"
+              >
+                m
+              </button>
+              <button
+                onClick={() => onSolo(row.id)}
+                title={rowSoloed ? 'unsolo' : 'solo'}
+                data-active={rowSoloed}
+                data-control="solo"
+                className="ra-shape-donor-row-button"
+              >
+                s
+              </button>
+              <div
+                style={{
+                  position: 'relative',
+                  minWidth: 0,
+                  height: 38,
+                  overflow: 'hidden',
+                  background: 'var(--ra-bg-row-active)'
+                }}
+              >
+                <RepeatedWaveform
+                  path={row.stem.path}
+                  color={typeColorVar(row.stem.type)}
+                  tileWidthPct={tileWidthPct}
+                />
+                {playing && (
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      bottom: 0,
+                      left: `${playheadPct}%`,
+                      width: 1,
+                      background: 'color-mix(in srgb, var(--ra-text) 35%, transparent)'
+                    }}
+                  />
+                )}
+                <span
+                  style={{
+                    position: 'absolute',
+                    left: 4,
+                    top: 3,
+                    maxWidth: 'calc(100% - 8px)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    color: 'var(--ra-text-2)',
+                    fontSize: 8,
+                    textShadow: '0 1px 2px var(--ra-bg)'
+                  }}
+                >
+                  {row.stem.name || `stem ${row.slot}`}
+                </span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <button
+        onClick={onToggleMuteAll}
+        disabled={rows.length === 0}
+        style={{ ...buttonStyle(), width: '100%', marginTop: 7 }}
+      >
+        {allMuted ? 'unmute all' : 'mute all'}
+      </button>
+    </aside>
+  )
+}
+
 function ShapeLaneRow({
   draft,
   lane,
   selected,
   muted,
   soloed,
+  editingLocked,
   snapSize,
   cursorBar,
   cursorTarget,
@@ -1300,6 +1928,7 @@ function ShapeLaneRow({
   selected: ReadonlySet<string>
   muted: boolean
   soloed: boolean
+  editingLocked: boolean
   snapSize: number
   cursorBar: number
   cursorTarget: ShapeCursorTarget | null
@@ -1403,8 +2032,9 @@ function ShapeLaneRow({
       >
         <div
           role="button"
-          tabIndex={0}
-          title="select every clip in this stem"
+          tabIndex={editingLocked ? -1 : 0}
+          aria-disabled={editingLocked}
+          title={editingLocked ? undefined : 'select every clip in this stem'}
           onPointerDown={(event) => {
             if (event.button !== 0) return
             onLaneSelect(
@@ -1429,6 +2059,7 @@ function ShapeLaneRow({
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             cursor: 'pointer',
+            pointerEvents: editingLocked ? 'none' : 'auto',
             background: wholeLaneSelected
               ? `color-mix(in srgb, ${color} 13%, transparent)`
               : undefined
@@ -1462,6 +2093,7 @@ function ShapeLaneRow({
             ariaLabel={`${lane.source.name} volume`}
             tooltip="per-stem volume"
             inkColor="var(--ra-text-2)"
+            disabled={editingLocked}
           />
         </div>
       </div>
@@ -1475,7 +2107,8 @@ function ShapeLaneRow({
         style={{
           position: 'relative',
           borderBottom: '1px solid var(--ra-border)',
-          overflow: 'hidden'
+          overflow: 'hidden',
+          pointerEvents: editingLocked ? 'none' : 'auto'
         }}
       >
         {lane.fragments.map((fragment) => {
@@ -1939,7 +2572,9 @@ function ShapeLaneRow({
           gap: 3,
           padding: '0 6px',
           borderLeft: '1px solid var(--ra-border)',
-          borderBottom: '1px solid var(--ra-border)'
+          borderBottom: '1px solid var(--ra-border)',
+          opacity: editingLocked ? 0.42 : 1,
+          pointerEvents: editingLocked ? 'none' : 'auto'
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
@@ -1978,7 +2613,7 @@ function ShapeLaneRow({
           <button
             disabled={rolling || draft.lanes.length <= 1}
             aria-label={`remove ${lane.source.name} stem`}
-            title={draft.lanes.length <= 1 ? 'Shape needs at least one stem' : 'remove stem'}
+            title={draft.lanes.length <= 1 ? 'the riff needs at least one stem' : 'remove stem'}
             onClick={onRemove}
             style={{
               ...buttonStyle(),
@@ -2054,6 +2689,8 @@ export function ShapePanel({
   onPreviewStopReady: (stop: (() => void) | null) => void
   active: boolean
 }): React.JSX.Element {
+  const rifffs = useAppSelector((state) => state.rifffs)
+  const volumes = useAppSelector((state) => state.vol)
   const playing = usePlaying()
   const pos = usePos()
   const { preview, stop, owns } = useCrossPreview('shape-preview')
@@ -2070,6 +2707,9 @@ export function ShapePanel({
   const [keptLabel, setKeptLabel] = useState<string | null>(null)
   const [renderEpoch, setRenderEpoch] = useState(0)
   const [playbackIntent, setPlaybackIntent] = useState(false)
+  const [donorRiffId, setDonorRiffId] = useState<string | null>(null)
+  const [donorMuted, setDonorMuted] = useState<Set<string>>(new Set())
+  const [donorDragActive, setDonorDragActive] = useState(false)
   const savingRef = useRef(false)
   const [cursorBar, setCursorBar] = useState(0)
   const [cursorTarget, setCursorTarget] = useState<ShapeCursorTarget | null>(null)
@@ -2115,7 +2755,7 @@ export function ShapePanel({
   const draftRef = useRef(draft)
   const positionRef = useRef(pos)
   const playbackIntentRef = useRef(false)
-  const smoothNextPreviewRef = useRef(false)
+  const donorDragDepthRef = useRef(0)
   const laneRequestRef = useRef(new Map<string, string>())
   const asyncRequestEpochRef = useRef(0)
   const mountedRef = useRef(true)
@@ -2158,6 +2798,16 @@ export function ShapePanel({
     () => laneMembers(draft, rendered, mode, muted, soloed),
     [draft, rendered, mode, muted, soloed]
   )
+  const donorRifff = donorRiffId ? (rifffs[donorRiffId] ?? null) : null
+  const donorRows = useMemo(
+    () => (donorRifff ? shapeDonorRows(donorRifff, volumes) : []),
+    [donorRifff, volumes]
+  )
+  const donorMembers = useMemo(
+    () => shapeDonorMembers(donorRows, donorMuted, soloed),
+    [donorMuted, donorRows, soloed]
+  )
+  const previewMembers = useMemo(() => [...members, ...donorMembers], [donorMembers, members])
 
   const cleanupRetiredPreviews = useCallback((): void => {
     const paths = [...retiredPreviewPathsRef.current]
@@ -2171,16 +2821,13 @@ export function ShapePanel({
       if (mode === 'shaped' && rendered.length !== draft.lanes.length) return
       playbackIntentRef.current = true
       setPlaybackIntent(true)
-      const smoothSwap = smoothNextPreviewRef.current
       const renderedVersion = renderedVersionRef.current
-      smoothNextPreviewRef.current = false
       void preview(
-        `riff:${draft.id}:${mode}`,
-        members,
+        `riff:${draft.id}:${mode}:donor:${donorRiffId ?? 'none'}`,
+        previewMembers,
         draft.targetBpm,
         draft.loopBars,
-        fromBar,
-        smoothSwap
+        fromBar
       ).then((loaded) => {
         if (loaded && renderedVersionRef.current === renderedVersion) cleanupRetiredPreviews()
       })
@@ -2192,9 +2839,10 @@ export function ShapePanel({
       draft.lanes.length,
       draft.loopBars,
       draft.targetBpm,
-      members,
+      donorRiffId,
       mode,
       preview,
+      previewMembers,
       cleanupRetiredPreviews,
       rendered.length
     ]
@@ -2263,16 +2911,40 @@ export function ShapePanel({
           if (jobRef.current !== jobId) return
           console.error('ShapePanel: preview materialization failed:', error)
           setRenderState('error')
-          stopPreview()
+          // Keep the last valid preview audible. A failed offline render must
+          // not turn a knob gesture into an unexpected transport Stop; the
+          // next valid edit can replace the audio in place as usual.
         })
     }, SHAPE_RENDER_IDLE_MS)
     return () => window.clearTimeout(id)
-  }, [active, renderRequest, renderEpoch, stopPreview])
+  }, [active, renderRequest, renderEpoch])
 
   useEffect(() => {
     if (!playing || renderState !== 'ready' || !playbackIntentRef.current || !owns()) return
     beginPreview(positionRef.current % draft.loopBars)
   }, [beginPreview, draft.loopBars, owns, playing, renderState])
+
+  useEffect(() => {
+    if (!donorRiffId || donorRifff) return
+    queueMicrotask(() => {
+      setDonorRiffId(null)
+      setDonorMuted(new Set())
+      setSoloed((current) => (current && current.startsWith(`${donorRiffId}:`) ? null : current))
+    })
+  }, [donorRiffId, donorRifff])
+
+  useEffect(() => {
+    const clearDragTarget = (): void => {
+      donorDragDepthRef.current = 0
+      setDonorDragActive(false)
+    }
+    window.addEventListener('dragend', clearDragTarget)
+    window.addEventListener('drop', clearDragTarget)
+    return () => {
+      window.removeEventListener('dragend', clearDragTarget)
+      window.removeEventListener('drop', clearDragTarget)
+    }
+  }, [])
 
   useEffect(() => {
     const retiredPaths = retiredPreviewPathsRef.current
@@ -2713,6 +3385,7 @@ export function ShapePanel({
       if (!(event.target instanceof Element)) return
       const card = event.target.closest('[data-shape-intervention-card]')
       if (card?.getAttribute('data-shape-intervention-card') === processSession.unitId) return
+      if (event.target.closest('[data-shape-intervention-picker]')) return
       cancelShapeProcess()
     }
     document.addEventListener('pointerdown', collapseCleanIntervention, true)
@@ -3036,7 +3709,7 @@ export function ShapePanel({
     stopPreview
   ])
 
-  const shapePlaying = playing && playbackIntent
+  const shapePlaying = playing && playbackIntent && owns()
   const shownPosition = shapePlaying ? pos % draft.loopBars : cursorBar
   const playheadPct = (shownPosition / draft.loopBars) * 100
   const rulerSnapBars = SNAP_CHOICES[snapIndex].bars
@@ -3044,6 +3717,21 @@ export function ShapePanel({
     rulerSnapBars < 1 ? shapeGridSizePct(draft.loopBars, rulerSnapBars) : null
   return (
     <div
+      onDragEnter={(event) => {
+        if (Array.from(event.dataTransfer.types).includes(SHELF_RIFF_DRAG_TYPE)) {
+          donorDragDepthRef.current += 1
+          setDonorDragActive(true)
+        }
+      }}
+      onDragLeave={(event) => {
+        if (!Array.from(event.dataTransfer.types).includes(SHELF_RIFF_DRAG_TYPE)) return
+        donorDragDepthRef.current = Math.max(0, donorDragDepthRef.current - 1)
+        if (donorDragDepthRef.current === 0) setDonorDragActive(false)
+      }}
+      onDrop={() => {
+        donorDragDepthRef.current = 0
+        setDonorDragActive(false)
+      }}
       style={{
         height: '100%',
         width: '100%',
@@ -3071,6 +3759,29 @@ export function ShapePanel({
         .ra-shape-clip-menu button:hover {
           background: #4a4a4a !important;
           color: #ffffff !important;
+        }
+        .ra-shape-donor-row-button {
+          display: grid;
+          place-items: center;
+          min-width: 0;
+          border: 1px solid var(--ra-border);
+          border-radius: 0;
+          padding: 0;
+          background: transparent;
+          color: var(--ra-text-2);
+          font-family: inherit;
+          font-size: 10px;
+          cursor: pointer;
+        }
+        .ra-shape-donor-row-button[data-control='mute'][data-active='true'] {
+          border-color: var(--ra-mute-on);
+          background: var(--ra-mute-on);
+          color: var(--ra-mute-on-ink);
+        }
+        .ra-shape-donor-row-button[data-control='solo'][data-active='true'] {
+          border-color: color-mix(in srgb, var(--ra-solo-on) 75%, var(--ra-bg-page));
+          background: color-mix(in srgb, var(--ra-solo-on) 75%, var(--ra-bg-page));
+          color: var(--ra-solo-on-ink);
         }
         .ra-shape-clip-edge {
           position: absolute;
@@ -3103,11 +3814,7 @@ export function ShapePanel({
         }}
       >
         <button
-          onClick={() =>
-            playing && playbackIntentRef.current && owns()
-              ? stopPreview()
-              : beginPreview(playbackStartBar(false))
-          }
+          onClick={() => (shapePlaying ? stopPreview() : beginPreview(playbackStartBar(false)))}
           style={buttonStyle(shapePlaying)}
         >
           {shapePlaying ? '■ stop' : '▶ play'}
@@ -3143,9 +3850,9 @@ export function ShapePanel({
           onClick={() => setMode((value) => (value === 'shaped' ? 'original' : 'shaped'))}
           disabled={processSession !== null || processBaking}
           style={buttonStyle(mode === 'original')}
-          title="switch the preview between your Shape edits and the untouched source riff"
+          title="switch the preview between your edits and the untouched source riff"
         >
-          preview: {mode === 'original' ? 'original' : 'shaped'}
+          preview: {mode === 'original' ? 'original' : 'edited'}
         </button>
         <span style={{ color: 'var(--ra-text-4)', fontSize: 9 }}>{draft.targetBpm} bpm</span>
         <button
@@ -3233,7 +3940,7 @@ export function ShapePanel({
             onClose()
           }}
           disabled={processBaking}
-          aria-label="close shape riff"
+          aria-label="close riff editor"
           style={buttonStyle()}
         >
           ×
@@ -3246,8 +3953,7 @@ export function ShapePanel({
             overflow: 'auto',
             borderTop: '1px solid var(--ra-border)',
             flex: 1,
-            minWidth: 0,
-            pointerEvents: processSession || processBaking ? 'none' : 'auto'
+            minWidth: 0
           }}
         >
           <div
@@ -3262,7 +3968,7 @@ export function ShapePanel({
           >
             <div style={{ borderRight: '1px solid var(--ra-border)' }} />
             <div
-              aria-label="shape riff timeline ruler"
+              aria-label="edit riff timeline ruler"
               title="click to set the edit position"
               onPointerDown={(event) => {
                 if (event.button !== 0) return
@@ -3276,6 +3982,7 @@ export function ShapePanel({
               style={{
                 position: 'relative',
                 cursor: 'crosshair',
+                pointerEvents: processSession || processBaking ? 'none' : 'auto',
                 backgroundImage: rulerMinorGridPct
                   ? 'linear-gradient(to right, var(--ra-border-strong) 1px, transparent 1px), linear-gradient(to right, color-mix(in srgb, var(--ra-border) 55%, transparent) 1px, transparent 1px)'
                   : 'linear-gradient(to right, var(--ra-border-strong) 1px, transparent 1px)',
@@ -3310,6 +4017,7 @@ export function ShapePanel({
               selected={selected}
               muted={muted.has(lane.id)}
               soloed={soloed === lane.id}
+              editingLocked={processSession !== null || processBaking}
               snapSize={SNAP_CHOICES[snapIndex].bars}
               cursorBar={cursorBar}
               cursorTarget={cursorTarget}
@@ -3384,10 +4092,7 @@ export function ShapePanel({
                   return next
                 })
               }
-              onSolo={() => {
-                smoothNextPreviewRef.current = playing && playbackIntentRef.current && owns()
-                setSoloed((current) => (current === lane.id ? null : lane.id))
-              }}
+              onSolo={() => setSoloed((current) => (current === lane.id ? null : lane.id))}
               onGainPreview={(gain) =>
                 setDraft((current) =>
                   current ? previewShapeLaneGain(current, lane.id, gain) : current
@@ -3486,7 +4191,12 @@ export function ShapePanel({
                 )}
                 <button
                   onClick={() => void addDiscoveredLane(kind)}
-                  disabled={!!discoverBusy || draft.lanes.length >= MAX_RIFFF_STEM_SLOTS}
+                  disabled={
+                    processSession !== null ||
+                    processBaking ||
+                    !!discoverBusy ||
+                    draft.lanes.length >= MAX_RIFFF_STEM_SLOTS
+                  }
                   style={buttonStyle()}
                 >
                   {discoverBusy === kind ? '…' : DISCOVER_SLOT_KIND_LABEL[kind]}
@@ -3496,14 +4206,24 @@ export function ShapePanel({
             <span style={{ width: 1, height: 18, background: 'var(--ra-border)' }} />
             <button
               onClick={() => void addDiscoveredLane('random')}
-              disabled={!!discoverBusy || draft.lanes.length >= MAX_RIFFF_STEM_SLOTS}
+              disabled={
+                processSession !== null ||
+                processBaking ||
+                !!discoverBusy ||
+                draft.lanes.length >= MAX_RIFFF_STEM_SLOTS
+              }
               style={buttonStyle()}
             >
               {discoverBusy === 'random' ? '…' : '+ random'}
             </button>
             <button
               onClick={() => void addSampleLane()}
-              disabled={!!discoverBusy || draft.lanes.length >= MAX_RIFFF_STEM_SLOTS}
+              disabled={
+                processSession !== null ||
+                processBaking ||
+                !!discoverBusy ||
+                draft.lanes.length >= MAX_RIFFF_STEM_SLOTS
+              }
               style={buttonStyle()}
             >
               {discoverBusy === 'sample' ? '…' : '+ sample'}
@@ -3577,28 +4297,140 @@ export function ShapePanel({
             }}
           />
         </div>
-        <ShapeClipInspector
-          draft={draft}
-          selected={selected}
-          rangeSelection={rangeSelection}
-          onTransform={applyInspectorTransform}
-          onRate={applyInspectorRate}
-          onCharacter={applyInspectorCharacter}
-          onFormant={applyInspectorFormant}
-          processRack={processRack}
-          processSession={processSession}
-          onProcessRackAdd={addProcessRackUnit}
-          onProcessRackRemove={removeProcessRackUnit}
-          onProcessOpen={openShapeProcess}
-          onProcessChange={previewShapeProcess}
-          onProcessBypass={bypassShapeProcess}
-          onProcessApply={() => void applyShapeProcess()}
-          onProcessAddStem={() => void addShapeProcessStem()}
-          onProcessCancel={cancelShapeProcess}
-          processBaking={processBaking}
-          processBakeDestination={processBakeDestination}
-          processError={processError}
-        />
+        <div
+          style={{
+            position: 'relative',
+            width: 248,
+            minHeight: 0,
+            flex: 'none',
+            display: 'flex'
+          }}
+        >
+          {donorRifff ? (
+            <ShapeDonorTray
+              rifff={donorRifff}
+              rows={donorRows}
+              draft={draft}
+              muted={donorMuted}
+              soloed={soloed}
+              playing={shapePlaying}
+              playheadPct={
+                shapePlaying ? ((pos % donorRifff.barLength) / donorRifff.barLength) * 100 : 0
+              }
+              onClose={() => {
+                const donorIds = new Set(donorRows.map((row) => row.id))
+                setDonorRiffId(null)
+                setDonorMuted(new Set())
+                setSoloed((current) => (current && donorIds.has(current) ? null : current))
+              }}
+              onAdd={(row) => {
+                setDraft((current) =>
+                  current &&
+                  current.id === draft.id &&
+                  current.lanes.length < MAX_RIFFF_STEM_SLOTS &&
+                  !shapeDonorStemIsPresent(current, row)
+                    ? addShapeLane(current, row.stem, row.gain)
+                    : current
+                )
+                // "Pop over" transfers monitoring to the new Shape lane.
+                // Leaving the donor copy audible would play the same stem
+                // twice in phase and create a misleading level jump.
+                setDonorMuted((current) => new Set(current).add(row.id))
+                setSoloed((current) => (current === row.id ? null : current))
+              }}
+              onMute={(rowId) =>
+                setDonorMuted((current) => {
+                  const next = new Set(current)
+                  if (next.has(rowId)) next.delete(rowId)
+                  else next.add(rowId)
+                  return next
+                })
+              }
+              onSolo={(rowId) => setSoloed((current) => toggleCrossSoloedId(current, rowId))}
+              onToggleMuteAll={() =>
+                setDonorMuted((current) => {
+                  const allMuted =
+                    donorRows.length > 0 && donorRows.every((row) => current.has(row.id))
+                  return allMuted ? new Set() : new Set(donorRows.map((row) => row.id))
+                })
+              }
+            />
+          ) : (
+            <ShapeClipInspector
+              draft={draft}
+              selected={selected}
+              rangeSelection={rangeSelection}
+              onTransform={applyInspectorTransform}
+              onRate={applyInspectorRate}
+              onCharacter={applyInspectorCharacter}
+              onFormant={applyInspectorFormant}
+              processRack={processRack}
+              processSession={processSession}
+              onProcessRackAdd={addProcessRackUnit}
+              onProcessRackRemove={removeProcessRackUnit}
+              onProcessOpen={openShapeProcess}
+              onProcessChange={previewShapeProcess}
+              onProcessBypass={bypassShapeProcess}
+              onProcessApply={() => void applyShapeProcess()}
+              onProcessAddStem={() => void addShapeProcessStem()}
+              onProcessCancel={cancelShapeProcess}
+              processBaking={processBaking}
+              processBakeDestination={processBakeDestination}
+              processError={processError}
+            />
+          )}
+          {donorDragActive && (
+            <div
+              role="button"
+              tabIndex={-1}
+              aria-label="drop shelf riff as edit donor"
+              onDragOver={(event) => {
+                if (!Array.from(event.dataTransfer.types).includes(SHELF_RIFF_DRAG_TYPE)) return
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'copy'
+              }}
+              onDrop={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                donorDragDepthRef.current = 0
+                setDonorDragActive(false)
+                const groupId = event.dataTransfer.getData(SHELF_RIFF_DRAG_TYPE)
+                if (!groupId || !rifffs[groupId]) return
+                const rows = shapeDonorRows(rifffs[groupId], volumes)
+                setDonorRiffId(groupId)
+                setDonorMuted(new Set(rows.map((row) => row.id)))
+              }}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 20,
+                display: 'grid',
+                placeItems: 'center',
+                padding: 14,
+                borderLeft: '1px solid var(--ra-border-strong)',
+                background: 'color-mix(in srgb, var(--ra-type-fx) 10%, var(--ra-bg-bar))'
+              }}
+            >
+              <div
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'grid',
+                  placeItems: 'center',
+                  border: '1px dashed color-mix(in srgb, var(--ra-type-fx) 48%, var(--ra-border))',
+                  color: 'color-mix(in srgb, var(--ra-type-fx) 62%, var(--ra-text-2))',
+                  fontSize: 9,
+                  letterSpacing: '0.08em',
+                  textAlign: 'center'
+                }}
+              >
+                DROP RIFF HERE
+                <br />
+                TO OPEN DONOR TRAY
+              </div>
+            </div>
+          )}
+        </div>
       </div>
       <div
         style={{

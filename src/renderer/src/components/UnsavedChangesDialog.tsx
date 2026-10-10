@@ -30,7 +30,7 @@ export function UnsavedChangesDialog({
   return (
     <ConfirmationDialog
       message="this project has unsaved changes."
-      detail={hasShapeChanges ? 'Saving will add the open Shape riff to the shelf.' : undefined}
+      detail={hasShapeChanges ? 'Saving will add the open edited riff to the shelf.' : undefined}
       actions={[
         { label: 'cancel', onClick: onCancel },
         { label: 'discard', onClick: onDiscard, danger: true },

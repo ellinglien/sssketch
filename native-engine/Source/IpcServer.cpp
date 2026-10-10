@@ -1559,6 +1559,8 @@ namespace sssketch
                 (double) payload.getProperty("primary", 0.0),
                 (double) payload.getProperty("secondary", 0.0),
                 (double) payload.getProperty("tertiary", 0.0),
+                (double) payload.getProperty("quaternary", 0.0),
+                (double) payload.getProperty("quinary", 0.0),
                 (double) payload.getProperty("mix", -1.0),
                 payload.getProperty("outputPath", "").toString(),
                 info,

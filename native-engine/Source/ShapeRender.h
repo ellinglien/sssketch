@@ -39,14 +39,16 @@ namespace sssketch
         juce::String& errorOut);
 
     /** Offline, deterministic treatment used by Shape's single Process Clip
-     * slot. The three generic parameters are interpreted by processType;
-     * mix is always a dry/wet blend. */
+     * slot. The generic parameters are interpreted by processType; mix is
+     * always a dry/wet blend. */
     bool renderShapeProcessSourceToWav(
         const juce::String& sourcePath,
         const juce::String& processType,
         double primary,
         double secondary,
         double tertiary,
+        double quaternary,
+        double quinary,
         double mix,
         const juce::String& outputPath,
         ShapeRenderInfo& infoOut,

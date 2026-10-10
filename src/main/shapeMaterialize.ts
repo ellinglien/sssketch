@@ -121,6 +121,8 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
   primary: number
   secondary: number
   tertiary: number
+  quaternary: number
+  quinary: number
   mix: number
 } {
   switch (process.type) {
@@ -130,6 +132,8 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
         primary: process.drive,
         secondary: process.bias,
         tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
         mix: process.mix
       }
     case 'saturation':
@@ -138,6 +142,8 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
         primary: process.drive,
         secondary: process.bias,
         tertiary: process.outputDb,
+        quaternary: 0,
+        quinary: 0,
         mix: process.mix
       }
     case 'hard-clip':
@@ -146,6 +152,8 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
         primary: process.threshold,
         secondary: process.symmetry,
         tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
         mix: process.mix
       }
     case 'rectify':
@@ -154,6 +162,8 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
         primary: process.mode === 'full' ? 1 : 0,
         secondary: process.drive,
         tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
         mix: process.mix
       }
     case 'bit-crush':
@@ -162,6 +172,8 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
         primary: process.bits,
         secondary: process.dither,
         tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
         mix: process.mix
       }
     case 'rate-crush':
@@ -170,6 +182,8 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
         primary: process.factor,
         secondary: process.jitter,
         tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
         mix: process.mix
       }
     case 'ring-mod':
@@ -178,6 +192,8 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
         primary: process.frequencyHz,
         secondary: process.shape,
         tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
         mix: process.mix
       }
     case 'comb':
@@ -186,6 +202,8 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
         primary: process.delayMs,
         secondary: process.feedback,
         tertiary: process.damping,
+        quaternary: 0,
+        quinary: 0,
         mix: process.mix
       }
     case 'smear':
@@ -194,6 +212,78 @@ export function nativeShapeProcessPayload(process: ShapeClipProcessV1): {
         primary: process.timeMs,
         secondary: process.scatter,
         tertiary: 0,
+        quaternary: 0,
+        quinary: 0,
+        mix: process.mix
+      }
+    case 'compand':
+      return {
+        processType: process.type,
+        primary: process.drive,
+        secondary: process.compand,
+        tertiary: process.symmetry,
+        quaternary: process.outputDb,
+        quinary: 0,
+        mix: process.mix
+      }
+    case 'codec-damage':
+      return {
+        processType: process.type,
+        primary: process.quality,
+        secondary: process.loss,
+        tertiary: process.packetMs,
+        quaternary: process.bandwidthHz,
+        quinary: 0,
+        mix: process.mix
+      }
+    case 'short-room':
+      return {
+        processType: process.type,
+        primary: process.sizeMs,
+        secondary: process.decay,
+        tertiary: process.damping,
+        quaternary: process.width,
+        quinary: 0,
+        mix: process.mix
+      }
+    case 'frequency-shift':
+      return {
+        processType: process.type,
+        primary: process.shiftHz,
+        secondary: process.feedback,
+        tertiary: process.stereo,
+        quaternary: 0,
+        quinary: 0,
+        mix: process.mix
+      }
+    case 'chorus':
+      return {
+        processType: process.type,
+        primary: process.rateHz,
+        secondary: process.depthMs,
+        tertiary: process.delayMs,
+        quaternary: process.feedback,
+        quinary: process.stereo,
+        mix: process.mix
+      }
+    case 'dj-eq':
+      return {
+        processType: process.type,
+        primary: process.lowDb,
+        secondary: process.midDb,
+        tertiary: process.highDb,
+        quaternary: 0,
+        quinary: 0,
+        mix: process.mix
+      }
+    case 'tone':
+      return {
+        processType: process.type,
+        primary: process.cutoffHz,
+        secondary: process.resonance,
+        tertiary: process.drive,
+        quaternary: 0,
+        quinary: 0,
         mix: process.mix
       }
   }

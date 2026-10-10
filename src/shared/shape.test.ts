@@ -655,7 +655,29 @@ describe('Shape draft', () => {
       { type: 'rate-crush', factor: 12, jitter: 0.5, mix: 0.9 },
       { type: 'ring-mod', frequencyHz: 173, shape: 0.6, mix: 0.5 },
       { type: 'comb', delayMs: 17, feedback: -0.4, damping: 0.7, mix: 0.7 },
-      { type: 'smear', timeMs: 90, scatter: 0.6, mix: 0.8 }
+      { type: 'smear', timeMs: 90, scatter: 0.6, mix: 0.8 },
+      { type: 'compand', drive: 16, compand: 0.8, symmetry: -0.2, outputDb: -9, mix: 1 },
+      {
+        type: 'codec-damage',
+        quality: 23,
+        loss: 0.4,
+        packetMs: 32,
+        bandwidthHz: 6000,
+        mix: 0.9
+      },
+      { type: 'short-room', sizeMs: 45, decay: 0.7, damping: 0.2, width: 1.5, mix: 0.4 },
+      { type: 'frequency-shift', shiftHz: -340, feedback: -0.3, stereo: 1.2, mix: 0.75 },
+      {
+        type: 'chorus',
+        rateHz: 3.5,
+        depthMs: 18,
+        delayMs: 9,
+        feedback: 0.4,
+        stereo: 1.8,
+        mix: 0.6
+      },
+      { type: 'dj-eq', lowDb: 12, midDb: -24, highDb: 6, mix: 1 },
+      { type: 'tone', cutoffHz: 900, resonance: 0.8, drive: 12, mix: 0.85 }
     ]
     for (const process of processes) {
       const before = draft()

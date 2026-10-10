@@ -1906,10 +1906,17 @@ function Frame(): React.JSX.Element {
     const right = state.rifffs[rightId]
     return left && right ? [left, right] : null
   }, [selectedRiffIds, state.rifffs])
-  const inspectorShapeRifff = useMemo<Rifff | null>(() => {
-    if (selectedRiffIds.size !== 1) return null
-    return state.rifffs[[...selectedRiffIds][0]] ?? null
-  }, [selectedRiffIds, state.rifffs])
+  const inspectorEditRifff = useMemo<Rifff | null>(() => {
+    // The Inspector already has one concrete riff (`state.sel`). Use that as
+    // Edit's source instead of making the button depend on the separate
+    // shared-selection bookkeeping. The latter can briefly lag the visible
+    // Sketch selection (especially after leaving another full-screen mode),
+    // which made Edit disappear even though the Inspector showed a riff.
+    // Exactly two selected riffs still belong to Cross, so keep Edit out of
+    // that deliberately multi-riff state.
+    if (inspectorCrossPair) return null
+    return state.sel ? (state.rifffs[state.sel] ?? null) : null
+  }, [inspectorCrossPair, state.rifffs, state.sel])
   useEffect(() => {
     if (!shapeDraft) return
     if (shapeDraft.projectKey === shapeProjectKey(projectSessionEpochRef.current)) return
@@ -2449,7 +2456,7 @@ function Frame(): React.JSX.Element {
     stopActivePreview()
     shapePreviewStopRef.current?.()
     dispatch({ type: 'PAUSE' })
-    setBusy('preparing shape…')
+    setBusy('preparing edit…')
     try {
       const prepared = await rifffForSketchCross(
         rifff,
@@ -2464,7 +2471,7 @@ function Frame(): React.JSX.Element {
       }
       if (!prepared) {
         shapeOpeningSelectionRef.current = null
-        window.alert('Could not prepare every stem for Shape. Nothing was changed; try again.')
+        window.alert('Could not prepare every stem for editing. Nothing was changed; try again.')
         return
       }
       // A nonzero runtime Re-1 was physically baked above. That establishes
@@ -2488,7 +2495,7 @@ function Frame(): React.JSX.Element {
       if (shapeOpenGenerationRef.current !== generation) return
       shapeOpeningSelectionRef.current = null
       console.error('App: failed to prepare riff for Shape:', err)
-      window.alert(err instanceof Error ? err.message : 'Could not open Shape Riff.')
+      window.alert(err instanceof Error ? err.message : 'Could not open the riff editor.')
     } finally {
       if (shapeOpenGenerationRef.current === generation) setBusy(null)
     }
@@ -2506,7 +2513,7 @@ function Frame(): React.JSX.Element {
   async function materializeCurrentShape(draft: ShapeDraft): Promise<ShapeAssembly | null> {
     const projectKey = shapeProjectKey(projectSessionEpochRef.current)
     if (draft.projectKey !== projectKey)
-      throw new Error('This Shape draft belongs to another project.')
+      throw new Error('This riff edit belongs to another project.')
     const jobId = `${draft.id}:${draft.revision}:commit:${crypto.randomUUID()}`
     const result = await window.rifffApi.materializeShape({
       jobId,
@@ -2554,7 +2561,7 @@ function Frame(): React.JSX.Element {
           )
         }
         if (!shapeDraftIsCurrent(draft)) return
-        if (!saved || !('duplicate' in saved)) throw new Error('Could not keep the shaped riff.')
+        if (!saved || !('duplicate' in saved)) throw new Error('Could not keep the edited riff.')
         shapeSavedFingerprintRef.current = shapeContentFingerprint(draft)
         setShapeDirty(false)
         return saved.duplicate ? 'already kept' : '✓ kept'
@@ -2585,7 +2592,7 @@ function Frame(): React.JSX.Element {
       setShapeDirty(false)
     } catch (err) {
       console.error('App: failed to save Shape result:', err)
-      window.alert('Could not render every shaped stem. The source riff was not changed.')
+      window.alert('Could not render every edited stem. The source riff was not changed.')
       throw err
     }
   }
@@ -2615,7 +2622,7 @@ function Frame(): React.JSX.Element {
 
     shapeDepartureSaveRef.current = true
     setDepartureSaveBusy(true)
-    setBusy(needsShapePublish ? 'saving shape…' : 'saving…')
+    setBusy(needsShapePublish ? 'saving edit…' : 'saving…')
     try {
       if (!needsShapePublish || !draft || draftFingerprint === null) {
         const saved = await handleSave()
@@ -2645,7 +2652,7 @@ function Frame(): React.JSX.Element {
       return saved && shapeSessionIsUnchanged() && shapeProjectKeyRef.current === draft.projectKey
     } catch (err) {
       console.error('App: failed to publish Shape during project save:', err)
-      window.alert('Could not add the shaped riff before saving. The project stayed open.')
+      window.alert('Could not add the edited riff before saving. The project stayed open.')
       return false
     } finally {
       shapeDepartureSaveRef.current = false
@@ -3476,7 +3483,7 @@ function Frame(): React.JSX.Element {
               }
               onKeep={async (draft) => {
                 const label = await publishShape(draft, 'keep')
-                if (!label) throw new Error('The Shape draft changed before Keep completed.')
+                if (!label) throw new Error('The riff edit changed before Keep completed.')
                 return label
               }}
               onAddToShelf={async (draft) => {
@@ -3629,8 +3636,8 @@ function Frame(): React.JSX.Element {
                   onSeedDiscover={openRiffLibraryWithDiscoverSeed}
                   crossPair={inspectorCrossPair}
                   onCrossRiffs={(rifffs) => void openCrossFromRiffs(rifffs)}
-                  shapeRifff={inspectorShapeRifff}
-                  onShapeRifff={(rifff) => void openShapeFromRifff(rifff)}
+                  editRifff={inspectorEditRifff}
+                  onEditRifff={(rifff) => void openShapeFromRifff(rifff)}
                 />
               </div>
             </div>

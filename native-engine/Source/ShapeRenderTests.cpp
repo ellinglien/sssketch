@@ -62,7 +62,7 @@ namespace sssketch
                 ShapeRenderInfo info;
                 juce::String error;
                 expect(renderShapeProcessSourceToWav(
-                    source.getFullPathName(), "wavefold", 3.0, 0.0, 0.0, 0.5,
+                    source.getFullPathName(), "wavefold", 3.0, 0.0, 0.0, 0.0, 0.0, 0.5,
                     output.getFullPathName(), info, error), error);
                 expectEquals((int) info.frames, 2000);
                 juce::AudioBuffer<float> audio;
@@ -75,23 +75,32 @@ namespace sssketch
             beginTest("every Shape treatment renders deterministically at the source duration");
             {
                 auto source = writeShapeFixture("sssketch_shape_process_source.wav", -0.5f);
-                const std::vector<std::tuple<juce::String, double, double, double, juce::String>> cases {
-                    { "saturation", 4.0, 0.25, 0.0, "sat" },
-                    { "hard-clip", 0.5, -0.4, 0.0, "clip" },
-                    { "rectify", 1.0, 2.0, 0.0, "rect" },
-                    { "bit-crush", 6.0, 0.5, 0.0, "bits" },
-                    { "rate-crush", 8.0, 0.5, 0.0, "rate" },
-                    { "ring-mod", 37.0, 0.5, 0.0, "ring" },
-                    { "comb", 12.0, 0.5, 0.6, "comb" },
-                    { "smear", 80.0, 0.5, 0.0, "smear" }
+                const std::vector<std::tuple<
+                    juce::String, double, double, double, double, double, juce::String>> cases {
+                    { "saturation", 4.0, 0.25, 0.0, 0.0, 0.0, "sat" },
+                    { "hard-clip", 0.5, -0.4, 0.0, 0.0, 0.0, "clip" },
+                    { "rectify", 1.0, 2.0, 0.0, 0.0, 0.0, "rect" },
+                    { "bit-crush", 6.0, 0.5, 0.0, 0.0, 0.0, "bits" },
+                    { "rate-crush", 8.0, 0.5, 0.0, 0.0, 0.0, "rate" },
+                    { "ring-mod", 37.0, 0.5, 0.0, 0.0, 0.0, "ring" },
+                    { "comb", 12.0, 0.5, 0.6, 0.0, 0.0, "comb" },
+                    { "smear", 80.0, 0.5, 0.0, 0.0, 0.0, "smear" },
+                    { "compand", 12.0, 0.75, 0.2, -6.0, 0.0, "compand" },
+                    { "codec-damage", 35.0, 0.2, 24.0, 8000.0, 0.0, "codec" },
+                    { "short-room", 28.0, 0.55, 0.45, 1.0, 0.0, "room" },
+                    { "frequency-shift", 35.0, 0.2, 1.0, 0.0, 0.0, "shift" },
+                    { "chorus", 0.8, 4.0, 7.0, 0.15, 1.0, "chorus" },
+                    { "dj-eq", 12.0, -12.0, 6.0, 0.0, 0.0, "eq" },
+                    { "tone", 250.0, 0.7, 4.0, 0.0, 0.0, "tone" }
                 };
-                for (const auto& [type, primary, secondary, tertiary, suffix] : cases)
+                for (const auto& [type, primary, secondary, tertiary, quaternary, quinary, suffix] : cases)
                 {
                     auto output = source.getSiblingFile("sssketch_shape_process_" + suffix + ".wav");
                     ShapeRenderInfo info;
                     juce::String error;
                     expect(renderShapeProcessSourceToWav(
-                        source.getFullPathName(), type, primary, secondary, tertiary, 1.0,
+                        source.getFullPathName(), type, primary, secondary, tertiary,
+                        quaternary, quinary, 1.0,
                         output.getFullPathName(), info, error), type + ": " + error);
                     expectEquals((int) info.frames, 2000, type);
                     juce::AudioBuffer<float> audio;
@@ -116,11 +125,11 @@ namespace sssketch
                 ShapeRenderInfo info;
                 juce::String error;
                 expect(renderShapeProcessSourceToWav(
-                    source.getFullPathName(), "saturation", 4.0, 0.0, 0.0, 1.0,
+                    source.getFullPathName(), "saturation", 4.0, 0.0, 0.0, 0.0, 0.0, 1.0,
                     unityOutput.getFullPathName(), info, error), error);
                 error.clear();
                 expect(renderShapeProcessSourceToWav(
-                    source.getFullPathName(), "saturation", 4.0, 0.0, -6.0, 1.0,
+                    source.getFullPathName(), "saturation", 4.0, 0.0, -6.0, 0.0, 0.0, 1.0,
                     quietOutput.getFullPathName(), info, error), error);
                 juce::AudioBuffer<float> unityAudio;
                 juce::AudioBuffer<float> quietAudio;
@@ -134,6 +143,41 @@ namespace sssketch
                     quietSample / unitySample,
                     (float) std::pow(10.0, -6.0 / 20.0),
                     0.002f);
+            }
+
+            beginTest("extreme Shape treatment settings remain finite and bounded");
+            {
+                auto source = writeShapeFixture("sssketch_shape_extreme_process_source.wav", -0.5f);
+                const std::vector<std::tuple<
+                    juce::String, double, double, double, double, double, juce::String>> cases {
+                    { "compand", 64.0, 1.0, 1.0, 24.0, 0.0, "compand" },
+                    { "codec-damage", 1.0, 1.0, 250.0, 200.0, 0.0, "codec" },
+                    { "short-room", 250.0, 0.98, 1.0, 2.0, 0.0, "room" },
+                    { "frequency-shift", 12000.0, 0.95, 2.0, 0.0, 0.0, "shift" },
+                    { "chorus", 20.0, 50.0, 0.1, 0.95, 2.0, "chorus" },
+                    { "dj-eq", 24.0, -72.0, 24.0, 0.0, 0.0, "eq" },
+                    { "tone", 20000.0, 0.99, 32.0, 0.0, 0.0, "tone" }
+                };
+                for (const auto& [type, primary, secondary, tertiary, quaternary, quinary, suffix] : cases)
+                {
+                    auto output = source.getSiblingFile("sssketch_shape_extreme_" + suffix + ".wav");
+                    ShapeRenderInfo info;
+                    juce::String error;
+                    expect(renderShapeProcessSourceToWav(
+                        source.getFullPathName(), type, primary, secondary, tertiary,
+                        quaternary, quinary, 1.0,
+                        output.getFullPathName(), info, error), type + ": " + error);
+                    juce::AudioBuffer<float> rendered;
+                    double sampleRate = 0.0;
+                    expect(decodeRawAudioFile(output.getFullPathName(), rendered, sampleRate), type);
+                    bool bounded = true;
+                    for (int frame = 0; frame < rendered.getNumSamples(); ++frame)
+                    {
+                        const float sample = rendered.getSample(0, frame);
+                        bounded = bounded && std::isfinite(sample) && std::abs(sample) <= 1.0001f;
+                    }
+                    expect(bounded, type + " should stay finite and bounded at its limits");
+                }
             }
 
             beginTest("renders an identity segment to the exact requested duration");
