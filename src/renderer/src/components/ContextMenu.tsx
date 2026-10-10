@@ -100,6 +100,8 @@ export function ContextMenu({
   return (
     <div
       ref={menuRef}
+      // Marks an open menu, so a full-screen editor's keys leave Escape to it (shapeKeyboard.ts).
+      data-ra-overlay="menu"
       onContextMenu={(e) => e.preventDefault()}
       style={{
         position: 'fixed',

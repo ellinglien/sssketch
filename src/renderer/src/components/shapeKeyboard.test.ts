@@ -19,7 +19,6 @@ describe('Shape keyboard ownership', () => {
     ['e', 'KeyE', true],
     ['d', 'KeyD', true],
     ['v', 'KeyV', true],
-    ['z', 'KeyZ', true],
     ['s', 'KeyS', true],
     ['1', 'Digit1', true],
     ['2', 'Digit2', true]
@@ -29,6 +28,20 @@ describe('Shape keyboard ownership', () => {
 
   it('does not capture ordinary typing', () => {
     expect(shapeOwnsKey('a', 'KeyA', false)).toBe(false)
+  })
+
+  it("leaves Cmd+Z to the app's undo routing, which EEEDIT claims", () => {
+    expect(shapeOwnsKey('z', 'KeyZ', true)).toBe(false)
+  })
+
+  it('takes nothing while a dialog or menu is open, so its own keys (Escape) work', () => {
+    for (const [key, code, command] of [
+      ['Escape', 'Escape', false],
+      [' ', 'Space', false],
+      ['Delete', 'Delete', false],
+      ['s', 'KeyS', true]
+    ] as const)
+      expect(shapeOwnsKey(key, code, command, true)).toBe(false)
   })
 
   it('mirrors Ableton grid narrowing and widening without entering the off option', () => {

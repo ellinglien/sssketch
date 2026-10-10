@@ -1,13 +1,26 @@
-export function shapeOwnsKey(key: string, code: string, command: boolean): boolean {
+/** The keys EEEDIT takes for itself (capture phase, nothing else sees them). None while a
+ * dialog or menu is open over it (`overlayOpen`): that overlay's own keys, Escape above all, must
+ * reach it. Cmd+Z isn't one: EEEDIT claims it through the app's undo routing (useClaimUndo). */
+export function shapeOwnsKey(
+  key: string,
+  code: string,
+  command: boolean,
+  overlayOpen = false
+): boolean {
+  if (overlayOpen) return false
   return (
     code === 'Space' ||
     key === 'Escape' ||
     key === '0' ||
     key === 'Delete' ||
     key === 'Backspace' ||
-    (command && ['1', '2', 'c', 'd', 'e', 's', 'v', 'z'].includes(key.toLowerCase()))
+    (command && ['1', '2', 'c', 'd', 'e', 's', 'v'].includes(key.toLowerCase()))
   )
 }
+
+/** A dialog or menu open over EEEDIT: the app's confirmation dialogs (aria-modal) and context
+ * menus (ContextMenu.tsx marks itself). */
+export const SHAPE_OVERLAY_SELECTOR = '[aria-modal="true"], [data-ra-overlay]'
 
 export function adjustShapeSnapIndex(
   index: number,

@@ -76,6 +76,7 @@ import {
   shapeClipDragDestination,
   shapeClipResizeDestination,
   shapeGridSizePct,
+  SHAPE_OVERLAY_SELECTOR,
   shapeOwnsKey,
   shapePlaybackStartBar
 } from './shapeKeyboard'
@@ -94,6 +95,7 @@ import {
 } from './shapeDonor'
 import { crossItemIsAudible, toggleCrossSoloedId } from '@shared/cross'
 import { MetronomeButton } from './MetronomeButton'
+import { useClaimUndo } from '../state/undoRouting'
 
 const SHAPE_RENDER_IDLE_MS = 260
 const SHELF_RIFF_DRAG_TYPE = 'text/rifff-shelf-source-id'
@@ -3805,7 +3807,18 @@ export function ShapePanel({
     if (!active) return
     function keydown(event: KeyboardEvent): void {
       const command = event.metaKey || event.ctrlKey
-      if (!shapeOwnsKey(event.key, event.code, command)) return
+      // EEEDIT's own menus: Escape closes them, and nothing else acts underneath.
+      if (clipMenu || snapMenu) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          event.stopImmediatePropagation()
+          setClipMenu(null)
+          setSnapMenu(null)
+        }
+        return
+      }
+      const overlayOpen = document.querySelector(SHAPE_OVERLAY_SELECTOR) !== null
+      if (!shapeOwnsKey(event.key, event.code, command, overlayOpen)) return
       const target = event.target as HTMLElement | null
       if (target?.matches('input, textarea, [contenteditable="true"]')) return
       event.preventDefault()
@@ -3861,10 +3874,6 @@ export function ShapePanel({
       }
       if (command && event.key.toLowerCase() === 's') {
         saveDraft()
-        return
-      }
-      if (command && event.key.toLowerCase() === 'z') {
-        applyDraft(event.shiftKey ? redoShape(draft) : undoShape(draft))
         return
       }
       if (command && event.key === '1') {
@@ -3948,6 +3957,7 @@ export function ShapePanel({
     applyDraft,
     beginPreview,
     cancelShapeProcess,
+    clipMenu,
     createEdgesForRange,
     cutClipAt,
     cursorBar,
@@ -3963,8 +3973,23 @@ export function ShapePanel({
     saveDraft,
     selected,
     snapIndex,
+    snapMenu,
     stopPreview
   ])
+
+  // Cmd+Z and Cmd+Shift+Z: EEEDIT's own history while it is open (the app's undo routing,
+  // undoRouting.ts), never the project's hidden underneath. Held for as long as EEEDIT is
+  // mounted; while a dialog is over it (`active` false) or a treatment is being auditioned or
+  // baked, the keys do nothing.
+  const undoBlocked = !active || processSession !== null || processBaking
+  useClaimUndo(
+    () => {
+      if (!undoBlocked) applyDraft(undoShape(draft))
+    },
+    () => {
+      if (!undoBlocked) applyDraft(redoShape(draft))
+    }
+  )
 
   const shapePlaying = playing && playbackIntent && owns()
   const shownPosition = shapePlaying ? pos % draft.loopBars : cursorBar

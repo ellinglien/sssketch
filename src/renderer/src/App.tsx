@@ -3776,6 +3776,7 @@ function Frame(): React.JSX.Element {
               active={
                 !riffLibraryOpen &&
                 !crossOpen &&
+                !shapeDiscardPromptOpen &&
                 !departureSaveBusy &&
                 !projectDepartureLocked &&
                 !unsavedChangesPromptOpen &&
