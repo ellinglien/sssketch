@@ -246,8 +246,8 @@ used only until this file exists.
 - **Nudges gently, only in-app:** after 4 days waiting on me, "ben's been waiting 4 days." After
   4 days waiting on them, an offer: "send ben a poke?", which rings their doorbell once (at most
   once a day).
-- **Marks milestones** the way he marks guided-flow steps: turn 10, the first recorded take in a
-  bing bong, the bing bong sketch passing 3 minutes.
+- **Marks milestones**: every tenth turn, and the turn that takes the bing bong sketch past 3
+  minutes. He lives on the bing bong bar, not the guided-flow coach panel.
 - **Never plays a move**, and never suggests one unless asked.
 
 ## Prep work in sssketch
@@ -262,8 +262,8 @@ Each item stands on its own and is useful without bing bong:
 3. **Cross opens from any setup.** `openCrossFromRiffs` can pre-fill the center from the left riff
    and swap add to shelf / add to timeline for one button (`done in cross`).
 
-Plan: `docs/superpowers/plans/2026-10-10-bing-bong-1-foundations.md`; the core is
-`2026-10-10-bing-bong-2-core.md`.
+Plans, in order: `docs/superpowers/plans/2026-10-10-bing-bong-1-foundations.md`,
+`…-2-core.md`, `…-3-doorbell.md`, `…-4-sssketchy.md`.
 
 ## The bing bong menu
 
