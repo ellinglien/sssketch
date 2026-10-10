@@ -13,6 +13,7 @@ export interface ShapeLane {
   id: string
   source: ShapeSourceStem
   gain: number
+  rotationBars?: number
   fragments: ShapeFragmentRecipe[]
 }
 
@@ -505,6 +506,10 @@ export function createShapeDraft(
       id: id(),
       source: provenance ? cloneSource(provenance.source) : sourceFromStem(stem),
       gain: Math.max(0, Math.min(1, gain)),
+      rotationBars:
+        provenance?.version === 2 && Number.isFinite(provenance.rotationBars)
+          ? provenance.rotationBars
+          : 0,
       fragments: provenance
         ? provenance.fragments.map((fragment) => ({
             ...cloneFragment(fragment),
@@ -1187,37 +1192,62 @@ export function resizeShapeFragment(
   })
 }
 
-function placeShapeFragment(
+function placeShapeFragments(
   draft: ShapeDraft,
   laneId: string,
-  fragmentId: string,
+  fragmentIds: ReadonlySet<string>,
   destStartBars: number,
   copy: boolean,
-  copyId?: string
+  copyIds: readonly string[] = []
 ): ShapeDraft {
-  if (!Number.isFinite(destStartBars) || destStartBars < 0) return draft
+  if (!Number.isFinite(destStartBars) || destStartBars < 0 || fragmentIds.size === 0) return draft
   return updateLane(draft, laneId, (lane) => {
-    const source = lane.fragments.find((fragment) => fragment.id === fragmentId)
-    if (!source) return lane
-    const length = shapeFragmentLengthBars(source)
-    const destEnd = destStartBars + length
-    if (!(length > EPS) || destEnd > draft.loopBars + EPS) return lane
-    const withoutSource = copy
+    const sources = lane.fragments
+      .filter((fragment) => fragmentIds.has(fragment.id))
+      .sort((a, b) => a.destStartBars - b.destStartBars || a.id.localeCompare(b.id))
+    if (sources.length === 0) return lane
+    const groupStart = sources[0].destStartBars
+    const groupEnd = Math.max(...sources.map(shapeFragmentEndBars))
+    const groupLength = groupEnd - groupStart
+    const destEnd = destStartBars + groupLength
+    if (!(groupLength > EPS) || destEnd > draft.loopBars + EPS) return lane
+    if (!copy && Math.abs(destStartBars - groupStart) <= EPS) return lane
+
+    const inserted = sources.map((source, index): ShapeFragmentRecipe => ({
+      ...cloneFragment(source),
+      id: copy ? (copyIds[index] ?? id()) : source.id,
+      destStartBars: destStartBars + (source.destStartBars - groupStart)
+    }))
+    let retained = copy
       ? lane.fragments
-      : lane.fragments.filter((fragment) => fragment.id !== fragmentId)
-    const inserted: ShapeFragmentRecipe = {
-      ...source,
-      id: copy ? (copyId ?? id()) : source.id,
-      destStartBars
+      : lane.fragments.filter((fragment) => !fragmentIds.has(fragment.id))
+    for (const fragment of inserted) {
+      retained = trimForOverwrite(retained, fragment.destStartBars, shapeFragmentEndBars(fragment))
     }
     return {
       ...lane,
-      fragments: sortFragments([
-        ...trimForOverwrite(withoutSource, destStartBars, destEnd),
-        inserted
-      ])
+      fragments: sortFragments([...retained, ...inserted])
     }
   })
+}
+
+export function copyShapeFragments(
+  draft: ShapeDraft,
+  laneId: string,
+  fragmentIds: ReadonlySet<string>,
+  destStartBars: number,
+  copyIds: readonly string[] = []
+): ShapeDraft {
+  return placeShapeFragments(draft, laneId, fragmentIds, destStartBars, true, copyIds)
+}
+
+export function moveShapeFragments(
+  draft: ShapeDraft,
+  laneId: string,
+  fragmentIds: ReadonlySet<string>,
+  destStartBars: number
+): ShapeDraft {
+  return placeShapeFragments(draft, laneId, fragmentIds, destStartBars, false)
 }
 
 export function copyShapeFragment(
@@ -1227,7 +1257,7 @@ export function copyShapeFragment(
   destStartBars: number,
   copyId = id()
 ): ShapeDraft {
-  return placeShapeFragment(draft, laneId, fragmentId, destStartBars, true, copyId)
+  return copyShapeFragments(draft, laneId, new Set([fragmentId]), destStartBars, [copyId])
 }
 
 export function moveShapeFragment(
@@ -1236,7 +1266,90 @@ export function moveShapeFragment(
   fragmentId: string,
   destStartBars: number
 ): ShapeDraft {
-  return placeShapeFragment(draft, laneId, fragmentId, destStartBars, false)
+  return moveShapeFragments(draft, laneId, new Set([fragmentId]), destStartBars)
+}
+
+export function duplicateShapeFragments(
+  draft: ShapeDraft,
+  laneId: string,
+  fragmentIds: ReadonlySet<string>,
+  copyIds: readonly string[] = []
+): ShapeDraft {
+  const lane = draft.lanes.find((candidate) => candidate.id === laneId)
+  const sources = lane?.fragments
+    .filter((fragment) => fragmentIds.has(fragment.id))
+    .sort((a, b) => a.destStartBars - b.destStartBars || a.id.localeCompare(b.id))
+  if (!sources?.length) return draft
+  const groupStart = sources[0].destStartBars
+  const groupEnd = Math.max(...sources.map(shapeFragmentEndBars))
+  const groupLength = groupEnd - groupStart
+  if (groupEnd + groupLength > draft.loopBars + EPS) return draft
+  return copyShapeFragments(draft, laneId, fragmentIds, groupEnd, copyIds)
+}
+
+export interface ShapeClipboardLane {
+  laneId: string
+  fragments: readonly ShapeFragmentRecipe[]
+}
+
+/** Pastes a clipboard snapshot at one arrangement position. Clips retain
+ * their spacing across one or more lanes, crop at the fixed riff boundary,
+ * overwrite only their individual target footprints, and enter history as
+ * one edit. */
+export function pasteShapeFragments(
+  draft: ShapeDraft,
+  clipboardLanes: readonly ShapeClipboardLane[],
+  destStartBars: number,
+  copyIds: readonly string[] = []
+): { draft: ShapeDraft; fragmentIds: string[] } {
+  if (!Number.isFinite(destStartBars)) return { draft, fragmentIds: [] }
+  const validLanes = clipboardLanes
+    .map((clipboardLane) => ({
+      lane: draft.lanes.find((lane) => lane.id === clipboardLane.laneId),
+      fragments: [...clipboardLane.fragments].sort(
+        (a, b) => a.destStartBars - b.destStartBars || a.id.localeCompare(b.id)
+      )
+    }))
+    .filter(
+      (item): item is { lane: ShapeLane; fragments: ShapeFragmentRecipe[] } =>
+        !!item.lane && item.fragments.length > 0
+    )
+  const allFragments = validLanes.flatMap((item) => item.fragments)
+  if (allFragments.length === 0) return { draft, fragmentIds: [] }
+
+  const sourceStart = Math.min(...allFragments.map((fragment) => fragment.destStartBars))
+  const sourceEnd = Math.max(...allFragments.map(shapeFragmentEndBars))
+  const groupLength = sourceEnd - sourceStart
+  if (!(groupLength > EPS) || groupLength > draft.loopBars + EPS || destStartBars < 0)
+    return { draft, fragmentIds: [] }
+  const destination = destStartBars
+  let idIndex = 0
+  const pastedIds: string[] = []
+  const byLane = new Map(validLanes.map((item) => [item.lane.id, item.fragments]))
+  const lanes = draft.lanes.map((lane) => {
+    const fragments = byLane.get(lane.id)
+    if (!fragments) return cloneLane(lane)
+    const inserted = fragments.flatMap((fragment): ShapeFragmentRecipe[] => {
+      const fragmentId = copyIds[idIndex++] ?? id()
+      const shifted: ShapeFragmentRecipe = {
+        ...cloneFragment(fragment),
+        id: fragmentId,
+        destStartBars: destination + (fragment.destStartBars - sourceStart)
+      }
+      if (shifted.destStartBars >= draft.loopBars - EPS) return []
+      pastedIds.push(fragmentId)
+      return shapeFragmentEndBars(shifted) > draft.loopBars + EPS
+        ? [sliceShapeFragment(shifted, shifted.destStartBars, draft.loopBars, fragmentId)]
+        : [shifted]
+    })
+    let retained: readonly ShapeFragmentRecipe[] = lane.fragments
+    for (const fragment of inserted) {
+      retained = trimForOverwrite(retained, fragment.destStartBars, shapeFragmentEndBars(fragment))
+    }
+    return { ...cloneLane(lane), fragments: sortFragments([...retained, ...inserted]) }
+  })
+  const next = commit(draft, lanes)
+  return next === draft ? { draft, fragmentIds: [] } : { draft: next, fragmentIds: pastedIds }
 }
 
 export function duplicateShapeFragment(
@@ -1245,13 +1358,7 @@ export function duplicateShapeFragment(
   fragmentId: string,
   copyId = id()
 ): ShapeDraft {
-  const lane = draft.lanes.find((candidate) => candidate.id === laneId)
-  const fragment = lane?.fragments.find((candidate) => candidate.id === fragmentId)
-  if (!fragment) return draft
-  const length = shapeFragmentLengthBars(fragment)
-  const destination = fragment.destStartBars + length
-  if (destination + length > draft.loopBars + EPS) return draft
-  return copyShapeFragment(draft, laneId, fragmentId, destination, copyId)
+  return duplicateShapeFragments(draft, laneId, new Set([fragmentId]), [copyId])
 }
 
 export function toggleShapeFragmentsDisabled(
@@ -1288,6 +1395,7 @@ export function removeShapeLane(draft: ShapeDraft, laneId: string): ShapeDraft {
 export function resetShapeLane(draft: ShapeDraft, laneId: string, fragmentId = id()): ShapeDraft {
   return updateLane(draft, laneId, (lane) => ({
     ...lane,
+    rotationBars: 0,
     fragments: [identityFragment(draft.loopBars, fragmentId)]
   }))
 }
@@ -1297,8 +1405,126 @@ export function resetShapeRiff(draft: ShapeDraft): ShapeDraft {
     draft,
     draft.lanes.map((lane) => ({
       ...cloneLane(lane),
+      rotationBars: 0,
       fragments: [identityFragment(draft.loopBars)]
     }))
+  )
+}
+
+function positiveModulo(value: number, modulus: number): number {
+  return ((value % modulus) + modulus) % modulus
+}
+
+function rotateShapeSourceRange(
+  fragment: ShapeFragmentRecipe,
+  sourceBarLength: number,
+  deltaBars: number
+): ShapeFragmentRecipe {
+  const rate = shapeFragmentRate(fragment)
+  const sourceDelta = deltaBars * rate
+  const sourceLength = fragment.sourceEndBars - fragment.sourceStartBars
+  let sourceStartBars: number
+  let sourceEndBars: number
+
+  if (fragment.reversed) {
+    const endPhase = positiveModulo(fragment.sourceEndBars + sourceDelta, sourceBarLength)
+    sourceEndBars = endPhase
+    while (sourceEndBars < sourceLength - EPS) sourceEndBars += sourceBarLength
+    sourceStartBars = sourceEndBars - sourceLength
+  } else {
+    sourceStartBars = positiveModulo(fragment.sourceStartBars - sourceDelta, sourceBarLength)
+    sourceEndBars = sourceStartBars + sourceLength
+  }
+
+  const transform = fragment.transform ? { ...fragment.transform } : undefined
+  if (transform?.rateSourceStartBars !== undefined && transform.rateSourceEndBars !== undefined) {
+    const baselineLength = transform.rateSourceEndBars - transform.rateSourceStartBars
+    if (fragment.reversed) {
+      const endPhase = positiveModulo(transform.rateSourceEndBars + sourceDelta, sourceBarLength)
+      let baselineEnd = endPhase
+      while (baselineEnd < baselineLength - EPS) baselineEnd += sourceBarLength
+      transform.rateSourceStartBars = baselineEnd - baselineLength
+      transform.rateSourceEndBars = baselineEnd
+    } else {
+      const baselineStart = positiveModulo(
+        transform.rateSourceStartBars - sourceDelta,
+        sourceBarLength
+      )
+      transform.rateSourceStartBars = baselineStart
+      transform.rateSourceEndBars = baselineStart + baselineLength
+    }
+  }
+
+  return {
+    ...fragment,
+    sourceStartBars,
+    sourceEndBars,
+    ...(transform ? { transform } : {})
+  }
+}
+
+/** Circularly offsets the source material beneath every clip in the chosen
+ * stem lanes. Destination clip positions, gaps and treatments stay fixed;
+ * only the musical phase of each immutable source changes. Positive values
+ * move the heard material to the right (later), negative values to the left.
+ * The edit is recipe-only, grouped into one undo checkpoint, and never
+ * re-processes an already-rendered audio file. */
+export function rotateShapeLanes(
+  draft: ShapeDraft,
+  laneIds: ReadonlySet<string>,
+  deltaBars: number
+): ShapeDraft {
+  if (laneIds.size === 0 || !Number.isFinite(deltaBars) || Math.abs(deltaBars) <= EPS) return draft
+  return commit(
+    draft,
+    draft.lanes.map((lane) => {
+      const cloned = cloneLane(lane)
+      if (!laneIds.has(lane.id)) return cloned
+      return {
+        ...cloned,
+        rotationBars: positiveModulo((cloned.rotationBars ?? 0) + deltaBars, draft.loopBars),
+        fragments: cloned.fragments.map((fragment) => {
+          const bakedBarLength = shapeClipTransform(fragment).bakedBase?.barLength
+          const sourceBarLength =
+            bakedBarLength && Number.isFinite(bakedBarLength) && bakedBarLength > EPS
+              ? bakedBarLength
+              : lane.source.barLength
+          if (!Number.isFinite(sourceBarLength) || sourceBarLength <= EPS) return fragment
+          return rotateShapeSourceRange(fragment, sourceBarLength, deltaBars)
+        })
+      }
+    })
+  )
+}
+
+/** Returns chosen lanes to their unrotated source phase while preserving
+ * every other clip edit and treatment. Each lane can carry a different
+ * accumulated amount, so the inverse is applied lane-by-lane in one commit. */
+export function resetShapeLaneRotations(
+  draft: ShapeDraft,
+  laneIds: ReadonlySet<string>
+): ShapeDraft {
+  if (laneIds.size === 0) return draft
+  return commit(
+    draft,
+    draft.lanes.map((lane) => {
+      const cloned = cloneLane(lane)
+      const rotationBars = cloned.rotationBars ?? 0
+      if (!laneIds.has(lane.id) || Math.abs(rotationBars) <= EPS) return cloned
+      return {
+        ...cloned,
+        rotationBars: 0,
+        fragments: cloned.fragments.map((fragment) => {
+          const bakedBarLength = shapeClipTransform(fragment).bakedBase?.barLength
+          const sourceBarLength =
+            bakedBarLength && Number.isFinite(bakedBarLength) && bakedBarLength > EPS
+              ? bakedBarLength
+              : lane.source.barLength
+          if (!Number.isFinite(sourceBarLength) || sourceBarLength <= EPS) return fragment
+          return rotateShapeSourceRange(fragment, sourceBarLength, -rotationBars)
+        })
+      }
+    })
   )
 }
 
@@ -1429,6 +1655,7 @@ export function assembleShapeRifff(
         source: cloneSource(lane.source),
         loopBars: draft.loopBars,
         gain: lane.gain,
+        ...(Math.abs(lane.rotationBars ?? 0) > EPS ? { rotationBars: lane.rotationBars } : {}),
         fragments: lane.fragments.map(cloneFragment)
       }
     }

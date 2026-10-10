@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased — 2026-10-08
+## Unreleased — 2026-10-09
 
 ### Added
 
+- Added an EEEDIT metronome with the same toggle and drag-to-adjust volume behavior as the main transport.
+- Added non-destructive per-stem Rotate controls in EEEDIT, from 1/32 note through 8 bars, with an independent phase reset, project persistence, and one-step undo.
+- Added grouped EEEDIT clip operations: adjacent selections move together, Command-drag bypasses snap, Option-drag copies the group, Command-D duplicates it, and Command-C/Command-V copy and paste at the insertion cursor while cropping cleanly at the riff boundary.
 - Added a docked Shape **Clip Inspector** with non-destructive Smooth Transpose and Detune controls for selected clips or dragged interior regions. Region transforms create their two clip edges as part of the same undoable action, and multi-clip selections support batch edits with mixed-value display.
 - Added snapped Shape **Rate** controls (¼×, ½×, 1×, 2×, and 4×). Smooth Rate changes speed, pitch, and clip length together, previews the resulting extent before committing, overwrites covered material, participates in undo, and remains editable in saved Shape recipes.
 - Added a compact Shape **Smooth** toggle. New and reset clips start with Smooth off (Raw): deterministic nearest-neighbour resampling preserves the skipped/repeated-sample staircase and aliasing of early tracker playback, then duration-corrects only independent pitch changes. The choice remains non-destructive and saved in the clip recipe.
@@ -26,6 +29,8 @@
 
 ### Changed
 
+- Widened EEEDIT's inspector and increased its compact typography. The header now pairs a left-aligned Inspector label with the selected stem identity, its empty state includes concise clip and shelf-donor guidance, and the bottom help tray is easier to read.
+- Regrouped EEEDIT's toolbar around transport/history, metronome/snap/editing tools, and riff reset. Removed the source/edited comparison toggle so playback consistently monitors the edited result, and used the lane's spare width to separate its gain knob from Mute/Solo.
 - New Compand Distortion interventions now start at −16 dB output trim, providing safer headroom for their aggressive default drive without altering saved intervention settings.
 - Kept Shape/Edit's per-stem mute and solo controls available during live intervention previews while continuing to lock clip and stem edits, and removed the extra stop/restart cycle that caused a hitch when leaving solo.
 - Fixed the Edit donor tray's mute and solo buttons falling back to oversized native browser controls; they now match the compact in-app mixer styling.
@@ -52,6 +57,7 @@
 
 ### Fixed
 
+- Made multi-clip move, copy, and duplicate atomic so selected neighbors preserve their order and spacing instead of overwriting one another during sequential edits; each group gesture now creates a single undo checkpoint.
 - Shape intervention knobs now remain visually responsive while dragging but launch a single offline preview render when the gesture ends, preventing repeated mid-playback audio swaps and their crunchy zipper artifacts.
 - Hardened rapid Shape Transform editing: cancelled previews now stop their private native render process, shared pitch/stretch cache WAVs publish atomically only after validation, extreme pitch uses smaller safe stages, and repeated Add clicks cannot create duplicate baked assets.
 - Fixed Shape intervention Bake getting stranded after a development hot reload, and set Saturation's default Drive to 9×.
@@ -66,6 +72,9 @@
 - Routed ordinary transport starts through the native 3 ms declick ramp, removing the discontinuity heard when Space resumes Sketch playback mid-waveform without delaying the playhead.
 - Made Solo non-destructive throughout Arrange, Sketch/Map, Discover, and Cross. Durable **Disable**, temporary **Mute**, and temporary **Solo** are now separate layers; clearing Solo restores the exact prior Mute state, while disabled stems remain disabled.
 - Prevented an accidental Delete/Backspace from silently unplacing an entire multi-selection in Sketch: multi-riff removal now confirms first and is recorded as one atomic Undo step.
+- Added two-way Shelf/Sketch hover correspondence with a circular highlight distinct from the square working selection, including every copied instance of the same riff.
+- Added a compact corner drag handle for vertically reordering Cross center stems.
+- Fixed **Discover This Riff** resetting seeded stems to full gain; seeded variations now inherit the source riff's per-stem balance.
 - Fixed Cross source stems with saved zero gain being inaudible when explicitly soloed, misleading default Solo indicators, aggressive source-row outlines, and center-slot over-allocation.
 - Added dismiss buttons to both startup/welcome overlays. Dismissing the recovery welcome only hides it for the current session and does not delete the recoverable autosave.
 - Kept quit blocked until the current project is saved, isolated export materialization and filenames to avoid collisions, and hardened backup restoration and phone-remote pairing lockout.

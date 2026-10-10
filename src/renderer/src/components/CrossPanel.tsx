@@ -478,14 +478,14 @@ function CenterRow({
 
   return (
     <div
-      draggable
-      onDragStart={(event) => {
-        event.dataTransfer.setData(ROW_DRAG_TYPE, row.id)
-        event.dataTransfer.effectAllowed = 'move'
-      }}
       onDragOver={(event) => event.preventDefault()}
-      onDrop={(event) => onDropAt(event, index)}
+      onDrop={(event) => {
+        const bounds = event.currentTarget.getBoundingClientRect()
+        const insertionIndex = index + (event.clientY >= bounds.top + bounds.height / 2 ? 1 : 0)
+        onDropAt(event, insertionIndex)
+      }}
       style={{
+        position: 'relative',
         minHeight: 54,
         border: '1px solid var(--ra-border-strong)',
         background: 'var(--ra-bg-row-active)',
@@ -516,6 +516,35 @@ function CenterRow({
         className="ra-cross-row-button"
       >
         s
+      </button>
+      <button
+        draggable
+        aria-label={`reorder stem ${index + 1}`}
+        title="drag to reorder"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+        onDragStart={(event) => {
+          event.stopPropagation()
+          event.dataTransfer.setData(ROW_DRAG_TYPE, row.id)
+          event.dataTransfer.effectAllowed = 'move'
+        }}
+        style={{
+          position: 'absolute',
+          zIndex: 2,
+          right: 133,
+          bottom: 8,
+          width: 13,
+          height: 13,
+          padding: 0,
+          border: 'none',
+          background: 'color-mix(in srgb, var(--ra-bg-bar) 82%, transparent)',
+          color: 'var(--ra-text-3)',
+          fontSize: 9,
+          lineHeight: '13px',
+          cursor: 'grab'
+        }}
+      >
+        ⋮
       </button>
       <button
         onPointerDown={beginGainDrag}

@@ -237,7 +237,9 @@ function Timeline({
   onCloseRiserLane,
   selectedRiffIds,
   riffSelectionAnchorId,
-  onRiffSelectionChange
+  onRiffSelectionChange,
+  hoveredRiffKey,
+  onRiffHover
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
@@ -260,6 +262,8 @@ function Timeline({
   selectedRiffIds: ReadonlySet<string>
   riffSelectionAnchorId: string | null
   onRiffSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
+  hoveredRiffKey: string | null
+  onRiffHover: (correspondenceKey: string | null) => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
    * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
@@ -499,6 +503,8 @@ function Timeline({
         selectedRiffIds={selectedRiffIds}
         selectionAnchorId={riffSelectionAnchorId}
         onSelectionChange={onRiffSelectionChange}
+        hoveredRiffKey={hoveredRiffKey}
+        onRiffHover={onRiffHover}
       />
     )
   }
@@ -1872,6 +1878,10 @@ function Frame(): React.JSX.Element {
     ids: Set<string>
     anchorId: string | null
   }>(() => ({ ids: new Set(), anchorId: null }))
+  // Hover correspondence is intentionally independent of the working
+  // selection above. It is a momentary visual answer to "where else is
+  // this same riff?" and must never collapse a two-riff Cross selection.
+  const [hoveredRiffKey, setHoveredRiffKey] = useState<string | null>(null)
   const selectedRiffIds = useMemo(() => {
     const valid = new Set([...riffSelection.ids].filter((id) => state.rifffs[id] !== undefined))
     // A loaded project already has an Inspector selection. Until the user
@@ -2383,7 +2393,10 @@ function Frame(): React.JSX.Element {
     // on 'browse'); now that every opener names its half, this one should
     // too.
     setRiffLibraryInitialMode('discover')
-    setDiscoverSlots(buildSeedSlotsFromStems(seedRifff.stems))
+    const sourceGainBySlot = Object.fromEntries(
+      rifff.stems.map((stem) => [stem.slot, state.vol[stemKey(rifff.groupId, stem.slot)] ?? 1])
+    )
+    setDiscoverSlots(buildSeedSlotsFromStems(seedRifff.stems, sourceGainBySlot))
     setDiscoverChaos(DEFAULT_DISCOVER_CHAOS)
     setDiscoverUndoStack([[]])
     setDiscoverRedoStack([])
@@ -3456,6 +3469,8 @@ function Frame(): React.JSX.Element {
           selectionAnchorId={riffSelectionAnchorId}
           onSelectionChange={handleRiffSelectionChange}
           onBeforePreview={() => shapePreviewStopRef.current?.()}
+          hoveredRiffKey={hoveredRiffKey}
+          onRiffHover={setHoveredRiffKey}
         />
         {shapeOpen && shapeDraft?.projectKey === shapeProjectKey(projectSessionEpochRef.current) ? (
           <div style={{ flex: 1, minHeight: 0 }}>
@@ -3556,6 +3571,8 @@ function Frame(): React.JSX.Element {
                       selectedRiffIds={selectedRiffIds}
                       riffSelectionAnchorId={riffSelectionAnchorId}
                       onRiffSelectionChange={handleRiffSelectionChange}
+                      hoveredRiffKey={hoveredRiffKey}
+                      onRiffHover={setHoveredRiffKey}
                     />
                   )}
                 </div>

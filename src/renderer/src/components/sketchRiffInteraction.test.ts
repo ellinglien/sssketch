@@ -68,11 +68,31 @@ describe('Sketch riff removal', () => {
     expect([...sketchRemovalTargets(new Set(), 'shelf-only', ['placed-a', 'placed-b'])]).toEqual([])
   })
 
+  it('never substitutes playback auto-follow for an explicit shelf-only selection', () => {
+    expect([...sketchRemovalTargets(new Set(['shelf-only']), 'placed-a', ['placed-a'])]).toEqual([])
+  })
+
   it('builds all removals and resequencing as one ordered batch payload', () => {
     expect(sketchRemovalActions(['a', 'b', 'c'], new Set(['a', 'c']))).toEqual([
       { type: 'REMOVE_FROM_TIMELINE', groupId: 'a' },
       { type: 'REMOVE_FROM_TIMELINE', groupId: 'c' },
       { type: 'SEQUENCE_RIFFFS', groupIds: ['b'] }
+    ])
+  })
+
+  it('includes shelf-only deletion in the same batch as Sketch removal', () => {
+    expect(
+      sketchRemovalActions(['a', 'b'], new Set(['a']), ['shelf-only-1', 'shelf-only-2'])
+    ).toEqual([
+      { type: 'REMOVE_FROM_TIMELINE', groupId: 'a' },
+      { type: 'DELETE_RIFFFS', groupIds: ['shelf-only-1', 'shelf-only-2'] },
+      { type: 'SEQUENCE_RIFFFS', groupIds: ['b'] }
+    ])
+  })
+
+  it('does not resequence or rewrite placed riffs for a shelf-only deletion', () => {
+    expect(sketchRemovalActions(['a', 'b'], new Set(), ['shelf-only'])).toEqual([
+      { type: 'DELETE_RIFFFS', groupIds: ['shelf-only'] }
     ])
   })
 })

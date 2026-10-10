@@ -177,8 +177,18 @@ describe('Cross center editing', () => {
   it('moves an already-added source instead of duplicating it', () => {
     let value = addCrossSource(draft(), 'a:1')
     value = addCrossSource(value, 'a:2')
-    value = addCrossSource(value, 'a:1', 1)
+    value = addCrossSource(value, 'a:1', 2)
     expect(value.center.map((row) => row.sourceId)).toEqual(['a:2', 'a:1'])
+  })
+
+  it('moves an already-added source against pre-removal drop boundaries', () => {
+    let value = addCrossSource(draft(), 'a:1')
+    value = addCrossSource(value, 'a:2')
+    value = addCrossSource(value, 'b:2')
+    value = addCrossSource(value, 'a:1', 2)
+    expect(value.center.map((row) => row.sourceId)).toEqual(['a:2', 'a:1', 'b:2'])
+    value = addCrossSource(value, 'a:1', 3)
+    expect(value.center.map((row) => row.sourceId)).toEqual(['a:2', 'b:2', 'a:1'])
   })
 
   it('inserts, reorders, removes, and supports undo/redo', () => {
@@ -191,6 +201,16 @@ describe('Cross center editing', () => {
     expect(value.center.map((row) => row.sourceId)).toEqual(['a:1', 'b:2'])
     value = redoCross(value)
     expect(value.center.map((row) => row.sourceId)).toEqual(['a:1'])
+  })
+
+  it('reorders downward against insertion boundaries without overshooting', () => {
+    let value = addCrossSource(draft(), 'a:1')
+    value = addCrossSource(value, 'a:2')
+    value = addCrossSource(value, 'b:2')
+    value = moveCrossRow(value, 'a:1', 2)
+    expect(value.center.map((row) => row.sourceId)).toEqual(['a:2', 'a:1', 'b:2'])
+    value = moveCrossRow(value, 'a:1', 3)
+    expect(value.center.map((row) => row.sourceId)).toEqual(['a:2', 'b:2', 'a:1'])
   })
 
   it('keeps mute choices intact beneath temporary solo', () => {

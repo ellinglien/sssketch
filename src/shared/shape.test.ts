@@ -6,18 +6,24 @@ import {
   assembleShapeRifff,
   bakeShapeFragmentProcesses,
   copyShapeFragment,
+  copyShapeFragments,
   createShapeDraft,
   duplicateShapeFragment,
+  duplicateShapeFragments,
   discardOrphanedShapeProcessPreview,
   finishShapeLaneGain,
   groupShapeEdits,
   isolateShapeFragmentRange,
   moveShapeFragment,
+  moveShapeFragments,
   normalizeShapeClipProcess,
+  pasteShapeFragments,
   previewShapeLaneGain,
   removeShapeFragmentRange,
   removeShapeFragments,
   removeShapeLane,
+  resetShapeLaneRotations,
+  rotateShapeLanes,
   resizeShapeFragment,
   reverseShapeFragments,
   setShapeFragmentCharacter,
@@ -185,6 +191,77 @@ describe('Shape draft', () => {
     expect(after.lanes[0].source.path).toBe('/replacement.wav')
     expect(after.lanes[0].fragments).toEqual(chopped.lanes[0].fragments)
     expect(after.lanes[0].gain).toBe(chopped.lanes[0].gain)
+  })
+
+  it('rotates selected stem lanes circularly in either direction and undoes as one edit', () => {
+    const before = draft()
+    const laneId = before.lanes[0].id
+    const right = rotateShapeLanes(before, new Set([laneId]), 0.25)
+    expect(right.lanes[0].fragments[0]).toMatchObject({
+      sourceStartBars: 1.75,
+      sourceEndBars: 9.75,
+      destStartBars: 0
+    })
+    expect(right.lanes[0].rotationBars).toBe(0.25)
+    expect(right.past).toHaveLength(1)
+    expect(undoShape(right).lanes).toEqual(before.lanes)
+
+    const left = rotateShapeLanes(before, new Set([laneId]), -0.25)
+    expect(left.lanes[0].fragments[0]).toMatchObject({
+      sourceStartBars: 0.25,
+      sourceEndBars: 8.25,
+      destStartBars: 0
+    })
+  })
+
+  it('resets only accumulated rotation and restores it with undo', () => {
+    const before = draft()
+    const laneId = before.lanes[0].id
+    const rotated = rotateShapeLanes(before, new Set([laneId]), 0.5)
+    const reset = resetShapeLaneRotations(rotated, new Set([laneId]))
+    expect(reset.lanes[0].rotationBars).toBe(0)
+    expect(reset.lanes[0].fragments).toEqual(before.lanes[0].fragments)
+    expect(undoShape(reset).lanes).toEqual(rotated.lanes)
+  })
+
+  it('rotates every chosen lane once while leaving unselected lanes untouched', () => {
+    const before = addShapeLane(
+      draft(),
+      {
+        author: 'b',
+        name: 'new bass',
+        type: 'bass',
+        path: '/bass.wav',
+        durationSec: 8,
+        barLength: 4
+      },
+      1,
+      'lane-2',
+      'clip-2'
+    )
+    const rotated = rotateShapeLanes(before, new Set(['lane-2']), 1)
+    expect(rotated.lanes[0].fragments).toEqual(before.lanes[0].fragments)
+    expect(rotated.lanes[1].fragments[0]).toMatchObject({
+      sourceStartBars: 3,
+      sourceEndBars: 11
+    })
+  })
+
+  it('keeps playback-rate baselines in phase when a rotated clip later changes rate', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const fast = setShapeFragmentRate(before, new Set([lane.fragments[0].id]), 2)
+    const rotated = rotateShapeLanes(fast, new Set([lane.id]), 0.25)
+    const transform = shapeClipTransform(rotated.lanes[0].fragments[0])
+    expect(rotated.lanes[0].fragments[0]).toMatchObject({
+      sourceStartBars: 1.5,
+      sourceEndBars: 9.5
+    })
+    expect(transform).toMatchObject({
+      rate: 2,
+      rateSourceStartBars: 1.5,
+      rateSourceEndBars: 9.5
+    })
   })
 
   it('previews a gain gesture live and commits one undo checkpoint', () => {
@@ -1071,6 +1148,102 @@ describe('Shape draft', () => {
     )
     expect(duplicateShapeFragment(before, before.lanes[0].id, 'a', 'copy')).not.toBe(before)
     expect(duplicateShapeFragment(before, before.lanes[0].id, 'b', 'copy')).toBe(before)
+  })
+
+  it('duplicates adjacent selected clips as one intact group and one undo step', () => {
+    const initial = draft()
+    const laneId = initial.lanes[0].id
+    const first = splitShapeFragment(initial, laneId, initial.lanes[0].fragments[0].id, 1, [
+      'a',
+      'tail-1'
+    ])
+    const second = splitShapeFragment(first, laneId, 'tail-1', 2, ['b', 'tail-2'])
+    const third = splitShapeFragment(second, laneId, 'tail-2', 3, ['c', 'tail-3'])
+    const before = splitShapeFragment(third, laneId, 'tail-3', 4, ['d', 'tail'])
+    const duplicated = duplicateShapeFragments(before, laneId, new Set(['a', 'b', 'c', 'd']), [
+      'copy-a',
+      'copy-b',
+      'copy-c',
+      'copy-d'
+    ])
+
+    expect(
+      duplicated.lanes[0].fragments.map(({ id, destStartBars }) => ({ id, destStartBars }))
+    ).toEqual([
+      { id: 'a', destStartBars: 0 },
+      { id: 'b', destStartBars: 1 },
+      { id: 'c', destStartBars: 2 },
+      { id: 'd', destStartBars: 3 },
+      { id: 'copy-a', destStartBars: 4 },
+      { id: 'copy-b', destStartBars: 5 },
+      { id: 'copy-c', destStartBars: 6 },
+      { id: 'copy-d', destStartBars: 7 }
+    ])
+    expect(duplicated.past).toHaveLength(before.past.length + 1)
+    expect(undoShape(duplicated).lanes).toEqual(before.lanes)
+  })
+
+  it('moves or option-copies selected clips together while preserving their spacing', () => {
+    const initial = draft()
+    const laneId = initial.lanes[0].id
+    const first = splitShapeFragment(initial, laneId, initial.lanes[0].fragments[0].id, 1, [
+      'head',
+      'a'
+    ])
+    const second = splitShapeFragment(first, laneId, 'a', 2, ['a', 'b'])
+    const before = splitShapeFragment(second, laneId, 'b', 3, ['b', 'tail'])
+    const ids = new Set(['a', 'b'])
+    const copied = copyShapeFragments(before, laneId, ids, 5, ['copy-a', 'copy-b'])
+    const moved = moveShapeFragments(before, laneId, ids, 5)
+
+    expect(
+      copied.lanes[0].fragments
+        .filter((fragment) => fragment.id.startsWith('copy-'))
+        .map(({ id, destStartBars }) => ({ id, destStartBars }))
+    ).toEqual([
+      { id: 'copy-a', destStartBars: 5 },
+      { id: 'copy-b', destStartBars: 6 }
+    ])
+    expect(
+      moved.lanes[0].fragments
+        .filter((fragment) => ids.has(fragment.id))
+        .map(({ id, destStartBars }) => ({ id, destStartBars }))
+    ).toEqual([
+      { id: 'a', destStartBars: 5 },
+      { id: 'b', destStartBars: 6 }
+    ])
+  })
+
+  it('pastes a clip snapshot exactly at the cursor and crops it at the riff boundary', () => {
+    const initial = draft()
+    const laneId = initial.lanes[0].id
+    const first = splitShapeFragment(initial, laneId, initial.lanes[0].fragments[0].id, 1, [
+      'head',
+      'a'
+    ])
+    const before = splitShapeFragment(first, laneId, 'a', 3, ['a', 'tail'])
+    const clipboard = [
+      {
+        laneId,
+        fragments: before.lanes[0].fragments.filter((fragment) => fragment.id === 'a')
+      }
+    ]
+    const pasted = pasteShapeFragments(before, clipboard, 4, ['pasted'])
+
+    expect(
+      pasted.draft.lanes[0].fragments.find((fragment) => fragment.id === 'pasted')?.destStartBars
+    ).toBe(4)
+    expect(pasted.fragmentIds).toEqual(['pasted'])
+    expect(pasted.draft.past).toHaveLength(before.past.length + 1)
+    expect(undoShape(pasted.draft).lanes).toEqual(before.lanes)
+    const cropped = pasteShapeFragments(before, clipboard, 7.5, ['cropped'])
+    expect(cropped.draft.lanes[0].fragments.find((fragment) => fragment.id === 'cropped')).toEqual(
+      expect.objectContaining({
+        sourceStartBars: 1,
+        sourceEndBars: 1.5,
+        destStartBars: 7.5
+      })
+    )
   })
 
   it('toggles durable fragment Disable and can remove a fragment', () => {

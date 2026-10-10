@@ -327,6 +327,9 @@ export interface ShapeStemProvenanceV2 {
   source: ShapeSourceStem
   loopBars: number
   gain: number
+  /** Cumulative whole-lane phase rotation in destination bars. Optional so
+   * Shape riffs saved before the Rotate control reopen at the neutral phase. */
+  rotationBars?: number
   fragments: ShapeFragmentRecipe[]
 }
 

@@ -69,6 +69,14 @@ describe('buildSeedSlotsFromStems', () => {
     expect(slots[0].gain).toBe(1)
   })
 
+  it("inherits the source riff's current per-stem gains when supplied", () => {
+    const slots = buildSeedSlotsFromStems(
+      [fixtureStem({ slot: 1 }), fixtureStem({ slot: 2, path: '/b.wav' })],
+      { 1: 0.35355339059327373, 2: 0.8 }
+    )
+    expect(slots.map((slot) => slot.gain)).toEqual([0.35355339059327373, 0.8])
+  })
+
   it('seeds from the exact baked audio while preserving its provenance', () => {
     const [slot] = buildSeedSlotsFromStems([
       fixtureStem({

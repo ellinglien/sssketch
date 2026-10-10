@@ -196,6 +196,18 @@ textarea:focus-visible,
     box-shadow 120ms ease;
 }
 
+/* Riff correspondence supplies its own circular hover language below.
+ * Suppress the app-wide rectangular button/drag hover tint here so it
+ * cannot sit underneath that circle and be mistaken for selection. The
+ * real square selection background remains controlled solely by
+ * data-selected. */
+button.ra-riff-tile:not(:disabled):hover,
+.ra-riff-tile[style*='cursor: pointer']:hover,
+.ra-riff-tile[style*='cursor: grab']:hover {
+  filter: none;
+  box-shadow: none;
+}
+
 /* The tiles use border-box sizing while their glyphs deliberately retain
  * their original dimensions. Center the glyph geometrically instead of
  * allowing the border/padding content origin to shift it one pixel down and
@@ -210,6 +222,24 @@ textarea:focus-visible,
   transform: translate(-50%, -50%);
 }
 
+/* Shelf availability dimming belongs to the glyph, not the whole tile.
+ * Keeping the tile itself fully composited lets the independent hover-
+ * correspondence halo remain readable without brightening the riff it
+ * points to. These are the same long-standing idle levels: unused 72%,
+ * already placed 40%, and a genuinely interactive lit state 100%. */
+.ra-shelf-riff-tile > .ra-polar-glyph {
+  opacity: 0.72;
+  transition: opacity 80ms ease;
+}
+
+.ra-shelf-riff-tile[data-placed='true'] > .ra-polar-glyph {
+  opacity: 0.4;
+}
+
+.ra-shelf-riff-tile[data-lit='true'] > .ra-polar-glyph {
+  opacity: 1;
+}
+
 .ra-riff-tile[data-selected='true'] {
   background-color: var(--ra-bg-riff-selected);
   background-image: url('../assets/riff-selection-crosshatch.svg');
@@ -217,6 +247,39 @@ textarea:focus-visible,
   background-size: 8px 8px;
   image-rendering: pixelated;
   box-shadow: none;
+}
+
+/* Hover correspondence is not selection. It is circular on purpose so a
+ * glance can distinguish "the same riff over there" from the square,
+ * crosshatched working selection used by Cross and batch actions. Kept on
+ * a pseudo-element so the two states can coexist without either one
+ * erasing the other. */
+.ra-riff-tile[data-corresponding='true']::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--ra-text-2) 18%, transparent);
+  box-shadow: 0 0 18px 4px color-mix(in srgb, var(--ra-text-2) 23%, transparent);
+  filter: blur(5px);
+}
+
+/* The Shelf tray is an internal vertical scrollport, so the wider shadow
+ * used in Sketch is clipped at the tray's top and bottom and reads as a
+ * hazy rectangle. Fade a circular field fully to transparent inside the
+ * compact Shelf tile instead; it preserves the same correspondence idea
+ * without relying on overflow outside the scrollport. */
+.ra-shelf-riff-tile[data-corresponding='true']::before {
+  inset: 0;
+  background: radial-gradient(
+    circle at center,
+    color-mix(in srgb, var(--ra-text-2) 24%, transparent) 0%,
+    color-mix(in srgb, var(--ra-text-2) 18%, transparent) 45%,
+    transparent 100%
+  );
+  box-shadow: none;
+  filter: none;
 }
 
 .ra-shelf-riff-tile[data-previewing='true'] {

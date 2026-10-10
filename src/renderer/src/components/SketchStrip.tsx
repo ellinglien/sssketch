@@ -13,6 +13,7 @@ import {
   sketchRemovalTargets,
   toggleRiffBatchSelection
 } from './sketchRiffInteraction'
+import { riffCorrespondenceKey } from './riffCorrespondence'
 
 export const TILE_SIZE = 64
 export const TILE_GAP = 10
@@ -33,11 +34,15 @@ const BARS_DRAG_PX_PER_STEP = 20
 export function SketchStrip({
   selectedRiffIds,
   selectionAnchorId,
-  onSelectionChange
+  onSelectionChange,
+  hoveredRiffKey,
+  onRiffHover
 }: {
   selectedRiffIds: ReadonlySet<string>
   selectionAnchorId: string | null
   onSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
+  hoveredRiffKey: string | null
+  onRiffHover: (correspondenceKey: string | null) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -123,10 +128,11 @@ export function SketchStrip({
   // final sequencing checkpoint, so an accidental multi-delete looked
   // catastrophic and needed several Command-Z presses to restore.
   const removeTiles = useCallback(
-    (groupIds: ReadonlySet<string>) => {
+    (groupIds: ReadonlySet<string>, shelfOnlyGroupIds: readonly string[] = []) => {
       const actions = sketchRemovalActions(
         sequence.map((rifff) => rifff.groupId),
-        groupIds
+        groupIds,
+        shelfOnlyGroupIds
       )
       dispatch({ type: 'BATCH', actions })
     },
@@ -143,22 +149,36 @@ export function SketchStrip({
         state.sel,
         sequence.map((rifff) => rifff.groupId)
       )
-      if (targets.size === 0) return
+      const selectedTargets =
+        selectedRiffIds.size > 0
+          ? [...selectedRiffIds].filter((id) => state.rifffs[id] !== undefined)
+          : state.sel && state.rifffs[state.sel]
+            ? [state.sel]
+            : []
+      const shelfOnlyTargets = selectedTargets.filter(
+        (id) => state.rifffs[id]?.startBar === undefined
+      )
+      const totalTargets = targets.size + shelfOnlyTargets.length
+      if (totalTargets === 0) return
       if (
-        targets.size > 1 &&
+        (totalTargets > 1 || shelfOnlyTargets.length > 0) &&
         !window.confirm(
-          `Remove ${targets.size} selected riffs from Sketch? They will remain available in the shelf.`
+          shelfOnlyTargets.length > 0
+            ? targets.size > 0
+              ? `Remove ${targets.size} selected riff${targets.size === 1 ? '' : 's'} from Sketch and delete ${shelfOnlyTargets.length} shelf-only riff${shelfOnlyTargets.length === 1 ? '' : 's'} from this project? You can undo this as one step.`
+              : `Delete ${shelfOnlyTargets.length} selected shelf-only riff${shelfOnlyTargets.length === 1 ? '' : 's'} from this project? You can undo this.`
+            : `Remove ${targets.size} selected riffs from Sketch? They will remain available in the shelf.`
         )
       ) {
         return
       }
       e.preventDefault()
-      removeTiles(targets)
+      removeTiles(targets, shelfOnlyTargets)
       updateSelection(new Set(), null)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state.sel, sequence, selectedRiffIds, removeTiles, updateSelection])
+  }, [state.sel, state.rifffs, sequence, selectedRiffIds, removeTiles, updateSelection])
 
   // Shift-click extends/shrinks a range from the shared selection anchor;
   // cmd/ctrl-click toggles just the clicked tile in/out of the batch — same
@@ -447,6 +467,8 @@ export function SketchStrip({
         const bars = effectiveBars(rifff)
         const isCurrent = playing && pos >= start && pos < start + bars
         const isSelected = selectedRiffIds.has(rifff.groupId)
+        const correspondenceKey = riffCorrespondenceKey(rifff)
+        const isCorresponding = hoveredRiffKey === correspondenceKey
         // 0..1 progress through this rifff's own play window — only
         // meaningful while isCurrent, but harmless to compute either way.
         const fraction = (pos - start) / bars
@@ -463,7 +485,10 @@ export function SketchStrip({
             key={rifff.groupId}
             className="ra-riff-tile ra-sketch-riff-tile"
             data-selected={isSelected}
+            data-corresponding={isCorresponding}
             draggable
+            onMouseEnter={() => onRiffHover(correspondenceKey)}
+            onMouseLeave={() => onRiffHover(null)}
             onDragStart={(e) => {
               nativeTileDragRef.current = true
               suppressNextSyntheticClick()

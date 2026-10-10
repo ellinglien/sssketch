@@ -62,7 +62,11 @@ export function sketchRemovalTargets(
 ): Set<string> {
   const placed = new Set(placedIds)
   const targets = new Set([...selectedIds].filter((id) => placed.has(id)))
-  if (targets.size === 0 && selectedRiffId && placed.has(selectedRiffId)) {
+  // An explicit shared selection may contain only Shelf-resident riffs while
+  // transport auto-follow points state.sel at a playing Sketch riff. Never
+  // substitute that unrelated playing riff merely because filtering the
+  // explicit set happened to produce zero placed targets.
+  if (selectedIds.size === 0 && selectedRiffId && placed.has(selectedRiffId)) {
     targets.add(selectedRiffId)
   }
   return targets
@@ -71,10 +75,21 @@ export function sketchRemovalTargets(
 /** Build the ordered edits for one atomic history BATCH. */
 export function sketchRemovalActions(
   sequenceIds: readonly string[],
-  targetIds: ReadonlySet<string>
+  targetIds: ReadonlySet<string>,
+  shelfOnlyTargetIds: readonly string[] = []
 ): Action[] {
   return [
     ...[...targetIds].map((groupId): Action => ({ type: 'REMOVE_FROM_TIMELINE', groupId })),
-    { type: 'SEQUENCE_RIFFFS', groupIds: sequenceIds.filter((id) => !targetIds.has(id)) }
+    ...(shelfOnlyTargetIds.length > 0
+      ? ([{ type: 'DELETE_RIFFFS', groupIds: [...shelfOnlyTargetIds] }] satisfies Action[])
+      : []),
+    ...(targetIds.size > 0
+      ? ([
+          {
+            type: 'SEQUENCE_RIFFFS',
+            groupIds: sequenceIds.filter((id) => !targetIds.has(id))
+          }
+        ] satisfies Action[])
+      : [])
   ]
 }

@@ -325,7 +325,13 @@ export function addCrossSource(draft: CrossDraft, sourceId: string, atIndex?: nu
       ? { id: sourceId, sourceId, gain: source.gain, audible: true }
       : center.splice(existing, 1)[0]
   const requested = atIndex ?? center.length
-  const index = Math.max(0, Math.min(center.length, requested))
+  // An explicit drop index is a boundary in the pre-removal list (the same
+  // contract as moveCrossRow). Removing an already-present source above
+  // that boundary shifts it left by one. The no-index "send to end" path
+  // already computes against the post-removal length and needs no adjustment.
+  const adjusted =
+    atIndex !== undefined && existing !== -1 && atIndex > existing ? requested - 1 : requested
+  const index = Math.max(0, Math.min(center.length, adjusted))
   center.splice(index, 0, row)
   return commitCenter(draft, center)
 }
@@ -335,7 +341,11 @@ export function moveCrossRow(draft: CrossDraft, rowId: string, atIndex: number):
   if (current === -1) return draft
   const center = cloneCenter(draft.center)
   const [row] = center.splice(current, 1)
-  center.splice(Math.max(0, Math.min(center.length, atIndex)), 0, row)
+  // `atIndex` is a boundary in the pre-removal list. Removing a row above
+  // that boundary shifts it left by one; compensate so dropping in the
+  // upper/lower half of a row has the same meaning in either direction.
+  const adjustedIndex = atIndex > current ? atIndex - 1 : atIndex
+  center.splice(Math.max(0, Math.min(center.length, adjustedIndex)), 0, row)
   return commitCenter(draft, center)
 }
 

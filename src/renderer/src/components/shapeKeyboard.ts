@@ -5,7 +5,7 @@ export function shapeOwnsKey(key: string, code: string, command: boolean): boole
     key === '0' ||
     key === 'Delete' ||
     key === 'Backspace' ||
-    (command && ['1', '2', 'e', 'd', 'z', 's'].includes(key.toLowerCase()))
+    (command && ['1', '2', 'c', 'd', 'e', 's', 'v', 'z'].includes(key.toLowerCase()))
   )
 }
 

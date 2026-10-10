@@ -12,19 +12,23 @@ import {
   addBakedShapeProcessLanes,
   addShapeLane,
   bakeShapeFragmentProcesses,
-  copyShapeFragment,
+  copyShapeFragments,
   discardOrphanedShapeProcessPreview,
   duplicateShapeFragment,
+  duplicateShapeFragments,
   finishShapeLaneGain,
   groupShapeEdits,
   isolateShapeFragmentRange,
-  moveShapeFragment,
+  moveShapeFragments,
   normalizeShapeClipProcess,
+  pasteShapeFragments,
   previewShapeLaneGain,
   removeShapeFragmentRange,
   redoShape,
   removeShapeFragments,
   removeShapeLane,
+  resetShapeLaneRotations,
+  rotateShapeLanes,
   resizeShapeFragment,
   reverseShapeFragments,
   replaceShapeLaneSource,
@@ -48,6 +52,7 @@ import {
   undoShape,
   type ShapeDraft,
   type ShapeBakeProcessItem,
+  type ShapeClipboardLane,
   type ShapeLane,
   type ShapeMaterializedStem
 } from '@shared/shape'
@@ -62,7 +67,7 @@ import {
 import { DEFAULT_DISCOVER_CHAOS, pickReroll, rankCandidates } from '@shared/discoverRanking'
 import { DEFAULT_SOURCE_LEAN, drawSoundSource } from '@shared/discoverSlotModifier'
 import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
-import { useAppSelector, usePlaying, usePos } from '../state/StoreContext'
+import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
 import { useCrossPreview, type CrossPreviewMember } from '../state/useCrossPreview'
 import { RepeatedWaveform } from './RepeatedWaveform'
 import { typeColorVar } from '../theme/typeColor'
@@ -88,6 +93,7 @@ import {
   type ShapeDonorRow
 } from './shapeDonor'
 import { crossItemIsAudible, toggleCrossSoloedId } from '@shared/cross'
+import { MetronomeButton } from './MetronomeButton'
 
 const SHAPE_RENDER_IDLE_MS = 260
 const SHELF_RIFF_DRAG_TYPE = 'text/rifff-shelf-source-id'
@@ -101,8 +107,21 @@ const SNAP_CHOICES = [
   { label: 'off', bars: 0 }
 ] as const
 
+const ROTATE_CHOICES = [
+  { label: '1/32', bars: 1 / 32 },
+  { label: '1/16', bars: 1 / 16 },
+  { label: '1/8', bars: 1 / 8 },
+  { label: '1/4', bars: 1 / 4 },
+  { label: '1/2', bars: 1 / 2 },
+  { label: '1 bar', bars: 1 },
+  { label: '2 bars', bars: 2 },
+  { label: '4 bars', bars: 4 },
+  { label: '8 bars', bars: 8 }
+] as const
+
 const SHAPE_LEFT_WIDTH = 132
 const SHAPE_RIGHT_WIDTH = 96
+const SHAPE_INSPECTOR_WIDTH = 280
 
 function buttonStyle(active = false): React.CSSProperties {
   return {
@@ -231,7 +250,7 @@ function InspectorNumber({
             background: 'var(--ra-bg-row-active)',
             color: 'var(--ra-text-3)',
             fontFamily: 'inherit',
-            fontSize: compact ? 8 : 10,
+            fontSize: compact ? 9 : 11,
             textAlign: 'right'
           }}
         />
@@ -255,7 +274,7 @@ function InspectorNumber({
               : 'var(--ra-bg-row-active)',
             color: 'var(--ra-text-3)',
             fontFamily: 'inherit',
-            fontSize: compact ? 8 : 10,
+            fontSize: compact ? 9 : 11,
             textAlign: 'right',
             cursor: disabled ? 'default' : 'text',
             opacity: disabled ? 0.45 : 1
@@ -265,7 +284,7 @@ function InspectorNumber({
           {compact && suffix ? <span style={{ marginLeft: 2 }}>{suffix}</span> : null}
         </button>
       )}
-      {!compact && <span style={{ color: 'var(--ra-text-4)', fontSize: 8 }}>{suffix}</span>}
+      {!compact && <span style={{ color: 'var(--ra-text-4)', fontSize: 9 }}>{suffix}</span>}
     </div>
   )
 }
@@ -384,7 +403,7 @@ function ProcessKnob({
         gap: 2
       }}
     >
-      <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>{label}</span>
+      <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{label}</span>
       <Dial
         value={dialValue}
         defaultValue={defaultDialValue}
@@ -1008,6 +1027,8 @@ function ShapeClipInspector({
   onRate,
   onCharacter,
   onFormant,
+  onRotate,
+  onRotateReset,
   processRack,
   processSession,
   onProcessRackAdd,
@@ -1029,6 +1050,8 @@ function ShapeClipInspector({
   onRate: (rate: number) => void
   onCharacter: (character: 'smooth' | 'raw') => void
   onFormant: (formantSemitones: number) => void
+  onRotate: (deltaBars: number) => void
+  onRotateReset: () => void
   processRack: readonly ShapeProcessRackUnit[]
   processSession: Pick<ShapeProcessSession, 'unitId' | 'process' | 'bypass' | 'dirty'> | null
   onProcessRackAdd: (type: ShapeProcessType) => void
@@ -1044,6 +1067,9 @@ function ShapeClipInspector({
   processError: string | null
 }): React.JSX.Element {
   const [processPickerOpen, setProcessPickerOpen] = useState(false)
+  const [rotateChoiceIndex, setRotateChoiceIndex] = useState(2)
+  const [rotateMenu, setRotateMenu] = useState<{ x: number; y: number } | null>(null)
+  const rotateButtonRef = useRef<HTMLButtonElement>(null)
   const targets = draft.lanes.flatMap((lane) =>
     lane.fragments
       .filter(
@@ -1062,9 +1088,10 @@ function ShapeClipInspector({
     targets.every((target) => target.transform.character === targets[0].transform.character)
       ? targets[0].transform.character
       : null
+  const canResetRotation = targets.some((target) => Math.abs(target.lane.rotationBars ?? 0) > 1e-9)
   const enabled = targets.length > 0
   const inspectorShellStyle: React.CSSProperties = {
-    width: 248,
+    width: SHAPE_INSPECTOR_WIDTH,
     flex: 'none',
     borderLeft: '1px solid var(--ra-border)',
     background: 'var(--ra-bg-bar)',
@@ -1075,6 +1102,7 @@ function ShapeClipInspector({
     height: 20,
     display: 'flex',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 7,
     borderBottom: '1px solid var(--ra-border)'
   }
@@ -1084,7 +1112,7 @@ function ShapeClipInspector({
         <div style={inspectorHeaderStyle}>
           <span
             style={{
-              fontSize: 9,
+              fontSize: 10,
               color: 'var(--ra-text-3)',
               letterSpacing: '0.08em'
             }}
@@ -1132,27 +1160,35 @@ function ShapeClipInspector({
         </div>
         <div
           style={{
-            marginTop: 10,
-            color: 'var(--ra-text-4)',
-            fontSize: 8,
-            lineHeight: 1.55,
-            letterSpacing: '0.04em'
+            marginTop: 12,
+            display: 'grid',
+            gap: 14,
+            color: 'var(--ra-text-3)',
+            fontSize: 10,
+            lineHeight: 1.4
           }}
         >
-          SELECT A CLIP HEADER
-          <br />
-          OR DRAG A REGION IN A CLIP
+          <span>Drag regions to create clips.</span>
+          <span
+            style={{
+              padding: '9px 10px',
+              border: '1px solid var(--ra-border)',
+              background: 'var(--ra-bg-row-sub)'
+            }}
+          >
+            Drag riffs from the shelf to import stems.
+          </span>
         </div>
       </aside>
     )
   }
-  const targetLabel = rangeSelection
-    ? `region · ${targets[0]?.lane.source.name ?? 'clip'}`
-    : targets.length === 1
-      ? targets[0].lane.source.name
-      : targets.length > 1
-        ? `${targets.length} clips`
-        : 'select a clip or region'
+  const targetLanes = [...new Map(targets.map((target) => [target.lane.id, target.lane])).values()]
+  const targetLane = targetLanes.length === 1 ? targetLanes[0] : null
+  const targetLabel = targetLane
+    ? `${targetLane.source.type} · ${targetLane.source.name}`
+    : targets.length > 1
+      ? `${targets.length} clips`
+      : 'select a clip or region'
   const applyPitch = (value: number): void => onTransform(value, detune ?? 0)
   const applyDetune = (value: number): void => onTransform(pitch ?? 0, value)
   const halfRate = Math.max(0.25, (rate ?? 1) / 2)
@@ -1168,7 +1204,7 @@ function ShapeClipInspector({
     ...smallButton(disabled, active),
     height: 20,
     padding: '0 2px',
-    fontSize: 8
+    fontSize: 9
   })
   const compactDivider: React.CSSProperties = {
     height: 1,
@@ -1182,7 +1218,7 @@ function ShapeClipInspector({
         <span
           style={{
             flex: 'none',
-            fontSize: 9,
+            fontSize: 10,
             color: 'var(--ra-text-2)',
             letterSpacing: '0.08em'
           }}
@@ -1192,14 +1228,36 @@ function ShapeClipInspector({
         <span
           style={{
             minWidth: 0,
+            marginLeft: 'auto',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 5,
             overflow: 'hidden',
-            textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            color: enabled ? 'var(--ra-text-2)' : 'var(--ra-text-4)',
-            fontSize: 9
+            fontSize: 10,
+            textAlign: 'right'
           }}
         >
-          {targetLabel}
+          {targetLane ? (
+            <>
+              <span style={{ color: typeColorVar(targetLane.source.type) }}>
+                {targetLane.source.type}
+              </span>
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  color: 'var(--ra-text-2)'
+                }}
+              >
+                {targetLane.source.name}
+              </span>
+            </>
+          ) : (
+            <span style={{ color: enabled ? 'var(--ra-text-2)' : 'var(--ra-text-4)' }}>
+              {targetLabel}
+            </span>
+          )}
         </span>
       </div>
       <div
@@ -1213,11 +1271,11 @@ function ShapeClipInspector({
         }}
       >
         <div style={{ marginBottom: 5 }}>
-          <span style={{ fontSize: 9, color: 'var(--ra-text-3)', letterSpacing: '0.08em' }}>
+          <span style={{ fontSize: 10, color: 'var(--ra-text-3)', letterSpacing: '0.08em' }}>
             TRANSFORM
           </span>
         </div>
-        <div style={{ fontSize: 9, color: 'var(--ra-text-2)', marginBottom: 3 }}>Transpose</div>
+        <div style={{ fontSize: 10, color: 'var(--ra-text-2)', marginBottom: 3 }}>Transpose</div>
         <div
           style={{
             display: 'grid',
@@ -1275,7 +1333,7 @@ function ShapeClipInspector({
         </div>
 
         <div style={compactDivider} />
-        <div style={{ fontSize: 9, color: 'var(--ra-text-2)', marginBottom: 3 }}>Detune</div>
+        <div style={{ fontSize: 10, color: 'var(--ra-text-2)', marginBottom: 3 }}>Detune</div>
         <div
           style={{
             display: 'grid',
@@ -1314,7 +1372,7 @@ function ShapeClipInspector({
         <div style={compactDivider} />
         <div
           title="spectral envelope shift"
-          style={{ fontSize: 9, color: 'var(--ra-text-2)', marginBottom: 3 }}
+          style={{ fontSize: 10, color: 'var(--ra-text-2)', marginBottom: 3 }}
         >
           Formant
         </div>
@@ -1364,6 +1422,84 @@ function ShapeClipInspector({
           style={{
             minHeight: 22,
             display: 'grid',
+            gridTemplateColumns: '1fr 24px 58px 28px 28px',
+            alignItems: 'center',
+            gap: 4
+          }}
+        >
+          <div
+            title="circularly shift the selected stem lanes"
+            style={{ fontSize: 10, color: 'var(--ra-text-2)' }}
+          >
+            Rotate
+          </div>
+          <button
+            disabled={!enabled || !canResetRotation}
+            aria-label="reset stem rotation"
+            title="reset selected stems to their original phase"
+            style={{
+              ...compactStepButton(!enabled || !canResetRotation),
+              padding: 0,
+              display: 'grid',
+              placeItems: 'center'
+            }}
+            onClick={onRotateReset}
+          >
+            <ArrowCounterClockwise size={11} weight="bold" />
+          </button>
+          <button
+            ref={rotateButtonRef}
+            disabled={!enabled}
+            aria-haspopup="menu"
+            aria-expanded={rotateMenu !== null}
+            style={{ ...compactStepButton(!enabled), padding: '0 4px' }}
+            onClick={() => {
+              if (rotateMenu) {
+                setRotateMenu(null)
+                return
+              }
+              const rect = rotateButtonRef.current?.getBoundingClientRect()
+              if (rect) setRotateMenu({ x: rect.left, y: rect.bottom + 4 })
+            }}
+          >
+            {ROTATE_CHOICES[rotateChoiceIndex].label} ▾
+          </button>
+          <button
+            disabled={!enabled}
+            aria-label={`rotate stems left ${ROTATE_CHOICES[rotateChoiceIndex].label}`}
+            title={`rotate selected stems left by ${ROTATE_CHOICES[rotateChoiceIndex].label}`}
+            style={compactStepButton(!enabled)}
+            onClick={() => onRotate(-ROTATE_CHOICES[rotateChoiceIndex].bars)}
+          >
+            ←
+          </button>
+          <button
+            disabled={!enabled}
+            aria-label={`rotate stems right ${ROTATE_CHOICES[rotateChoiceIndex].label}`}
+            title={`rotate selected stems right by ${ROTATE_CHOICES[rotateChoiceIndex].label}`}
+            style={compactStepButton(!enabled)}
+            onClick={() => onRotate(ROTATE_CHOICES[rotateChoiceIndex].bars)}
+          >
+            →
+          </button>
+          {rotateMenu && (
+            <ContextMenu
+              x={rotateMenu.x}
+              y={rotateMenu.y}
+              ignoreRef={rotateButtonRef}
+              items={ROTATE_CHOICES.map((choice, index) => ({
+                label: `${index === rotateChoiceIndex ? '✓ ' : ''}${choice.label}`,
+                onClick: () => setRotateChoiceIndex(index)
+              }))}
+              onClose={() => setRotateMenu(null)}
+            />
+          )}
+        </div>
+        <div style={compactDivider} />
+        <div
+          style={{
+            minHeight: 22,
+            display: 'grid',
             gridTemplateColumns: 'auto 30px 24px 30px 1fr auto',
             alignItems: 'center',
             gap: 4
@@ -1371,7 +1507,7 @@ function ShapeClipInspector({
         >
           <div
             title="speed + pitch · changes clip length"
-            style={{ fontSize: 9, color: 'var(--ra-text-2)' }}
+            style={{ fontSize: 10, color: 'var(--ra-text-2)' }}
           >
             Rate
           </div>
@@ -1416,7 +1552,7 @@ function ShapeClipInspector({
               background: 'transparent',
               color: character === 'smooth' ? 'var(--ra-text-2)' : 'var(--ra-text-4)',
               fontFamily: 'inherit',
-              fontSize: 8,
+              fontSize: 9,
               cursor: enabled ? 'pointer' : 'default',
               opacity: enabled ? 1 : 0.35
             }}
@@ -1432,7 +1568,7 @@ function ShapeClipInspector({
                   ? 'color-mix(in srgb, var(--ra-type-fx) 6%, transparent)'
                   : 'transparent',
               color: 'var(--ra-text-4)',
-              fontSize: 8,
+              fontSize: 9,
               textAlign: 'right'
             }}
           >
@@ -1480,7 +1616,7 @@ function ShapeClipInspector({
                   background: 'transparent',
                   color: activeUnit ? 'var(--ra-text-2)' : 'var(--ra-text-3)',
                   fontFamily: 'inherit',
-                  fontSize: 9,
+                  fontSize: 10,
                   letterSpacing: '0.08em',
                   textAlign: 'left',
                   cursor: enabled && !activeUnit ? 'pointer' : 'default',
@@ -1629,7 +1765,7 @@ function ShapeClipInspector({
         </div>
       ) : null}
       {processError && (
-        <div style={{ marginTop: 7, fontSize: 8, color: 'var(--ra-text-3)', lineHeight: 1.4 }}>
+        <div style={{ marginTop: 7, fontSize: 9, color: 'var(--ra-text-3)', lineHeight: 1.4 }}>
           {processError}
         </div>
       )}
@@ -1725,7 +1861,7 @@ function ShapeDonorTray({
     <aside
       aria-label="edit donor riff"
       style={{
-        width: 248,
+        width: SHAPE_INSPECTOR_WIDTH,
         height: '100%',
         flex: 'none',
         borderLeft: '1px solid var(--ra-border)',
@@ -1967,11 +2103,13 @@ function ShapeLaneRow({
   const clipDragRef = useRef<{
     pointerId: number
     clipId: string
+    fragmentIds: string[]
     startClientX: number
     grabOffsetBars: number
     lengthBars: number
     destination: number
     copyStarted: boolean
+    selectionPreserved: boolean
     moved: boolean
   } | null>(null)
   const clipResizeRef = useRef<{
@@ -2001,6 +2139,13 @@ function ShapeLaneRow({
     : typeColorVar(lane.source.type)
   const wholeLaneSelected =
     lane.fragments.length > 0 && lane.fragments.every((fragment) => selected.has(fragment.id))
+  const selectedLaneFragments = lane.fragments
+    .filter((fragment) => selected.has(fragment.id))
+    .sort((a, b) => a.destStartBars - b.destStartBars || a.id.localeCompare(b.id))
+  const selectedGroupStart = selectedLaneFragments[0]?.destStartBars ?? 0
+  const selectedGroupLength = selectedLaneFragments.length
+    ? Math.max(...selectedLaneFragments.map(shapeFragmentEndBars)) - selectedGroupStart
+    : 0
 
   function rawBarAt(clientX: number): number {
     const rect = laneRef.current!.getBoundingClientRect()
@@ -2070,13 +2215,22 @@ function ShapeLaneRow({
             {lane.source.name}
           </span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-          <button onClick={onMute} style={buttonStyle(muted)} title="temporary monitor mute">
-            m
-          </button>
-          <button onClick={onSolo} style={buttonStyle(soloed)} title="temporary monitor solo">
-            s
-          </button>
+        <div
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <button onClick={onMute} style={buttonStyle(muted)} title="temporary monitor mute">
+              m
+            </button>
+            <button onClick={onSolo} style={buttonStyle(soloed)} title="temporary monitor solo">
+              s
+            </button>
+          </div>
           <Dial
             value={lane.gain * 100}
             onChange={(value) => {
@@ -2276,17 +2430,23 @@ function ShapeLaneRow({
                   if (event.button !== 0) return
                   event.preventDefault()
                   event.stopPropagation()
-                  onSelect(fragment.id, event.metaKey || event.ctrlKey || event.shiftKey)
+                  const groupedFragments = isSelected ? selectedLaneFragments : [fragment]
+                  const groupStart = Math.min(...groupedFragments.map((item) => item.destStartBars))
+                  const groupEnd = Math.max(...groupedFragments.map(shapeFragmentEndBars))
+                  const selectionPreserved = isSelected && groupedFragments.length > 1
+                  if (!selectionPreserved)
+                    onSelect(fragment.id, event.metaKey || event.ctrlKey || event.shiftKey)
                   onClipHeaderSelect(lane.id, fragment.id, fragment.destStartBars)
-                  const rect = event.currentTarget.parentElement!.getBoundingClientRect()
                   clipDragRef.current = {
                     pointerId: event.pointerId,
                     clipId: fragment.id,
+                    fragmentIds: groupedFragments.map((item) => item.id),
                     startClientX: event.clientX,
-                    grabOffsetBars: ((event.clientX - rect.left) / rect.width) * length,
-                    lengthBars: length,
-                    destination: fragment.destStartBars,
+                    grabOffsetBars: rawBarAt(event.clientX) - groupStart,
+                    lengthBars: groupEnd - groupStart,
+                    destination: groupStart,
                     copyStarted: event.altKey,
+                    selectionPreserved,
                     moved: false
                   }
                   event.currentTarget.setPointerCapture(event.pointerId)
@@ -2302,7 +2462,7 @@ function ShapeLaneRow({
                   const destination = shapeClipDragDestination(
                     rawBarAt(event.clientX) - drag.grabOffsetBars,
                     drag.lengthBars,
-                    snapSize,
+                    event.metaKey || event.ctrlKey ? 0 : snapSize,
                     draft.loopBars
                   )
                   if (
@@ -2327,12 +2487,25 @@ function ShapeLaneRow({
                   if (clipDragPreviewRef.current) clipDragPreviewRef.current.style.display = 'none'
                   if (event.currentTarget.hasPointerCapture(event.pointerId))
                     event.currentTarget.releasePointerCapture(event.pointerId)
-                  if (!drag.moved) return
-                  onDraft(
-                    drag.copyStarted || event.altKey
-                      ? copyShapeFragment(draft, lane.id, fragment.id, drag.destination)
-                      : moveShapeFragment(draft, lane.id, fragment.id, drag.destination)
+                  if (!drag.moved) {
+                    if (drag.selectionPreserved)
+                      onSelect(fragment.id, event.metaKey || event.ctrlKey || event.shiftKey)
+                    return
+                  }
+                  drag.destination = shapeClipDragDestination(
+                    rawBarAt(event.clientX) - drag.grabOffsetBars,
+                    drag.lengthBars,
+                    event.metaKey || event.ctrlKey ? 0 : snapSize,
+                    draft.loopBars
                   )
+                  const fragmentIds = new Set(drag.fragmentIds)
+                  const copying = drag.copyStarted || event.altKey
+                  const copyIds = copying ? drag.fragmentIds.map(() => crypto.randomUUID()) : []
+                  const next = copying
+                    ? copyShapeFragments(draft, lane.id, fragmentIds, drag.destination, copyIds)
+                    : moveShapeFragments(draft, lane.id, fragmentIds, drag.destination)
+                  onDraft(next)
+                  if (copying && next !== draft) onLaneSelect(copyIds, false)
                 }}
                 onPointerCancel={(event) => {
                   const drag = clipDragRef.current
@@ -2524,8 +2697,24 @@ function ShapeLaneRow({
             opacity: 0.7
           }}
         >
+          {selectedLaneFragments.length > 1 && selectedGroupLength > 0
+            ? selectedLaneFragments.map((fragment) => (
+                <span
+                  key={fragment.id}
+                  style={{
+                    position: 'absolute',
+                    insetBlock: 0,
+                    left: `${((fragment.destStartBars - selectedGroupStart) / selectedGroupLength) * 100}%`,
+                    width: `${(shapeFragmentLengthBars(fragment) / selectedGroupLength) * 100}%`,
+                    boxSizing: 'border-box',
+                    borderRight: '1px solid var(--ra-border-strong)'
+                  }}
+                />
+              ))
+            : null}
           <div
             style={{
+              position: 'relative',
               height: 15,
               boxSizing: 'border-box',
               borderBottom: '1px solid var(--ra-border)',
@@ -2691,16 +2880,22 @@ export function ShapePanel({
 }): React.JSX.Element {
   const rifffs = useAppSelector((state) => state.rifffs)
   const volumes = useAppSelector((state) => state.vol)
+  const metronomeEnabled = useAppSelector((state) => state.metronomeEnabled)
+  const metronomeVolume = useAppSelector((state) => state.metronomeVolume)
+  const dispatch = useDispatch()
   const playing = usePlaying()
   const pos = usePos()
   const { preview, stop, owns } = useCrossPreview('shape-preview')
   const [rendered, setRendered] = useState<ShapeMaterializedStem[]>([])
   const [renderState, setRenderState] = useState<'rendering' | 'ready' | 'error'>('rendering')
-  const [mode, setMode] = useState<'original' | 'shaped'>('shaped')
   const [snapIndex, setSnapIndex] = useState(1)
   const [snapMenu, setSnapMenu] = useState<{ x: number; y: number } | null>(null)
   const snapButtonRef = useRef<HTMLButtonElement>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const clipClipboardRef = useRef<{
+    draftId: string
+    lanes: ShapeClipboardLane[]
+  } | null>(null)
   const [muted, setMuted] = useState<Set<string>>(new Set())
   const [soloed, setSoloed] = useState<string | null>(null)
   const [saving, setSaving] = useState<'keep' | 'shelf' | 'timeline' | null>(null)
@@ -2795,8 +2990,8 @@ export function ShapePanel({
   }, [active])
 
   const members = useMemo(
-    () => laneMembers(draft, rendered, mode, muted, soloed),
-    [draft, rendered, mode, muted, soloed]
+    () => laneMembers(draft, rendered, 'shaped', muted, soloed),
+    [draft, rendered, muted, soloed]
   )
   const donorRifff = donorRiffId ? (rifffs[donorRiffId] ?? null) : null
   const donorRows = useMemo(
@@ -2818,12 +3013,12 @@ export function ShapePanel({
   const beginPreview = useCallback(
     (fromBar = cursorBar) => {
       if (!active) return
-      if (mode === 'shaped' && rendered.length !== draft.lanes.length) return
+      if (rendered.length !== draft.lanes.length) return
       playbackIntentRef.current = true
       setPlaybackIntent(true)
       const renderedVersion = renderedVersionRef.current
       void preview(
-        `riff:${draft.id}:${mode}:donor:${donorRiffId ?? 'none'}`,
+        `riff:${draft.id}:shaped:donor:${donorRiffId ?? 'none'}`,
         previewMembers,
         draft.targetBpm,
         draft.loopBars,
@@ -2840,7 +3035,6 @@ export function ShapePanel({
       draft.loopBars,
       draft.targetBpm,
       donorRiffId,
-      mode,
       preview,
       previewMembers,
       cleanupRetiredPreviews,
@@ -3171,6 +3365,35 @@ export function ShapePanel({
     [applyDraft, draft, rangeSelection, selected]
   )
 
+  const applyInspectorRotate = useCallback(
+    (deltaBars: number): void => {
+      const laneIds = new Set(
+        draft.lanes
+          .filter(
+            (lane) =>
+              lane.fragments.some((fragment) => selected.has(fragment.id)) ||
+              rangeSelection?.laneId === lane.id
+          )
+          .map((lane) => lane.id)
+      )
+      applyDraft(rotateShapeLanes(draft, laneIds, deltaBars))
+    },
+    [applyDraft, draft, rangeSelection, selected]
+  )
+
+  const resetInspectorRotate = useCallback((): void => {
+    const laneIds = new Set(
+      draft.lanes
+        .filter(
+          (lane) =>
+            lane.fragments.some((fragment) => selected.has(fragment.id)) ||
+            rangeSelection?.laneId === lane.id
+        )
+        .map((lane) => lane.id)
+    )
+    applyDraft(resetShapeLaneRotations(draft, laneIds))
+  }, [applyDraft, draft, rangeSelection, selected])
+
   const openShapeProcess = useCallback(
     (unitId: string, requestedProcess: ShapeClipProcessV1): void => {
       if (processSession?.dirty) return
@@ -3204,7 +3427,6 @@ export function ShapePanel({
         setRangeSelection(null)
       }
       setProcessError(null)
-      setMode('shaped')
       setProcessSession({
         unitId,
         before,
@@ -3610,6 +3832,39 @@ export function ShapePanel({
         else onClose()
         return
       }
+      if (command && event.key.toLowerCase() === 'c') {
+        const lanes = draft.lanes.flatMap((lane): ShapeClipboardLane[] => {
+          const fragments = lane.fragments
+            .filter((fragment) => selected.has(fragment.id))
+            .map((fragment) => structuredClone(fragment))
+          return fragments.length > 0 ? [{ laneId: lane.id, fragments }] : []
+        })
+        if (lanes.length > 0) clipClipboardRef.current = { draftId: draft.id, lanes }
+        return
+      }
+      if (command && event.key.toLowerCase() === 'v') {
+        const clipboard = clipClipboardRef.current
+        if (!clipboard || clipboard.draftId !== draft.id) return
+        const copyIds = clipboard.lanes.flatMap((lane) =>
+          lane.fragments.map(() => crypto.randomUUID())
+        )
+        const pasted = pasteShapeFragments(draft, clipboard.lanes, cursorBar, copyIds)
+        if (pasted.draft === draft) return
+        applyDraft(pasted.draft)
+        setSelected(new Set(pasted.fragmentIds))
+        setRangeSelection(null)
+        setCursorTarget(null)
+        const pastedFragments = pasted.draft.lanes.flatMap((lane) =>
+          lane.fragments.filter((fragment) => pasted.fragmentIds.includes(fragment.id))
+        )
+        setCursorBar(
+          Math.min(
+            draft.loopBars,
+            Math.max(...pastedFragments.map((fragment) => shapeFragmentEndBars(fragment)))
+          )
+        )
+        return
+      }
       if (command && event.key.toLowerCase() === 's') {
         saveDraft()
         return
@@ -3652,12 +3907,20 @@ export function ShapePanel({
       }
       if (command && event.key.toLowerCase() === 'd') {
         let next = draft
+        const duplicatedIds: string[] = []
         for (const lane of draft.lanes) {
-          for (const fragment of lane.fragments) {
-            if (selected.has(fragment.id)) next = duplicateShapeFragment(next, lane.id, fragment.id)
-          }
+          const sourceIds = lane.fragments
+            .filter((fragment) => selected.has(fragment.id))
+            .map((fragment) => fragment.id)
+          if (sourceIds.length === 0) continue
+          const copyIds = sourceIds.map(() => crypto.randomUUID())
+          const beforeLane = next
+          next = duplicateShapeFragments(next, lane.id, new Set(sourceIds), copyIds)
+          if (next !== beforeLane) duplicatedIds.push(...copyIds)
         }
-        applyDraft(groupShapeEdits(draft, next))
+        const grouped = groupShapeEdits(draft, next)
+        applyDraft(grouped)
+        if (grouped !== draft && duplicatedIds.length > 0) setSelected(new Set(duplicatedIds))
         return
       }
       if (event.key === '0') {
@@ -3813,62 +4076,89 @@ export function ShapePanel({
           borderBottom: '1px solid var(--ra-border)'
         }}
       >
-        <button
-          onClick={() => (shapePlaying ? stopPreview() : beginPreview(playbackStartBar(false)))}
-          style={buttonStyle(shapePlaying)}
-        >
-          {shapePlaying ? '■ stop' : '▶ play'}
-        </button>
-        <button
-          onClick={() => setRazor((value) => !value)}
-          disabled={processSession !== null || processBaking}
-          style={{
-            ...buttonStyle(razor),
-            width: 29,
-            padding: 0,
-            display: 'grid',
-            placeItems: 'center'
-          }}
-          aria-pressed={razor}
-          aria-label="razor tool"
-          title="razor tool — click a clip body to cut"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-            <g transform="rotate(180 8 8)">
-              <path
-                d="M2 4.5h12l-1.7 7H3.7L2 4.5Z"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.25"
-                strokeLinejoin="miter"
-              />
-              <path d="M6 7h4v2H6Z" fill="none" stroke="currentColor" strokeWidth="1" />
-            </g>
-          </svg>
-        </button>
-        <button
-          onClick={() => setMode((value) => (value === 'shaped' ? 'original' : 'shaped'))}
-          disabled={processSession !== null || processBaking}
-          style={buttonStyle(mode === 'original')}
-          title="switch the preview between your edits and the untouched source riff"
-        >
-          preview: {mode === 'original' ? 'original' : 'edited'}
-        </button>
-        <span style={{ color: 'var(--ra-text-4)', fontSize: 9 }}>{draft.targetBpm} bpm</span>
-        <button
-          onClick={() => applyDraft(undoShape(draft))}
-          style={buttonStyle()}
-          disabled={processSession !== null || processBaking || !draft.past.length}
-        >
-          undo
-        </button>
-        <button
-          onClick={() => applyDraft(redoShape(draft))}
-          style={buttonStyle()}
-          disabled={processSession !== null || processBaking || !draft.future.length}
-        >
-          redo
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button
+            onClick={() => (shapePlaying ? stopPreview() : beginPreview(playbackStartBar(false)))}
+            style={buttonStyle(shapePlaying)}
+          >
+            {shapePlaying ? '■ stop' : '▶ play'}
+          </button>
+          <button
+            onClick={() => applyDraft(undoShape(draft))}
+            style={buttonStyle()}
+            disabled={processSession !== null || processBaking || !draft.past.length}
+          >
+            undo
+          </button>
+          <button
+            onClick={() => applyDraft(redoShape(draft))}
+            style={buttonStyle()}
+            disabled={processSession !== null || processBaking || !draft.future.length}
+          >
+            redo
+          </button>
+        </div>
+        <span
+          aria-hidden="true"
+          style={{ width: 1, height: 20, margin: '0 5px', background: 'var(--ra-border)' }}
+        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <MetronomeButton
+            enabled={metronomeEnabled}
+            volume={metronomeVolume}
+            onToggle={() => dispatch({ type: 'TOGGLE_METRONOME' })}
+            onVolumeChange={(volume) => dispatch({ type: 'SET_METRONOME_VOLUME', volume })}
+          />
+          <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--ra-text-4)' }}>snap</span>
+          <button
+            ref={snapButtonRef}
+            disabled={processSession !== null || processBaking}
+            onClick={() => {
+              if (snapMenu) {
+                setSnapMenu(null)
+                return
+              }
+              const rect = snapButtonRef.current?.getBoundingClientRect()
+              if (rect) setSnapMenu({ x: rect.left, y: rect.bottom + 4 })
+            }}
+            style={{ ...buttonStyle(), minWidth: 48, padding: '0 6px' }}
+            aria-haspopup="menu"
+            aria-expanded={snapMenu !== null}
+          >
+            {SNAP_CHOICES[snapIndex].label} ▾
+          </button>
+          <button
+            onClick={() => setRazor((value) => !value)}
+            disabled={processSession !== null || processBaking}
+            style={{
+              ...buttonStyle(razor),
+              width: 29,
+              padding: 0,
+              display: 'grid',
+              placeItems: 'center'
+            }}
+            aria-pressed={razor}
+            aria-label="razor tool"
+            title="razor tool — click a clip body to cut"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+              <g transform="rotate(180 8 8)">
+                <path
+                  d="M2 4.5h12l-1.7 7H3.7L2 4.5Z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.25"
+                  strokeLinejoin="miter"
+                />
+                <path d="M6 7h4v2H6Z" fill="none" stroke="currentColor" strokeWidth="1" />
+              </g>
+            </svg>
+          </button>
+        </div>
+        <span
+          aria-hidden="true"
+          style={{ width: 1, height: 20, margin: '0 5px', background: 'var(--ra-border)' }}
+        />
         <button
           onClick={() => applyDraft(resetShapeRiff(draft))}
           disabled={processSession !== null || processBaking}
@@ -3876,24 +4166,9 @@ export function ShapePanel({
         >
           reset riff
         </button>
-        <span style={{ marginLeft: 8, fontSize: 9, color: 'var(--ra-text-4)' }}>snap</span>
-        <button
-          ref={snapButtonRef}
-          disabled={processSession !== null || processBaking}
-          onClick={() => {
-            if (snapMenu) {
-              setSnapMenu(null)
-              return
-            }
-            const rect = snapButtonRef.current?.getBoundingClientRect()
-            if (rect) setSnapMenu({ x: rect.left, y: rect.bottom + 4 })
-          }}
-          style={{ ...buttonStyle(), minWidth: 48, padding: '0 6px' }}
-          aria-haspopup="menu"
-          aria-expanded={snapMenu !== null}
-        >
-          {SNAP_CHOICES[snapIndex].label} ▾
-        </button>
+        <span style={{ marginLeft: 3, color: 'var(--ra-text-4)', fontSize: 9 }}>
+          {draft.targetBpm} bpm
+        </span>
         {snapMenu && (
           <ContextMenu
             x={snapMenu.x}
@@ -4300,7 +4575,7 @@ export function ShapePanel({
         <div
           style={{
             position: 'relative',
-            width: 248,
+            width: SHAPE_INSPECTOR_WIDTH,
             minHeight: 0,
             flex: 'none',
             display: 'flex'
@@ -4364,6 +4639,8 @@ export function ShapePanel({
               onRate={applyInspectorRate}
               onCharacter={applyInspectorCharacter}
               onFormant={applyInspectorFormant}
+              onRotate={applyInspectorRotate}
+              onRotateReset={resetInspectorRotate}
               processRack={processRack}
               processSession={processSession}
               onProcessRackAdd={addProcessRackUnit}
@@ -4437,7 +4714,7 @@ export function ShapePanel({
           flex: 'none',
           alignSelf: 'flex-start',
           maxWidth: 'calc(100% - 12px)',
-          height: 25,
+          height: 29,
           display: 'flex',
           alignItems: 'center',
           borderTop: '1px solid var(--ra-border)',
@@ -4454,12 +4731,13 @@ export function ShapePanel({
             ...buttonStyle(helpOpen),
             width: 25,
             minWidth: 25,
-            height: 24,
+            height: 28,
             padding: 0,
             border: 0,
             borderRight: '1px solid var(--ra-border)',
             background: 'transparent',
-            color: helpOpen ? 'var(--ra-text-2)' : 'var(--ra-text-4)'
+            color: helpOpen ? 'var(--ra-text-2)' : 'var(--ra-text-4)',
+            fontSize: 13
           }}
         >
           ?
@@ -4469,7 +4747,7 @@ export function ShapePanel({
             style={{
               padding: '0 9px',
               color: 'var(--ra-text-4)',
-              fontSize: 8,
+              fontSize: 10,
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis'
