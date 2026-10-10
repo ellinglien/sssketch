@@ -299,6 +299,35 @@ stop, Back or unmount. The draft is session-only and disposable (closing discard
 in Cross touches the project until "add to shelf" / "add to timeline". That includes its tempo
 control, which changes only `draft.targetBpm`.
 
+### EEEDIT (one-riff editor; "Shape" in the code)
+
+EEEDIT edits inside one riff: cut, move, copy, disable, repitch (Transpose, Detune, Formant), Rate
+with Smooth or Raw, Reverse, Rotate, and offline treatments ("interventions") baked into a clip.
+Opened from the Inspector with one riff selected, behind the advanced features switch
+(`featureEnabled('eeedit')`; turning it off closes an open EEEDIT through its discard prompt,
+`eeeditSwitchAction`). The draft is pure, in `src/shared/shape.ts` (fragments, transforms, undo and
+redo, the saved recipe `stem.shape`); `components/ShapePanel.tsx` is the UI. Like Cross, it never
+edits the project until "add to shelf" / "add to timeline" (its Cmd+S adds to the shelf); a save
+that leaves the project (quit, New, open) or the Save item while it is open first adds an
+unpublished draft to the shelf (`saveProjectBeforeLeavingNow` in `App.tsx`). Drafts are
+session-only: no crash recovery for them. Cmd+Z goes to EEEDIT's history through `useClaimUndo`.
+
+- **Rendering:** `src/main/shapeMaterialize.ts` renders through engine processes it spawns (at
+  most two at once, never `--link`) with `render-shape-stem`, `render-shape-raw-source` and
+  `render-shape-process-source` (`IpcServer.cpp`, `ShapeRender.cpp`), replying `*-result`.
+  Preview and commit use the same float-WAV path; a commit is all or nothing. Staging folders sit
+  beside their destination (a rename across volumes fails), and file work is async.
+- **`.shapes`:** `<library>/.shapes` holds committed lanes (`<uuid>.shape.wav`), intervention
+  bakes (`<uuid>.shape-base.wav`) and `.preview-cache` (1 GB, least recently used first). The
+  re-oned copies cleanup covers it (see above).
+- **Preview loads:** `load-project` is fire-and-forget for everyone else. EEEDIT's previews use
+  `engine-load-project-acked`: wrapped `{ token, project, fadeSwap }`, answered by
+  `project-load-result` once the engine has published the project. `fadeSwap` is the swap dip
+  (`Transport::requestSwapDip`): the output fades to silence over 3 ms, the load handler swaps under
+  it and the next block fades back in. Nothing else dips: radio's staged swaps and live edits
+  replace the project under full level. Play can also ask for a 3 ms start fade (`play`'s
+  `fadeIn`).
+
 ### Metronome
 
 On/off and volume (`metronomeVolume`, drag the metronome button up/down) are app state, not saved

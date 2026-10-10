@@ -1,20 +1,21 @@
 # Shape Riff Technical Design and V1 Implementation Spec
 
-**Status:** The safe fragment-editing V1 described below is implemented in this worktree and has
-passed automated TypeScript/native verification plus post-build Astra review. Pitch, Rate,
-Reverse, and Discover insertion remain separately scoped because they require additional native
-DSP and interaction work beyond the fragment editor's foundation.
+**Status:** Implemented, and since extended well past this first slice. The fragment editor below
+shipped first; Pitch (Transpose, Detune), Formant, Rate with Smooth and Raw, Reverse, per-stem
+Rotate, Discover stem adding, the donor tray, and offline clip treatments ("interventions", baked
+into a clip as one undo step) shipped after it on the same branch. Those later parts aren't
+specified here beyond what the sections below say; the CHANGELOG's Unreleased section lists
+them. The user-facing name is **EEEDIT**; the code keeps "Shape".
 
-**Saved:** 2026-10-09 07:19:02 PDT (-0700)
+**Merged into master:** EEEDIT sits behind the advanced features switch, its preview swaps use
+the engine's swap dip, and its renders in `.shapes` follow the re-oned copies cleanup (see
+CLAUDE.md).
 
-**Implementation review incorporated:** 2026-10-09 08:09:49 PDT (-0700)
-
-The pre-build Astra review tightened atomic rendering, one-shot handling, source ownership,
-provenance, gain restoration, keyboard capture, project-session identity, and cleanup guarantees.
-The post-build review found and drove fixes for overwrite identity collisions, preview ownership,
-source-phase waveform display, late-result cleanup, nearest-sample wrapping, and fractional output
-seam bounds. Its final refreshed pass reported no current release-blocking issues. Live pointer
-feel and listening QA remain manual validation items.
+Design and implementation reviews tightened atomic rendering, one-shot handling, source ownership,
+provenance, gain restoration, keyboard capture, project-session identity, cleanup guarantees,
+overwrite identity collisions, preview ownership, source-phase waveform display, late-result
+cleanup, nearest-sample wrapping, and fractional output seam bounds. Live pointer feel and
+listening QA remain manual validation items.
 
 ## Purpose
 
@@ -138,7 +139,8 @@ initial feature commitment:
   progression and overall duration remain fixed. It can optionally be linked to Pitch or Rate.
 
 The order of Pitch and Raw Rate processing produces different sounds, but processing-order UI is
-also deferred.
+also deferred. (Pitch, Rate, Smooth/Raw and Formant themselves have shipped; Rate Shape, Raw Clock
+and processing order have not.)
 
 ## Non-destructive source and reset behavior
 

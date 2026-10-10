@@ -28,7 +28,8 @@ The sections that matter most:
 - **Faust DSPs**: the `.dsp` files are shared with the web radio and golden-tested bit-exact.
   Follow the regeneration steps exactly.
 - **One running app, the stop handshake, Disable/Mute/Solo, phase lineage and `.bakes`, Cross,
-  the metronome**: how each works and what it relies on. Read the matching section before
+  EEEDIT (its renders, `.shapes` and the engine's swap dip), the metronome**: how each works and
+  what it relies on. Read the matching section before
   touching any of them.
 
 ## 2. Design system (hard rules)
