@@ -1675,15 +1675,3 @@ export function assembleShapeRifff(
   })
   return { rifff, vol }
 }
-
-/** What an open EEEDIT does when the advanced features switch changes (@shared/features): nothing
- * while the switch is on or EEEDIT is closed. Turned off while open, it closes the way its own
- * close does: at once for a draft with nothing unpublished, else asking first ('ask'). */
-export function eeeditSwitchAction(input: {
-  enabled: boolean
-  open: boolean
-  dirty: boolean
-}): 'none' | 'close' | 'ask' {
-  if (input.enabled || !input.open) return 'none'
-  return input.dirty ? 'ask' : 'close'
-}

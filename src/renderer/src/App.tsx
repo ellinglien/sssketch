@@ -158,7 +158,6 @@ import {
   assembleShapeRifff,
   createShapeDraft,
   shapeContentFingerprint,
-  eeeditSwitchAction,
   shapeRenderSegments,
   type ShapeAssembly,
   type ShapeDraft
@@ -174,7 +173,7 @@ import { DEFAULT_RADIO_SETTINGS, radioSourceOf, type RadioSettings } from '@shar
 import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
 import { mergeLatestSettings, nestedPatchFromLatest } from '@shared/latestSettings'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
-import { setAdvancedFeatures, useFeatureEnabled } from './state/appFeatures'
+import { useFeatureEnabled } from './state/appFeatures'
 import {
   pendingPluginStatesGeneration,
   pendingPluginStatesRef,
@@ -2128,8 +2127,6 @@ function Frame(): React.JSX.Element {
     const right = state.rifffs[rightId]
     return left && right ? [left, right] : null
   }, [selectedRiffIds, state.rifffs])
-  // EEEDIT is behind the advanced features switch (@shared/features).
-  const eeeditEnabled = useFeatureEnabled('eeedit')
   const inspectorEditRifff = useMemo<Rifff | null>(() => {
     // The Inspector already has one concrete riff (`state.sel`). Use that as
     // Edit's source instead of making the button depend on the separate
@@ -2138,9 +2135,9 @@ function Frame(): React.JSX.Element {
     // which made Edit disappear even though the Inspector showed a riff.
     // Exactly two selected riffs still belong to Cross, so keep Edit out of
     // that deliberately multi-riff state.
-    if (inspectorCrossPair || !eeeditEnabled) return null
+    if (inspectorCrossPair) return null
     return state.sel ? (state.rifffs[state.sel] ?? null) : null
-  }, [eeeditEnabled, inspectorCrossPair, state.rifffs, state.sel])
+  }, [inspectorCrossPair, state.rifffs, state.sel])
   useEffect(() => {
     if (!shapeDraft) return
     if (shapeDraft.projectKey === shapeProjectKey(projectSessionEpochRef.current)) return
@@ -2691,7 +2688,6 @@ function Frame(): React.JSX.Element {
   }
 
   async function openShapeFromRifff(rifff: Rifff): Promise<void> {
-    if (!eeeditEnabledRef.current) return
     const generation = ++shapeOpenGenerationRef.current
     const projectKey = shapeProjectKey(projectSessionEpochRef.current)
     shapeOpeningSelectionRef.current = {
@@ -2965,27 +2961,6 @@ function Frame(): React.JSX.Element {
     }
   }
 
-  // The switch turned off while EEEDIT is open: close it as its own close does, asking first
-  // about unsaved edits (eeeditSwitchAction).
-  const eeeditEnabledRef = useRef(eeeditEnabled)
-  // The discard prompt was opened by switching the advanced features off: cancelling it keeps
-  // EEEDIT, so the switch goes back on rather than leaving EEEDIT open with its feature off.
-  const shapeDiscardBySwitchRef = useRef(false)
-  eeeditEnabledRef.current = eeeditEnabled
-  useEffect(() => {
-    const draft = shapeDraftRef.current
-    const action = eeeditSwitchAction({
-      enabled: eeeditEnabled,
-      open: shapeOpenRef.current,
-      dirty: draft !== null && shapeContentFingerprint(draft) !== shapeSavedFingerprintRef.current
-    })
-    if (action === 'ask') {
-      shapeDiscardBySwitchRef.current = true
-      setShapeDiscardPromptOpen(true)
-    } else if (action === 'close') finishCloseShape()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs on the switch alone; the refs above are current.
-  }, [eeeditEnabled])
-
   function closeShape(): void {
     const currentDraft = shapeDraftRef.current
     if (
@@ -2999,7 +2974,6 @@ function Frame(): React.JSX.Element {
   }
 
   function finishCloseShape(): void {
-    shapeDiscardBySwitchRef.current = false
     setShapeDiscardPromptOpen(false)
     shapeOpenGenerationRef.current += 1
     shapePreviewStopRef.current?.()
@@ -4281,16 +4255,7 @@ function Frame(): React.JSX.Element {
             message="discard your EEEDIT changes?"
             detail="anything not kept or added to the shelf is lost."
             actions={[
-              {
-                label: 'cancel',
-                onClick: () => {
-                  setShapeDiscardPromptOpen(false)
-                  if (shapeDiscardBySwitchRef.current) {
-                    shapeDiscardBySwitchRef.current = false
-                    void setAdvancedFeatures(true)
-                  }
-                }
-              },
+              { label: 'cancel', onClick: () => setShapeDiscardPromptOpen(false) },
               { label: 'discard', onClick: finishCloseShape, danger: true, primary: true }
             ]}
           />

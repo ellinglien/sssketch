@@ -14,14 +14,13 @@ const ON = { advancedFeatures: true }
 const OFF = { advancedFeatures: false }
 
 describe('featureEnabled', () => {
-  it('lists the features behind the switch, all advanced', () => {
+  it('lists the five features Elling put behind the switch, all advanced', () => {
     expect(FEATURES.map((f) => f.id)).toEqual([
       'phoneRemote',
       'recording',
       'plugins',
       'soundDefaults',
-      'radioHeartsKey',
-      'eeedit'
+      'radioHeartsKey'
     ])
     expect(FEATURES.every((f) => f.advanced)).toBe(true)
   })
@@ -31,12 +30,6 @@ describe('featureEnabled', () => {
       expect(featureEnabled(f.id, ON)).toBe(true)
       expect(featureEnabled(f.id, OFF)).toBe(false)
     }
-  })
-
-  it('puts EEEDIT behind the switch: off for a new install, on with the switch', () => {
-    expect(featureEnabled('eeedit', OFF)).toBe(false)
-    expect(featureEnabled('eeedit', ON)).toBe(true)
-    expect(featureEnabled('eeedit', null)).toBe(false)
   })
 
   it('reads unknown settings (main has not answered yet) as off', () => {

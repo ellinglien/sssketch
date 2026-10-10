@@ -1,20 +1,18 @@
 // src/shared/features.ts -- the "advanced features" switch.
 //
-// Decided 2026-10-07, for the public release: "this thing has too many features! most people
-// won't need them." Five features go behind ONE switch in the gear menu, off for a new install;
-// EEEDIT (the one-riff editor) joined them when it was merged.
+// Elling, 2026-10-07, for the public release: "this thing has too many features! most people
+// won't need them." Five features go behind ONE switch in the gear menu, off for a new install.
 // See docs/superpowers/plans/2026-10-07-advanced-features-toggle.md for every place each one
 // reaches.
 //
 // Pure, and imported by both main (which skips the plugin scan, the microphone and the phone
 // remote's server while off) and the renderer (which hides the UI).
 
-export type FeatureId =
-  'phoneRemote' | 'recording' | 'plugins' | 'soundDefaults' | 'radioHeartsKey' | 'eeedit'
+export type FeatureId = 'phoneRemote' | 'recording' | 'plugins' | 'soundDefaults' | 'radioHeartsKey'
 
 export interface FeatureInfo {
   id: FeatureId
-  /** Lowercase, as the gear menu's tooltip lists it (EEEDIT, a name, keeps its capitals). */
+  /** Lowercase, as the gear menu's tooltip lists it. */
   label: string
   /** Behind the advanced features switch. Every feature listed today is; a future one that is
    * not would be on for everyone. */
@@ -26,10 +24,7 @@ export const FEATURES: readonly FeatureInfo[] = [
   { id: 'recording', label: 'recording', advanced: true },
   { id: 'plugins', label: 'plugins', advanced: true },
   { id: 'soundDefaults', label: 'sound defaults', advanced: true },
-  { id: 'radioHeartsKey', label: 'hearts key', advanced: true },
-  // Off: the inspector's EEEDIT button is hidden and an open EEEDIT closes (asking first about
-  // unsaved edits). Riffs it already made are ordinary riffs and play regardless.
-  { id: 'eeedit', label: 'EEEDIT', advanced: true }
+  { id: 'radioHeartsKey', label: 'hearts key', advanced: true }
 ]
 
 /** Saved in userData as appFeatures.json (src/main/appFeaturesStore.ts). App-wide, per machine,

@@ -305,9 +305,8 @@ control, which changes only `draft.targetBpm`.
 
 EEEDIT edits inside one riff: cut, move, copy, disable, repitch (Transpose, Detune, Formant), Rate
 with Smooth or Raw, Reverse, Rotate, and offline treatments ("interventions") baked into a clip.
-Opened from the Inspector with one riff selected, behind the advanced features switch
-(`featureEnabled('eeedit')`; turning it off closes an open EEEDIT through its discard prompt,
-`eeeditSwitchAction`). The draft is pure, in `src/shared/shape.ts` (fragments, transforms, undo and
+Opened from the Inspector with one riff selected, always available (deliberately not behind the
+advanced features switch: the owner's call). The draft is pure, in `src/shared/shape.ts` (fragments, transforms, undo and
 redo, the saved recipe `stem.shape`); `components/ShapePanel.tsx` is the UI. Like Cross, it never
 edits the project until "add to shelf" / "add to timeline" (its Cmd+S adds to the shelf); a save
 that leaves the project (quit, New, open) or the Save item while it is open first adds an

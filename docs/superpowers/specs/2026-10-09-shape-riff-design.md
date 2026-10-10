@@ -7,9 +7,9 @@ into a clip as one undo step) shipped after it on the same branch. Those later p
 specified here beyond what the sections below say; the CHANGELOG's Unreleased section lists
 them. The user-facing name is **EEEDIT**; the code keeps "Shape".
 
-**Merged into master:** EEEDIT sits behind the advanced features switch, its preview swaps use
-the engine's swap dip, and its renders in `.shapes` follow the re-oned copies cleanup (see
-CLAUDE.md).
+**Merged into master:** EEEDIT is always available (not behind the advanced features switch), its
+preview swaps use the engine's swap dip, and its renders in `.shapes` are kept for good, since they
+can't be rebuilt; only leftovers are cleaned (see CLAUDE.md).
 
 Design and implementation reviews tightened atomic rendering, one-shot handling, source ownership,
 provenance, gain restoration, keyboard capture, project-session identity, cleanup guarantees,

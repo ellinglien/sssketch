@@ -96,7 +96,8 @@ a merge.
 
 - **Who "me" is:** a typed name, else the Endlesss login, else nobody. Never a default username.
 - **The advanced-features switch** (`src/shared/features.ts`) gates plugins, recording, the
-  phone remote, sound defaults, hearts and EEEDIT. New power features go behind it.
+  phone remote, sound defaults and hearts. New power features go behind it, unless Elling
+  decides otherwise (EEEDIT is deliberately always available).
 - **Plugin settings safety:** every save path goes through `serializeForSave()`. Plugin on/off
   goes through `src/shared/pluginSwitch.ts`.
 - **Crash recovery:** the autosave/recovery file is never disabled or deleted while work is

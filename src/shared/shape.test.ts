@@ -44,8 +44,7 @@ import {
   undoShape,
   redoShape,
   shapeRenderSegments,
-  shapeWaveformLayout,
-  eeeditSwitchAction
+  shapeWaveformLayout
 } from './shape'
 import type { ShapeDraft } from './shape'
 
@@ -1431,17 +1430,5 @@ describe('Shape assembly', () => {
       durationSec: 4,
       barLength: 2
     })
-  })
-})
-
-describe('eeeditSwitchAction (the advanced features switch)', () => {
-  it('does nothing while the switch is on, or while EEEDIT is closed', () => {
-    expect(eeeditSwitchAction({ enabled: true, open: true, dirty: true })).toBe('none')
-    expect(eeeditSwitchAction({ enabled: false, open: false, dirty: false })).toBe('none')
-  })
-
-  it('turned off while open: closes a clean draft, asks first about unsaved edits', () => {
-    expect(eeeditSwitchAction({ enabled: false, open: true, dirty: false })).toBe('close')
-    expect(eeeditSwitchAction({ enabled: false, open: true, dirty: true })).toBe('ask')
   })
 })
