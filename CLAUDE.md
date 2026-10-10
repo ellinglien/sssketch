@@ -328,8 +328,11 @@ session-only: no crash recovery for them. Cmd+Z goes to EEEDIT's history through
   `project-load-result` once the engine has published the project. `fadeSwap` is the swap dip
   (`Transport::requestSwapDip`): the output fades to silence over 3 ms, the load handler swaps under
   it and the next block fades back in. Nothing else dips: radio's staged swaps and live edits
-  replace the project under full level. Play can also ask for a 3 ms start fade (`play`'s
-  `fadeIn`).
+  replace the project under full level. Separately, every Play from the app fades in over 3 ms
+  (`play`'s `fadeIn`, sent by StoreContext, Cross, Discover and EEEDIT), after holding silent for
+  the master stage's latency so the audio arrives at the start of the fade. A seek fades as before.
+  Discover's and radio's Solo halts and resumes from the position reported before the halt, so it
+  steps back up to the 15 ms halt plus one position update (about 33 ms): known, left as is.
 
 ### Metronome
 

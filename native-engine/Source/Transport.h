@@ -478,6 +478,7 @@ namespace sssketch
         double haltFadeElapsedSec = 0.0;
         bool fadingIn = false;
         double playFadeElapsedSec = 0.0;
+        double playFadeHoldSec = 0.0; // the master stage's latency, held silent before the fade
         // Swap dip (requestSwapDip), audio-thread only.
         enum class SwapDip { None, FadingOut, Holding, FadingIn };
         SwapDip swapDip = SwapDip::None;

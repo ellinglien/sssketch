@@ -336,15 +336,22 @@ namespace sssketch
         if (!fadingIn || deviceSampleRate <= 0.0)
             return;
 
+        // Held at silence for the master stage's latency first: with its limiter in, the
+        // audio comes out of the stage that much late (its line starts empty after a halt),
+        // so the fade starts on the audio rather than partway up (as a seek's does). Read on
+        // the fade's first block, after processMaster: the stage's settings come with the
+        // snapshot that block rendered.
+        if (playFadeElapsedSec == 0.0)
+            playFadeHoldSec = engine.masterLatencySamples() / deviceSampleRate;
         for (int i = 0; i < numSamples; ++i)
         {
-            const double elapsed = playFadeElapsedSec + (double) i / deviceSampleRate;
+            const double elapsed = playFadeElapsedSec + (double) i / deviceSampleRate - playFadeHoldSec;
             const float gain = (float) std::clamp(elapsed / kPlayFadeSec, 0.0, 1.0);
             outL[i] *= gain;
             outR[i] *= gain;
         }
         playFadeElapsedSec += (double) numSamples / deviceSampleRate;
-        if (playFadeElapsedSec >= kPlayFadeSec)
+        if (playFadeElapsedSec >= kPlayFadeSec + playFadeHoldSec)
             fadingIn = false;
     }
 
@@ -362,13 +369,11 @@ namespace sssketch
         const auto request = swapDipLatestRequest.load(std::memory_order_acquire);
         if (!outputActive)
         {
-            // Nothing is audible: any dip asked for is silent already, and the
-            // next play starts with its own fade.
-            if (request != swapDipAppliedRequest)
-            {
-                swapDipAppliedRequest = request;
-                swapDipSilentRequest.store(request, std::memory_order_release);
-            }
+            // Nothing is audible: every dip asked for is silent already (one taken
+            // mid-fade, when a stop finished first, included), and the next play
+            // starts with its own fade.
+            swapDipAppliedRequest = request;
+            swapDipSilentRequest.store(request, std::memory_order_release);
             swapDip = SwapDip::None;
             swapDipGain = 1.0f;
             return;

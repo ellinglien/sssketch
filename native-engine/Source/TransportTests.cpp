@@ -302,6 +302,195 @@ namespace sssketch
                 tone.deleteFile();
             }
 
+            beginTest("a swap dip asked for during a stop's fade is answered once the stop is silent");
+            {
+                auto tone = writeConstantToneWav("sssketch_transport_dip_stop.wav", 44100);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 1.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
+                transport.setBpm(60.0);
+
+                constexpr int numSamples = 64;
+                std::vector<float> l((size_t) numSamples), r((size_t) numSamples);
+                float* channels[2] = { l.data(), r.data() };
+                const auto block = [&] { transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {}); };
+                transport.play(0.125, false);
+                block();
+                transport.stop();
+                // 15 ms of halt fade is 661 samples: ask in its last 64-sample block, so the stop
+                // finishes before the 3 ms dip could reach silence by itself.
+                for (int i = 0; i < 10; ++i)
+                    block();
+                expect(transport.isPlaying(), "the stop finished too early for this test");
+                const auto dip = transport.requestSwapDip();
+                expect(dip != 0);
+                for (int i = 0; i < 20 && transport.isPlaying(); ++i)
+                    block();
+                expect(!transport.isPlaying(), "the stop never finished");
+                block(); // the first callback with nothing audible
+                expect(transport.swapDipIsSilent(dip),
+                       "a dip asked for during the halt fade was never answered");
+                tone.deleteFile();
+            }
+
+            beginTest("a swap dip asked for after a stop needs no wait");
+            {
+                auto tone = writeConstantToneWav("sssketch_transport_stop_dip.wav", 44100);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 1.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
+                transport.setBpm(60.0);
+
+                constexpr int numSamples = 256;
+                std::vector<float> l((size_t) numSamples), r((size_t) numSamples);
+                float* channels[2] = { l.data(), r.data() };
+                const auto block = [&] { transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {}); };
+                transport.play(0.125, false);
+                block();
+                transport.stop();
+                for (int i = 0; i < 20 && transport.isPlaying(); ++i)
+                    block();
+                const auto dip = transport.requestSwapDip();
+                expect(transport.swapDipIsSilent(dip));
+                tone.deleteFile();
+            }
+
+            beginTest("a swap dip never released comes back by itself after half a second");
+            {
+                auto tone = writeConstantToneWav("sssketch_transport_dip_auto.wav", 44100);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 1.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
+                transport.setBpm(60.0);
+
+                constexpr int numSamples = 256;
+                std::vector<float> l((size_t) numSamples), r((size_t) numSamples);
+                float* channels[2] = { l.data(), r.data() };
+                const auto block = [&] { transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {}); };
+                transport.play(0.0, false);
+                block();
+                const auto dip = transport.requestSwapDip();
+                for (int i = 0; i < 8 && !transport.swapDipIsSilent(dip); ++i)
+                    block();
+                expect(transport.swapDipIsSilent(dip));
+                const int halfSecondBlocks = (int) std::ceil(0.5 * 44100.0 / numSamples) + 2;
+                for (int i = 0; i < halfSecondBlocks; ++i)
+                    block();
+                expect(std::abs(l.back()) > 0.7f, "a dip with no release stayed silent");
+                tone.deleteFile();
+            }
+
+            beginTest("back-to-back swap dips: the second fades out from wherever the first's fade-in got to");
+            {
+                auto tone = writeConstantToneWav("sssketch_transport_dip_twice.wav", 44100);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 1.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
+                transport.setBpm(60.0);
+
+                constexpr int numSamples = 256;
+                std::vector<float> l((size_t) numSamples), r((size_t) numSamples);
+                float* channels[2] = { l.data(), r.data() };
+                const auto block = [&] { transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {}); };
+                transport.play(0.125, false);
+                block();
+                float previous = l.back();
+                float largestStep = 0.0f;
+                const auto stepBlock = [&] {
+                    block();
+                    for (const float sample : l)
+                    {
+                        largestStep = std::max(largestStep, std::abs(sample - previous));
+                        previous = sample;
+                    }
+                };
+                const auto first = transport.requestSwapDip();
+                for (int i = 0; i < 8 && !transport.swapDipIsSilent(first); ++i)
+                    stepBlock();
+                engine.setProject(project);
+                transport.releaseSwapDip(first);
+                stepBlock(); // partway back up
+                const auto second = transport.requestSwapDip();
+                for (int i = 0; i < 8 && !transport.swapDipIsSilent(second); ++i)
+                    stepBlock();
+                expect(transport.swapDipIsSilent(second));
+                engine.setProject(project);
+                transport.releaseSwapDip(second);
+                for (int i = 0; i < 4; ++i)
+                    stepBlock();
+                expect(std::abs(l.back()) > 0.7f, "never came back after the second dip");
+                expect(largestStep < 0.02f, "back-to-back dips stepped: " + juce::String(largestStep));
+                tone.deleteFile();
+            }
+
             beginTest("a swap dip asked for while stopped is silent already");
             {
                 StemBufferCache cache;
@@ -1530,6 +1719,79 @@ namespace sssketch
                     for (float v : l) peak = std::max(peak, std::abs(v));
                     expect(peak > 0.1f && peak < 0.9f, "peak " + juce::String(peak));
                     engine.drainRetiredProject();
+                }
+
+                beginTest("master stage: Play's start fade waits out the limiter's latency, so the audio "
+                          "arrives at the start of the fade, not partway up it");
+                {
+                    const int frames = (int) (2.0 * kRate);
+                    auto sineFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                        .getChildFile("sssketch_transport_master_playfade.wav");
+                    sineFile.deleteFile();
+                    {
+                        juce::WavAudioFormat wavFormat;
+                        std::unique_ptr<juce::FileOutputStream> out(sineFile.createOutputStream());
+                        std::unique_ptr<juce::AudioFormatWriter> writer(
+                            wavFormat.createWriterFor(out.get(), kRate, 1, 16, {}, 0));
+                        out.release();
+                        juce::AudioBuffer<float> source(1, frames);
+                        for (int i = 0; i < frames; ++i)
+                            source.setSample(0, i, 0.9f * (float) std::sin(2.0 * 3.14159265358979323846 * 220.0 * i / kRate));
+                        writer->writeFromAudioSampleBuffer(source, 0, frames);
+                    }
+                    EngineProject project;
+                    project.bpm = kBpm;
+                    project.snapDiv = 16.0;
+                    EngineRifff rifff;
+                    rifff.groupId = "sine";
+                    rifff.channelId = "c1";
+                    rifff.startBar = 0.0;
+                    rifff.barLength = 1;
+                    EngineStem stem;
+                    stem.stemKey = "sine:1";
+                    stem.resolvedPath = sineFile.getFullPathName();
+                    stem.durationSec = 2.0;
+                    stem.barLength = 1;
+                    rifff.stems.push_back(stem);
+                    project.rifffs.push_back(rifff);
+                    project.sound.mastering = SoundSettings::Mastering {};
+
+                    constexpr int kBlock = 64;
+                    const auto render = [&](bool fadeIn) {
+                        StemBufferCache cache;
+                        PlaybackEngine engine(cache);
+                        engine.prepareMaster(kRate);
+                        engine.setProject(project);
+                        PluginChain masterChain(kNumMasterChainSlots);
+                        ChannelChainRegistry channelChains;
+                        Transport transport(engine, masterChain, channelChains);
+                        transport.setBpm(kBpm);
+                        transport.play(0.3, fadeIn);
+                        std::vector<float> l((size_t) (8 * kBlock)), r((size_t) (8 * kBlock));
+                        for (int b = 0; b < 8; ++b)
+                        {
+                            float* channels[2] = { l.data() + b * kBlock, r.data() + b * kBlock };
+                            transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                        }
+                        engine.drainRetiredProject();
+                        return l;
+                    };
+                    const auto faded = render(true);
+                    const auto plain = render(false);
+                    const int arrives = MasterStage::kLatencySamples;
+                    const double fadeSamples = 0.003 * kRate;
+                    float worst = 0.0f; // how far over the fade's own envelope, from the audio's arrival
+                    for (size_t i = 0; i < faded.size(); ++i)
+                    {
+                        const double k = (double) i - arrives;
+                        const float envelope = (float) std::clamp(k / fadeSamples, 0.0, 1.0);
+                        worst = std::max(worst, std::abs(faded[i]) - envelope * std::abs(plain[i]));
+                    }
+                    expect(worst <= 1.0e-4f, "the audio arrived partway up the start fade: " + juce::String(worst) + " over");
+                    float peak = 0.0f;
+                    for (float v : faded) peak = std::max(peak, std::abs(v));
+                    expect(peak > 0.3f, "nothing played: peak " + juce::String(peak));
+                    sineFile.deleteFile();
                 }
 
                 beginTest("master stage: a seek lands under silence -- the limiter's line never plays the old "
