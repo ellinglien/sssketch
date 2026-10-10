@@ -38,7 +38,8 @@ Elling, 2026-10-10. Brainstormed in chat. Status: design agreed, write-up approv
    message, then **end turn**.
    - Left column: the turn they just sent.
    - Center: your new riff, starting as a copy of theirs.
-   - Right column: switchable between **a riff of yours** (shelf/library) and **Discover**.
+   - Right column: what you bring: **your last turn**, **a riff from the shelf**, or **nothing**.
+     Discover is already in Cross's center ("add a stem that is:"), so it needs no column.
 6. **No server.** Turns travel through the shared folder. Nothing Elling runs is involved, except
    that he and Ben happen to send email through RPM's SES (decision 8).
 7. **The shared folder only ever gets new files.** Nothing in it is overwritten by two people, so
@@ -169,10 +170,11 @@ used only until this file exists.
 
 ## The bing bong sketch
 
-- Each player's sssketch keeps a local project per bing bong, in the sketch library
-  (`~/Music/sssketch/bing bong/<name>.sssketchproj`), never in the shared folder.
-- It is rebuilt from `turns/` whenever a new turn file appears: turn N's riff placed after turn
-  N-1, each riff **locked**. Gains and mutes come from the turn record.
+- Each player's sssketch keeps a local project per bing bong, a library sketch named
+  `bingbong-<name>`, never in the shared folder.
+- New turns are appended as they appear in `turns/`: turn N's riff after everything placed, each
+  riff **locked**. Gains and mutes come from the turn record. Appending a turn reaches every undo
+  step, so no undo takes a turn away.
 - The project carries a `bingBong` block (`id`, `folderPath`, `me`, `lastTurnSeen`, and the
   draft of the current turn if it's mine). `PersistedProject` (`src/renderer/src/state/serialize.ts`)
   grows this optional field; projects without it are unaffected.
@@ -182,10 +184,10 @@ used only until this file exists.
 
 ## Taking a turn
 
-1. **Open in Cross.** From sssketchy's envelope, the bing bong's `your turn` button, or the riff's
-   inspector. Left: their latest turn. Center: a copy of it. Right: `riff` / `discover` switch.
-   Cross's existing tools all work: audition per column, move stems in, generate matching stems,
-   mute/solo/gain, undo/redo, preview tempo.
+1. **Open in Cross.** From sssketchy's envelope or the bing bong bar's `take your turn`. Left:
+   their latest turn. Center: a copy of it. Right: what you bring (your last turn, a shelf riff,
+   or nothing). Cross's existing tools all work: audition per column, move stems in, add a stem
+   from Discover, mute/solo/gain, undo/redo, preview tempo.
 2. **Edit pass (optional).** `done in cross` places the draft riff at the end of the bing bong
    sketch, unlocked, for normal Sketch/Arrange edits on that riff only (downbeat, length, levels).
 3. **Chat line.** One line, optional, 140 characters, in the end-turn dialog.
@@ -211,10 +213,11 @@ used only until this file exists.
   download, so pending clears on its own.
 - On arrival: the doorbell sound, a macOS notification, sssketchy with the envelope, and the bing
   bong's entry in the `bing bong` menu shows `your turn`.
-- A turn file that breaks the rules (wrong player, a turn number already taken, a gap) is shown,
-  not applied: "turn 8 from ben doesn't follow turn 6. waiting for turn 7." Two different files
-  for the same turn number can only come from a sync accident. Both are kept and the players pick
-  one, which is recorded locally.
+- A turn file that breaks the rules is shown, not applied. A gap, an unreadable file or a wrong
+  parent stops there: "turn 8 is here but turn 7 isn't yet. waiting for it." A file from the
+  player whose turn it wasn't is reported and skipped, and never blocks the real turn: only one
+  player may write each turn number, and the file name says who wrote it, so two valid files for
+  one turn can't exist.
 
 ## The doorbell
 
@@ -252,24 +255,21 @@ used only until this file exists.
 Each item stands on its own and is useful without bing bong:
 
 1. **A content id for audio.** `contentIdForFile(path)` (sha256, cached by path + mtime + size)
-   in `src/main/`. Used by bing bong's audio dedupe and by item 2.
-2. **Collect all and save.** Copy every audio file a sketch uses into a folder beside it,
-   deduplicated by content id, and repoint the copy's stems at them. For backups and moving a
-   sketch to another Mac. Bing bong's end-turn audio step is the same operation on one riff.
-3. **Locked riffs.** An optional `locked` flag on a timeline riff. Sketch, Arrange and Map can play
-   and solo it but can't move, resize, edit or delete it. The commands that would are disabled,
-   with a tooltip saying why.
-4. **Cross opens from any setup.** An entry point that takes a left parent, a right source (riff
-   or Discover), a pre-filled center, and a replacement for the primary action (`end turn` instead
-   of `add to shelf`). `createCrossDraft` (`src/shared/cross.ts`) today starts the center empty.
-5. **Reload on change.** When the open project's source of truth changes on disk (for bing bong,
-   a new turn file), rebuild and reload while keeping view, zoom, selection and playhead.
+   in `src/main/`. Used by bing bong's audio dedupe.
+2. **Locked riffs.** An optional `locked` flag on a riff. It plays and solos, but any action that
+   would move, resize, edit or delete it (a whole batch included) is refused, and a notice says
+   why: "that's a past turn, so it's locked."
+3. **Cross opens from any setup.** `openCrossFromRiffs` can pre-fill the center from the left riff
+   and swap add to shelf / add to timeline for one button (`done in cross`).
+
+Plan: `docs/superpowers/plans/2026-10-10-bing-bong-1-foundations.md`; the core is
+`2026-10-10-bing-bong-2-core.md`.
 
 ## The bing bong menu
 
-- `start a bing bong…` (from a selected riff), `join a bing bong…`, the list of bing bongs (each:
-  the other player, turn count, `your turn` / `waiting for ben` / `ben's turn is on its way`),
-  and settings (email).
+- A `bing bong` button in the project menu row: `start a bing bong…` (from the selected riff),
+  `join a bing bong…`, then (plan 4) the list of bing bongs (each: the other player, turn count,
+  `your turn` / `waiting for ben` / `ben's turn is on its way`), and settings (email, plan 3).
 
 ## Testing
 
@@ -293,4 +293,7 @@ Each item stands on its own and is useful without bing bong:
 - A server or other backends behind the same "shared folder" interface (GitHub repo,
   Cloudflare R2).
 - Referencing Endlesss stems by StemCID instead of copying them.
+- Collect all and save: copy every audio file a sketch uses beside it, for moving it to another
+  Mac.
+- Recording how many bars a turn plays (today each turn plays its loop once in the sketch).
 - Scoring.
