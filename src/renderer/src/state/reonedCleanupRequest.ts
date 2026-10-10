@@ -1,4 +1,4 @@
-// The gear menu's "clean up re-oned stem copies…" asks the notice (ReonedCopiesNotice.tsx) to
+// The gear menu's "clean up unused stem copies…" asks the notice (ReonedCopiesNotice.tsx) to
 // run, without threading a prop through App.
 const listeners = new Set<() => void>()
 

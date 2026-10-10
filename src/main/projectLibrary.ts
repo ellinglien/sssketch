@@ -118,11 +118,16 @@ export function bakeAssetsDir(root: string = libraryRootPath()): string {
   return join(root, '.bakes')
 }
 
-/** Durable, immutable audio produced by Shape Riff. Like `.bakes`, this is
- * project data rather than an evictable cache: saved shelf riffs may refer to
- * these files indefinitely. */
-export function shapeAssetsDir(): string {
-  return join(libraryRootPath(), '.shapes')
+/** EEEDIT's (Shape Riff's) renders: a riff's lanes (`<uuid>.shape.wav`), its
+ * intervention bakes (`<uuid>.shape-base.wav`) and the bounded preview cache
+ * (`.preview-cache`, at most 1 GB, least recently used first;
+ * shapeMaterialize.ts). Projects name the renders, so they follow `.bakes`'
+ * cleanup rules: the re-oned copies cleanup deletes only renders no project,
+ * backup, snapshot or session names that are more than a day old, plus a
+ * crashed render's staging folder (reonedUsage.ts's surveyShapes). `root` as
+ * for bakeAssetsDir. */
+export function shapeAssetsDir(root: string = libraryRootPath()): string {
+  return join(root, '.shapes')
 }
 
 // A hard, reliable split rather than a probe/fallback -- matches

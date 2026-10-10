@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   collectReonedNames,
   isReonedCopyFileName,
+  isShapeAssetFileName,
   isStaleTempFileName,
   reonedNamesInText
 } from './reonedNames'
@@ -68,5 +69,33 @@ describe('file names in .bakes', () => {
     expect(isStaleTempFileName('.6f1c2a9e-1b2c.baking.wav')).toBe(true) // the old temp naming
     expect(isStaleTempFileName(HASH)).toBe(false)
     expect(isReonedCopyFileName('.DS_Store')).toBe(false)
+  })
+})
+
+describe('EEEDIT renders in .shapes', () => {
+  const LANE = '6f1c2a9e-1b2c-4d5e-8f90-123456789abc.shape.wav'
+  const BASE = '7a1c2a9e-1b2c-4d5e-8f90-123456789abc.shape-base.wav'
+
+  it('names a lane render and an intervention bake, never a preview cache entry', () => {
+    const json = JSON.stringify({
+      a: `/lib/.shapes/${LANE}`,
+      b: { bakedBase: { path: `/lib/.shapes/${BASE}` } },
+      c: '/lib/.shapes/.preview-cache/0123456789abcdef.shape-preview.wav',
+      d: '/lib/.shapes/.preview-cache/0123456789abcdef.shape-raw.wav'
+    })
+    expect([...reonedNamesInText(json)].sort()).toEqual([LANE, BASE].sort())
+  })
+
+  it('collects them from in-memory values too (an open EEEDIT draft)', () => {
+    const draft = { lanes: [{ source: { path: `/lib/.shapes/${BASE}` } }], other: LANE }
+    expect([...collectReonedNames([draft])].sort()).toEqual([LANE, BASE].sort())
+  })
+
+  it('knows a .shapes file it may clean', () => {
+    expect(isShapeAssetFileName(LANE)).toBe(true)
+    expect(isShapeAssetFileName(BASE)).toBe(true)
+    expect(isShapeAssetFileName('0123.shape-preview.wav')).toBe(false)
+    expect(isShapeAssetFileName(HASH)).toBe(false)
+    expect(isShapeAssetFileName('.hidden.shape.wav')).toBe(false)
   })
 })

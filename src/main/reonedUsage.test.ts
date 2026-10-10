@@ -19,9 +19,11 @@ vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
 
 import {
   cleanBakes,
+  cleanShapes,
   collectUsedNames,
   isReadByLibraryWalk,
   surveyBakes,
+  surveyShapes,
   type UsedNameSources
 } from './reonedUsage'
 import { bakeOffset } from './bakeOffset'
@@ -329,5 +331,64 @@ describe('surveyBakes and cleanBakes', () => {
     await clean
     expect(existsSync(made.bakedPath)).toBe(true)
     expect(readdirSync(bakes)).toContain(basename(made.bakedPath))
+  })
+})
+
+describe('surveyShapes and cleanShapes: EEEDIT renders follow the same rules', () => {
+  const lane = (n: number): string =>
+    `${String(n).padStart(8, '0')}-aaaa-bbbb-cccc-dddddddddddd.shape.wav`
+  const base = (n: number): string =>
+    `${String(n).padStart(8, '0')}-aaaa-bbbb-cccc-dddddddddddd.shape-base.wav`
+  let shapes: string
+  function file(path: string, ageMs = 2 * DAY, bytes = 1000): void {
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, Buffer.alloc(bytes))
+    age(path, ageMs)
+  }
+  beforeEach(() => {
+    shapes = join(root, '.shapes')
+    file(join(shapes, lane(1)))
+    file(join(shapes, lane(2)))
+    file(join(shapes, base(3)))
+    file(join(shapes, lane(4)), DAY - 60_000)
+    file(join(shapes, 'notes.txt'))
+    file(join(shapes, '.preview-cache', 'abc.shape-preview.wav'))
+    file(join(shapes, '.job-1-uuid', '1.rendering.wav'), 2 * DAY, 300)
+    age(join(shapes, '.job-1-uuid'), 2 * DAY)
+    file(join(shapes, '.preview-cache', '.job-2-uuid', '1.rendering.wav'), 2 * DAY, 200)
+    age(join(shapes, '.preview-cache', '.job-2-uuid'), 2 * DAY)
+    file(join(shapes, '.job-3-uuid', '1.rendering.wav'), 0, 100)
+  })
+
+  it('unused renders and stale staging folders more than a day old, nothing else', async () => {
+    const used = new Set([lane(1)])
+    const survey = await surveyShapes(shapes, used, now)
+    expect(survey.unusedBytes).toBe(1000 + 1000 + 300 + 200)
+    const result = await cleanShapes(shapes, used, now, () => [])
+    expect(result).toEqual({ freedBytes: 2500, deletedCount: 4, failedCount: 0 })
+    expect(readdirSync(shapes).sort()).toEqual(
+      ['.job-3-uuid', '.preview-cache', lane(1), lane(4), 'notes.txt'].sort()
+    )
+    expect(readdirSync(join(shapes, '.preview-cache'))).toEqual(['abc.shape-preview.wav'])
+  })
+
+  it('keeps a render this session handed out, read inside the lock', async () => {
+    const result = await cleanShapes(shapes, new Set(), now, () => [lane(2), base(3)])
+    expect(existsSync(join(shapes, lane(2)))).toBe(true)
+    expect(existsSync(join(shapes, base(3)))).toBe(true)
+    expect(existsSync(join(shapes, lane(1)))).toBe(false)
+    expect(result.deletedCount).toBe(3)
+  })
+
+  it('no .shapes folder at all: nothing unused, nothing cleaned', async () => {
+    rmSync(shapes, { recursive: true })
+    expect(await surveyShapes(shapes, new Set(), now)).toEqual({ unused: [], unusedBytes: 0 })
+  })
+
+  it('the library walk never reads inside .shapes', async () => {
+    project(join(shapes, 'stray.sssketchproj'), 1)
+    const scan = await collectUsedNames(sources())
+    expect(scan.ok && sorted(scan.used)).toEqual([])
+    expect(isReadByLibraryWalk(join(shapes, 'stray.sssketchproj'), root)).toBe(false)
   })
 })

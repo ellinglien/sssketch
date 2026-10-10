@@ -4,10 +4,15 @@
 // blocks (AGENTS.md section 6). No electron and no better-sqlite3: reonedCopiesIpc.ts passes
 // every root in, and this module's test stays off vitest.config.ts's CI exclude list.
 import type { Dirent } from 'node:fs'
-import { readdir, readFile, realpath, stat, unlink } from 'node:fs/promises'
+import { readdir, readFile, realpath, rm, stat, unlink } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { CLEANUP_GRACE_MS } from '@shared/reonedCleanup'
-import { isReonedCopyFileName, isStaleTempFileName, reonedNamesInText } from '@shared/reonedNames'
+import {
+  isReonedCopyFileName,
+  isShapeAssetFileName,
+  isStaleTempFileName,
+  reonedNamesInText
+} from '@shared/reonedNames'
 import { sessionKeptNames, withReonedCopiesLock } from './reonedCopiesSession'
 import type { KnownProject } from './reonedCopiesStore'
 
@@ -48,11 +53,13 @@ async function scanText(
 }
 
 /** Folders the walk never enters. The app's own caches hold audio, never a project:
- * `.bakes` (re-oned copies) and `.samples-cache` (export samples, projectLibrary.ts). The rest are
+ * `.bakes` (re-oned copies), `.shapes` (EEEDIT renders) and `.samples-cache` (export samples,
+ * projectLibrary.ts). The rest are
  * macOS's own bookkeeping at a volume's root, which can't be listed and would stop every pass for
  * a library kept at the top of a drive. */
 const SKIPPED_FOLDERS = new Set([
   '.bakes',
+  '.shapes',
   '.samples-cache',
   '.Trashes',
   '.Spotlight-V100',
@@ -231,6 +238,108 @@ export function cleanBakes(
       try {
         await unlink(join(bakesDir, file.name))
         freedBytes += file.size
+        deletedCount++
+      } catch (err) {
+        if (!isNotFound(err)) failedCount++
+      }
+      await yieldToEventLoop()
+    }
+    return { freedBytes, deletedCount, failedCount }
+  })
+}
+
+/** What can go from `.shapes` (EEEDIT, projectLibrary.ts's shapeAssetsDir): a lane render or an
+ * intervention bake no one names, and a render's staging folder (a dot-named folder in `.shapes`
+ * or its `.preview-cache`) left behind by a crash, each more than a day old. `path` is relative to
+ * `.shapes`. The preview cache's own renders are bounded by that cache (shapeMaterialize.ts), and
+ * anything else in the folder is left alone. */
+export interface ShapesEntry {
+  path: string
+  size: number
+  mtimeMs: number
+  folder: boolean
+}
+
+const PREVIEW_CACHE = '.preview-cache'
+
+async function folderBytes(path: string): Promise<number> {
+  let total = 0
+  for (const name of await readdir(path)) {
+    try {
+      const info = await stat(join(path, name))
+      if (info.isFile()) total += info.size
+    } catch {
+      // gone meanwhile
+    }
+  }
+  return total
+}
+
+export async function surveyShapes(
+  shapesDir: string,
+  used: ReadonlySet<string>,
+  now: number
+): Promise<{ unused: ShapesEntry[]; unusedBytes: number }> {
+  const unused: ShapesEntry[] = []
+  const look = async (relFolder: string): Promise<void> => {
+    let entries: Dirent[]
+    try {
+      entries = await readdir(join(shapesDir, relFolder), { withFileTypes: true })
+    } catch (err) {
+      if (isNotFound(err)) return
+      throw err
+    }
+    for (const entry of entries) {
+      const rel = relFolder === '' ? entry.name : join(relFolder, entry.name)
+      const staging =
+        entry.isDirectory() && entry.name.startsWith('.') && entry.name !== PREVIEW_CACHE
+      const render =
+        relFolder === '' &&
+        entry.isFile() &&
+        isShapeAssetFileName(entry.name) &&
+        !used.has(entry.name)
+      if (!staging && !render) continue
+      try {
+        const path = join(shapesDir, rel)
+        const info = await stat(path)
+        if (now - info.mtimeMs < CLEANUP_GRACE_MS) continue
+        unused.push({
+          path: rel,
+          size: staging ? await folderBytes(path) : info.size,
+          mtimeMs: info.mtimeMs,
+          folder: staging
+        })
+      } catch {
+        // gone meanwhile
+      }
+    }
+  }
+  await look('')
+  await look(PREVIEW_CACHE)
+  return { unused, unusedBytes: unused.reduce((sum, f) => sum + f.size, 0) }
+}
+
+/** cleanBakes for `.shapes`, under the same lock and with the same rules: this session's names
+ * are read inside the lock, and the folder is surveyed again there, so age is checked right
+ * before each delete. Never deletes outside `.shapes`. */
+export function cleanShapes(
+  shapesDir: string,
+  used: ReadonlySet<string>,
+  now: number,
+  sessionNames: () => Iterable<string> = sessionKeptNames
+): Promise<{ freedBytes: number; deletedCount: number; failedCount: number }> {
+  return withReonedCopiesLock(async () => {
+    const keep = new Set([...used, ...sessionNames()])
+    const { unused } = await surveyShapes(shapesDir, keep, now)
+    let freedBytes = 0
+    let deletedCount = 0
+    let failedCount = 0
+    for (const entry of unused) {
+      const path = join(shapesDir, entry.path)
+      try {
+        if (entry.folder) await rm(path, { recursive: true, force: true })
+        else await unlink(path)
+        freedBytes += entry.size
         deletedCount++
       } catch (err) {
         if (!isNotFound(err)) failedCount++

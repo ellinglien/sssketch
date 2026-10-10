@@ -233,23 +233,28 @@ so the timer stops once nothing is left to retry. A copy rebuilt under a new nam
 `REPAIR_REONED_PATHS` in the present and every undo and redo step (`history.ts`): it is the same
 audio, and no undo step is added. Unused copies are cleaned by the launch notice
 (`ReonedCopiesNotice.tsx`, from 200 MB, "not now" for 7 days) and the gear menu's "clean up
-re-oned stem copies…". Their IPC (rebuild, library check, survey, clean, not now) is in
-`src/main/reonedCopiesIpc.ts`, registered from `index.ts`.
+unused stem copies…". Their IPC (rebuild, library check, survey, clean, not now) is in
+`src/main/reonedCopiesIpc.ts`, registered from `index.ts`. The same survey and clean cover
+EEEDIT's renders in `<library>/.shapes` (`<uuid>.shape.wav` lanes, `<uuid>.shape-base.wav`
+intervention bakes, and a crashed render's dot-named staging folder; `surveyShapes`/`cleanShapes`
+in `reonedUsage.ts`), with the same used set, lock and one-day grace. Its `.preview-cache` bounds
+itself (1 GB, least recently used first). A copy named only by an EEEDIT recipe
+(`stem.shape.source`) is rebuilt on open like any other, but not reported missing: nothing plays it.
 
 "Used" means named by:
 - the autosave or its aside snapshot, read first (a recover deletes the autosave; it is written to
   a temporary and renamed over, so it is never read half-written);
 - any project file under the library root: the scan walks the whole tree (`reonedUsage.ts`), every
   `.sssketchproj` at any depth, dot-named and symlinked folders included (each real folder once),
-  and every file in any `.backups` folder. It skips only `.bakes`, `.samples-cache` and macOS's
+  and every file in any `.backups` folder. It skips only `.bakes`, `.shapes`, `.samples-cache` and macOS's
   volume folders (`.Trashes`, `.Spotlight-V100`, ...), and stops at a folder it can't list or a
   symlink whose target is away. `isInsideLibrary` (`projectFile.ts`) uses the walk's own rule
   (`isReadByLibraryWalk`), so a project the walk doesn't read is remembered instead;
 - a remembered outside project (`reonedCopiesStore.ts`, 50 kept). A store that can't be read is
   never written over; a corrupt one is moved aside to `reonedCopies.corrupt-<time>.json`, and the
   survey and the clean stop until that file is deleted;
-- the open project, its undo history, Cross, Discover and Discover's undo and redo
-  (`state/reonedInUse.ts`);
+- the open project, its undo history, Cross, Discover and Discover's undo and redo, and the open
+  EEEDIT draft with its undo and redo (`state/reonedInUse.ts`);
 - this session (`reonedCopiesSession.ts`, read again inside the `.bakes` lock at delete time):
   copies handed out, and copies named by any project text main handed to the renderer or wrote
   (open, library open, backup read or restore, autosave offer, save, autosave). That covers a
@@ -263,7 +268,7 @@ A copy is deleted only if it is unused and more than a day old (`reonedUsage.ts`
 - Anything new that can hold a stem path, such as a new session type or a new saved file, must
   join the used set.
 - A failed bake never deletes a copy it didn't create.
-- Never delete outside `.bakes`, and leave the legacy `.sssketch-bakes/` folders alone.
+- Never delete outside `.bakes` and `.shapes`, and leave the legacy `.sssketch-bakes/` folders alone.
 - `bakeOffset` and the scans are async and yield between stems and slices: the library is often
   on a USB drive.
 

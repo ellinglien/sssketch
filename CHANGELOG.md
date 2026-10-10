@@ -25,6 +25,7 @@
 
 ### Changed
 
+- EEEDIT's rendered stems (in the library's `.shapes` folder) are cleaned up with the re-oned stem copies: the launch notice and the gear menu's item (now "clean up unused stem copies…") count and remove the ones no project uses, more than a day old.
 - Widened EEEDIT's inspector and increased its compact typography. The header now pairs a left-aligned Inspector label with the selected stem identity, its empty state includes concise clip and shelf-donor guidance, and the bottom help tray is easier to read.
 - Regrouped EEEDIT's toolbar around transport/history, metronome/snap/editing tools, and riff reset. Removed the source/edited comparison toggle so playback consistently monitors the edited result, and used the lane's spare width to separate its gain knob from Mute/Solo.
 - New Compand Distortion interventions now start at −16 dB output trim, providing safer headroom for their aggressive default drive without altering saved intervention settings.

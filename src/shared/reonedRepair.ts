@@ -52,7 +52,12 @@ export function planReonedRepair(
     if (options.placedOnly && rifff.startBar === undefined) continue
     const stems: ReonedRepairStem[] = []
     const planned = new Set<string>()
-    for (const s of rifff.stems) {
+    // An EEEDIT render plays its own file, but its recipe's source (stem.shape.source) may be a
+    // copy too: EEEDIT reopens and resets from it. Not for an export, which renders what plays.
+    const candidates = rifff.stems.flatMap((s) =>
+      !options.placedOnly && s.shape ? [s, s.shape.source] : [s]
+    )
+    for (const s of candidates) {
       if (!isCopyPath(s.path) || s.phaseSourcePath === undefined || s.phaseSourcePath === s.path) {
         continue
       }
@@ -98,21 +103,41 @@ export function applyReonedRepair(
       moved.set(outcome.path, outcome)
     }
   }
+  // Missing means a stem plays it: a copy only an EEEDIT recipe names is rebuilt when it can be,
+  // but nothing is silent without it, so it isn't reported.
+  const played = new Set<string>()
+  for (const rifff of Object.values(rifffs)) for (const s of rifff.stems) played.add(s.path)
   const stillMissing = [...missing]
-    .filter(([path]) => !found.has(path))
+    .filter(([path]) => !found.has(path) && played.has(path))
     .map(([path, reason]) => ({ path, reason }))
   if (moved.size === 0) return { rifffs, missing: stillMissing }
   const next: Record<string, Rifff> = {}
   let anyTouched = false
   for (const [groupId, rifff] of Object.entries(rifffs)) {
-    const touched = rifff.stems.some((s) => moved.has(s.path))
+    const touched = rifff.stems.some(
+      (s) => moved.has(s.path) || (s.shape !== undefined && moved.has(s.shape.source.path))
+    )
     anyTouched ||= touched
     next[groupId] = touched
       ? {
           ...rifff,
           stems: rifff.stems.map((s) => {
             const m = moved.get(s.path)
-            return m ? { ...s, path: m.bakedPath, durationSec: m.durationSec } : s
+            const repointed = m ? { ...s, path: m.bakedPath, durationSec: m.durationSec } : s
+            const ms = s.shape ? moved.get(s.shape.source.path) : undefined
+            return ms && repointed.shape
+              ? {
+                  ...repointed,
+                  shape: {
+                    ...repointed.shape,
+                    source: {
+                      ...repointed.shape.source,
+                      path: ms.bakedPath,
+                      durationSec: ms.durationSec
+                    }
+                  }
+                }
+              : repointed
           })
         }
       : rifff

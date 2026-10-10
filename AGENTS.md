@@ -128,7 +128,8 @@ a merge.
   anything new that holds stem paths joins the used set (`reonedUsage.ts` /
   `state/reonedInUse.ts`, and `noteSessionProjectText` for any new way main hands a project to
   the renderer or writes one); `BAKER_VERSION` is bumped when the baker's output changes; and
-  cleanup deletes only unused copies more than a day old, never outside `.bakes`.
+  cleanup deletes only unused copies more than a day old, never outside `.bakes` and `.shapes`
+  (EEEDIT's renders, cleaned by the same rules).
 - **Re-oned copies:** a missing copy is rebuilt on open and before export without marking the
   project unsaved, and a failed bake never deletes a copy it didn't create.
 

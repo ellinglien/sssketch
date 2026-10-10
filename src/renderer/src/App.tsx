@@ -2073,6 +2073,7 @@ function Frame(): React.JSX.Element {
   useEffect(() => loadSavedPreviewLevel(), [])
   useEffect(() => setReonedSessionRoot('cross', crossDraft), [crossDraft])
   useEffect(() => setReonedSessionRoot('discover', discoverSlots), [discoverSlots])
+  useEffect(() => setReonedSessionRoot('shape', shapeDraft), [shapeDraft])
   // One shared, session-only riff selection for both Sketch and Shelf.
   // Keeping this above the fullscreen Cross/Discover workspaces means the
   // exact working set remains highlighted when either workspace closes;
