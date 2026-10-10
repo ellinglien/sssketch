@@ -711,6 +711,10 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
               return
             }
             await window.rifffApi.engineLoadProject(project)
+          } catch (err) {
+            // Fire-and-forget from the rAF callback: a failed build or send
+            // must not become an unhandled rejection. The next edit retries.
+            console.error('StoreContext: engine sync failed:', err)
           } finally {
             // Cleared only once the send actually completes (success or
             // failure) -- not at the start of the rAF callback -- so at
