@@ -165,9 +165,9 @@ export function SketchStrip({
         !window.confirm(
           shelfOnlyTargets.length > 0
             ? targets.size > 0
-              ? `Remove ${targets.size} selected riff${targets.size === 1 ? '' : 's'} from Sketch and delete ${shelfOnlyTargets.length} shelf-only riff${shelfOnlyTargets.length === 1 ? '' : 's'} from this project? You can undo this as one step.`
-              : `Delete ${shelfOnlyTargets.length} selected shelf-only riff${shelfOnlyTargets.length === 1 ? '' : 's'} from this project? You can undo this.`
-            : `Remove ${targets.size} selected riffs from Sketch? They will remain available in the shelf.`
+              ? `remove ${targets.size} selected riff${targets.size === 1 ? '' : 's'} from sketch and delete ${shelfOnlyTargets.length} shelf-only riff${shelfOnlyTargets.length === 1 ? '' : 's'} from this project? you can undo this as one step.`
+              : `delete ${shelfOnlyTargets.length} selected shelf-only riff${shelfOnlyTargets.length === 1 ? '' : 's'} from this project? you can undo this.`
+            : `remove ${targets.size} selected riffs from sketch? they stay in the shelf.`
         )
       ) {
         return

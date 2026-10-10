@@ -47,7 +47,7 @@ const previewMetadata = new Map<string, ShapeMaterializedStem>()
 const MAX_SHAPE_PREVIEW_CACHE_BYTES = 1024 * 1024 * 1024
 
 function assertFinitePositive(value: number, label: string): void {
-  if (!Number.isFinite(value) || value <= 0) throw new Error(`Invalid Shape ${label}.`)
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`invalid EEEDIT ${label}.`)
 }
 
 function inside(root: string, candidate: string): boolean {
@@ -65,7 +65,7 @@ function removePath(path: string): void {
 }
 
 function throwIfCancelled(jobId: string): void {
-  if (cancelledJobs.has(jobId)) throw new Error('Shape render was cancelled.')
+  if (cancelledJobs.has(jobId)) throw new Error('the EEEDIT render was cancelled.')
 }
 
 function stopNativeSession(session: MaterializeNativeSession): void {
@@ -315,7 +315,8 @@ function enforceShapePreviewCacheLimit(dir: string): void {
 }
 
 function inspectShapeWav(path: string, loopBars: number, targetBpm: number): ShapeMaterializedStem {
-  if (!existsSync(path) || statSync(path).size === 0) throw new Error('Shape WAV is missing.')
+  if (!existsSync(path) || statSync(path).size === 0)
+    throw new Error('an EEEDIT render is missing.')
   const wav = findWavChunks(new Uint8Array(readFileSync(path)))
   const bytesPerFrame = wav.numChannels * (wav.bitsPerSample / 8)
   const frames = bytesPerFrame > 0 ? wav.dataSize / bytesPerFrame : 0
@@ -328,7 +329,7 @@ function inspectShapeWav(path: string, loopBars: number, targetBpm: number): Sha
     !Number.isInteger(frames) ||
     Math.abs(frames - expectedFrames) > 1
   ) {
-    throw new Error('Shape WAV is not a complete float render.')
+    throw new Error('an EEEDIT render is incomplete.')
   }
   return {
     path,
@@ -341,7 +342,7 @@ function inspectShapeWav(path: string, loopBars: number, targetBpm: number): Sha
 
 function inspectShapeSourceWav(path: string): ShapeMaterializedStem {
   if (!existsSync(path) || statSync(path).size === 0)
-    throw new Error('Shape source WAV is missing.')
+    throw new Error('an EEEDIT source render is missing.')
   const wav = findWavChunks(new Uint8Array(readFileSync(path)))
   const bytesPerFrame = wav.numChannels * (wav.bitsPerSample / 8)
   const frames = bytesPerFrame > 0 ? wav.dataSize / bytesPerFrame : 0
@@ -353,7 +354,7 @@ function inspectShapeSourceWav(path: string): ShapeMaterializedStem {
     !Number.isInteger(frames) ||
     frames <= 0
   ) {
-    throw new Error('Shape source WAV is not a complete float render.')
+    throw new Error('an EEEDIT source render is incomplete.')
   }
   return {
     path,
@@ -412,7 +413,7 @@ export async function bakeShapeProcess(
   request: ShapeBakeProcessRequest,
   durableRoot: string
 ): Promise<ShapeBakeProcessResult> {
-  if (!request.jobId || request.items.length === 0) throw new Error('Shape Bake is empty.')
+  if (!request.jobId || request.items.length === 0) throw new Error('nothing to bake.')
   const batchRoot = join(durableRoot, `.${request.jobId}-${randomUUID()}`)
   mkdirSync(batchRoot, { recursive: true })
   let engine: Awaited<ReturnType<typeof spawnEngine>> | null = null
@@ -429,8 +430,8 @@ export async function bakeShapeProcess(
     client = new EngineClient()
     await client.connect(engine.port)
     for (const [index, item] of request.items.entries()) {
-      assertFinitePositive(item.source.durationSec, 'Bake source duration')
-      assertFinitePositive(item.source.barLength, 'Bake source bar length')
+      assertFinitePositive(item.source.durationSec, 'bake source duration')
+      assertFinitePositive(item.source.barLength, 'bake source bar length')
       const temporaryPath = join(batchRoot, `${index + 1}.baking.wav`)
       const reply = (await client.sendAndAwaitType(
         'render-shape-process-source',
@@ -449,7 +450,7 @@ export async function bakeShapeProcess(
         !reply.frames ||
         !reply.channels
       ) {
-        throw new Error(reply.error || 'Shape Process Bake failed to render.')
+        throw new Error(reply.error || 'the bake failed to render.')
       }
       const inspected = inspectShapeSourceWav(temporaryPath)
       if (
@@ -457,7 +458,7 @@ export async function bakeShapeProcess(
         inspected.channels !== reply.channels ||
         inspected.frames !== reply.frames
       ) {
-        throw new Error('Shape Process Bake did not produce the promised float WAV.')
+        throw new Error('the bake came back incomplete.')
       }
       pending.push({
         fragmentId: item.fragmentId,
@@ -504,7 +505,7 @@ export async function materializeShape(
 ): Promise<ShapeMaterializeResult> {
   assertFinitePositive(request.targetBpm, 'tempo')
   assertFinitePositive(request.loopBars, 'length')
-  if (!request.jobId || request.lanes.length === 0) throw new Error('Shape render is empty.')
+  if (!request.jobId || request.lanes.length === 0) throw new Error('nothing to render.')
 
   cancelledJobs.delete(request.jobId)
   materializeAbortControllers.get(request.jobId)?.abort()
@@ -543,7 +544,7 @@ export async function materializeShape(
       const lane = request.lanes[index]
       const source = lane.source
       if (source.oneShot || source.trimStartSec !== undefined || source.trimEndSec !== undefined) {
-        throw new Error('Shape Riff does not yet support one-shot or trimmed stems.')
+        throw new Error("EEEDIT can't edit one-shot or trimmed stems yet.")
       }
       assertFinitePositive(source.durationSec, 'source duration')
       assertFinitePositive(source.barLength, 'source bar length')
@@ -669,7 +670,7 @@ export async function materializeShape(
               !processReply.frames ||
               !processReply.channels
             ) {
-              throw new Error(processReply.error || 'Shape Process source failed to render.')
+              throw new Error(processReply.error || 'a treatment failed to render.')
             }
             const inspectedProcess = inspectShapeSourceWav(temporaryProcessPath)
             if (
@@ -677,7 +678,7 @@ export async function materializeShape(
               inspectedProcess.channels !== processReply.channels ||
               inspectedProcess.frames !== processReply.frames
             ) {
-              throw new Error('Shape Process source did not produce the promised float WAV.')
+              throw new Error('a treatment came back incomplete.')
             }
             renameSync(temporaryProcessPath, processPath)
             processed = { ...inspectedProcess, path: processPath }
@@ -744,7 +745,7 @@ export async function materializeShape(
                 !rawReply.frames ||
                 !rawReply.channels
               ) {
-                throw new Error(rawReply.error || 'Shape Raw source failed to render.')
+                throw new Error(rawReply.error || 'a raw rate change failed to render.')
               }
               const inspectedRaw = inspectShapeSourceWav(temporaryRawPath)
               if (
@@ -752,7 +753,7 @@ export async function materializeShape(
                 inspectedRaw.channels !== rawReply.channels ||
                 inspectedRaw.frames !== rawReply.frames
               ) {
-                throw new Error('Shape Raw source did not produce the promised float WAV.')
+                throw new Error('a raw rate change came back incomplete.')
               }
               renameSync(temporaryRawPath, rawPath)
               rawPrepared = { ...inspectedRaw, path: rawPath }
@@ -845,7 +846,7 @@ export async function materializeShape(
         !reply.frames ||
         !reply.channels
       ) {
-        throw new Error(reply.error || `Shape lane ${index + 1} failed to render.`)
+        throw new Error(reply.error || `stem ${index + 1} failed to render.`)
       }
       const expectedFrames = Math.ceil(
         request.loopBars * (240 / request.targetBpm) * reply.sampleRate
@@ -856,7 +857,7 @@ export async function materializeShape(
         !existsSync(temporaryPath) ||
         statSync(temporaryPath).size === 0
       ) {
-        throw new Error(`Shape lane ${index + 1} produced invalid audio.`)
+        throw new Error(`stem ${index + 1} came back with invalid audio.`)
       }
       const inspected = inspectShapeWav(temporaryPath, request.loopBars, request.targetBpm)
       if (
@@ -864,7 +865,7 @@ export async function materializeShape(
         inspected.channels !== reply.channels ||
         inspected.frames !== reply.frames
       ) {
-        throw new Error(`Shape lane ${index + 1} did not produce the promised float WAV.`)
+        throw new Error(`stem ${index + 1} came back incomplete.`)
       }
       if (request.mode === 'preview') {
         renameSync(temporaryPath, finalPath)

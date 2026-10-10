@@ -2715,7 +2715,7 @@ function Frame(): React.JSX.Element {
       }
       if (!prepared) {
         shapeOpeningSelectionRef.current = null
-        window.alert('Could not prepare every stem for editing. Nothing was changed; try again.')
+        window.alert('could not prepare every stem for EEEDIT. nothing was changed; try again.')
         return
       }
       // A nonzero runtime Re-1 was physically baked above. That establishes
@@ -2739,7 +2739,7 @@ function Frame(): React.JSX.Element {
       if (shapeOpenGenerationRef.current !== generation) return
       shapeOpeningSelectionRef.current = null
       console.error('App: failed to prepare riff for Shape:', err)
-      window.alert(err instanceof Error ? err.message : 'Could not open the riff editor.')
+      window.alert(err instanceof Error ? err.message : 'could not open EEEDIT.')
     } finally {
       if (shapeOpenGenerationRef.current === generation) setBusy(null)
     }
@@ -2757,7 +2757,7 @@ function Frame(): React.JSX.Element {
   async function materializeCurrentShape(draft: ShapeDraft): Promise<ShapeAssembly | null> {
     const projectKey = shapeProjectKey(projectSessionEpochRef.current)
     if (draft.projectKey !== projectKey)
-      throw new Error('This riff edit belongs to another project.')
+      throw new Error('this EEEDIT draft belongs to another project.')
     const jobId = `${draft.id}:${draft.revision}:commit:${crypto.randomUUID()}`
     const result = await window.rifffApi.materializeShape({
       jobId,
@@ -2805,7 +2805,7 @@ function Frame(): React.JSX.Element {
           )
         }
         if (!shapeDraftIsCurrent(draft)) return
-        if (!saved || !('duplicate' in saved)) throw new Error('Could not keep the edited riff.')
+        if (!saved || !('duplicate' in saved)) throw new Error('could not keep the edited riff.')
         shapeSavedFingerprintRef.current = shapeContentFingerprint(draft)
         setShapeDirty(false)
         return saved.duplicate ? 'already kept' : '✓ kept'
@@ -2836,7 +2836,7 @@ function Frame(): React.JSX.Element {
       setShapeDirty(false)
     } catch (err) {
       console.error('App: failed to save Shape result:', err)
-      window.alert('Could not render every edited stem. The source riff was not changed.')
+      window.alert('could not render every edited stem. the source riff was not changed.')
       throw err
     }
   }
@@ -3785,7 +3785,7 @@ function Frame(): React.JSX.Element {
               }
               onKeep={async (draft) => {
                 const label = await publishShape(draft, 'keep')
-                if (!label) throw new Error('The riff edit changed before Keep completed.')
+                if (!label) throw new Error('the draft changed before keep finished.')
                 return label
               }}
               onAddToShelf={async (draft) => {
@@ -4226,8 +4226,8 @@ function Frame(): React.JSX.Element {
         )}
         {shapeDiscardPromptOpen && (
           <ConfirmationDialog
-            message="Discard changes?"
-            detail="Anything not kept or added will be lost."
+            message="discard your EEEDIT changes?"
+            detail="anything not kept or added to the shelf is lost."
             actions={[
               { label: 'cancel', onClick: () => setShapeDiscardPromptOpen(false) },
               { label: 'discard', onClick: finishCloseShape, danger: true, primary: true }

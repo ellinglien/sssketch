@@ -126,7 +126,9 @@ function touchCacheEntry(path: string): void {
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return
-  throw signal.reason instanceof Error ? signal.reason : new Error('Audio render was cancelled.')
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error('the audio render was cancelled.')
 }
 
 /** Publish only complete, readable WAVs under shared cache names. Every
@@ -247,7 +249,7 @@ export async function renderShapePitch(
 ): Promise<StretchedStem> {
   if (!isUsableStemFile(stemPath)) throw new StemNotDownloadedError(stemPath)
   if (!Number.isFinite(tempoRatio) || tempoRatio <= 0 || !Number.isFinite(pitchSemitones)) {
-    throw new Error('Invalid Shape pitch render parameters.')
+    throw new Error('invalid EEEDIT pitch settings.')
   }
   if (Math.abs(pitchSemitones) < 0.0001) return renderStretched(stemPath, tempoRatio, signal)
 
@@ -303,7 +305,7 @@ export async function renderShapeFormant(
 ): Promise<StretchedStem> {
   if (!isUsableStemFile(stemPath)) throw new StemNotDownloadedError(stemPath)
   if (!Number.isFinite(formantSemitones) || Math.abs(formantSemitones) > 12) {
-    throw new Error('Invalid Shape formant render parameters.')
+    throw new Error('invalid EEEDIT formant settings.')
   }
   if (Math.abs(formantSemitones) < 0.0001) {
     return { path: stemPath, durationSec: readWavDurationSeconds(readFileSync(stemPath)) }

@@ -479,7 +479,7 @@ export function createShapeDraft(
   if (
     rifff.stems.some((stem) => stem.oneShot || stem.trimStartSec || stem.trimEndSec !== undefined)
   ) {
-    throw new Error('Shape Riff does not yet support one-shot or trimmed stems.')
+    throw new Error("EEEDIT can't edit one-shot or trimmed stems yet.")
   }
   const groupGain = vol[rifff.groupId] ?? 1
   const lanes = rifff.stems.map((stem): ShapeLane => {
@@ -1635,7 +1635,7 @@ export function assembleShapeRifff(
   groupId = id()
 ): ShapeAssembly {
   if (results.length !== draft.lanes.length) {
-    throw new Error('Shape materialization did not return every lane.')
+    throw new Error('EEEDIT did not get every stem back from the render.')
   }
   const stems: Stem[] = draft.lanes.map((lane, index) => {
     const result = results[index]

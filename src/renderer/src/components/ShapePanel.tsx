@@ -298,22 +298,22 @@ function commonNumber(values: number[]): number | null {
 type ShapeProcessType = ShapeClipProcessV1['type']
 
 const SHAPE_PROCESS_CATALOG: ReadonlyArray<{ type: ShapeProcessType; label: string }> = [
-  { type: 'wavefold', label: 'Wavefold' },
-  { type: 'saturation', label: 'Saturation' },
-  { type: 'hard-clip', label: 'Hard Clip' },
-  { type: 'rectify', label: 'Rectify' },
-  { type: 'bit-crush', label: 'Bit Crush' },
-  { type: 'rate-crush', label: 'Rate Crush' },
-  { type: 'ring-mod', label: 'Ring Mod' },
-  { type: 'comb', label: 'Comb' },
-  { type: 'smear', label: 'Smear' },
-  { type: 'compand', label: 'Compand Distortion' },
-  { type: 'codec-damage', label: 'Codec Damage' },
-  { type: 'short-room', label: 'Short Room' },
-  { type: 'frequency-shift', label: 'Frequency Shift' },
-  { type: 'chorus', label: 'Chorus' },
-  { type: 'dj-eq', label: 'DJ EQ' },
-  { type: 'tone', label: 'Tone' }
+  { type: 'wavefold', label: 'wavefold' },
+  { type: 'saturation', label: 'saturation' },
+  { type: 'hard-clip', label: 'hard clip' },
+  { type: 'rectify', label: 'rectify' },
+  { type: 'bit-crush', label: 'bit crush' },
+  { type: 'rate-crush', label: 'rate crush' },
+  { type: 'ring-mod', label: 'ring mod' },
+  { type: 'comb', label: 'comb' },
+  { type: 'smear', label: 'smear' },
+  { type: 'compand', label: 'compand distortion' },
+  { type: 'codec-damage', label: 'codec damage' },
+  { type: 'short-room', label: 'short room' },
+  { type: 'frequency-shift', label: 'frequency shift' },
+  { type: 'chorus', label: 'chorus' },
+  { type: 'dj-eq', label: 'dj eq' },
+  { type: 'tone', label: 'tone' }
 ]
 
 function shapeProcessLabel(type: ShapeProcessType): string {
@@ -1118,7 +1118,7 @@ function ShapeClipInspector({
               letterSpacing: '0.08em'
             }}
           >
-            INSPECTOR
+            inspector
           </span>
         </div>
         <div
@@ -1169,7 +1169,7 @@ function ShapeClipInspector({
             lineHeight: 1.4
           }}
         >
-          <span>Drag regions to create clips.</span>
+          <span>drag regions to create clips.</span>
           <span
             style={{
               padding: '9px 10px',
@@ -1177,7 +1177,7 @@ function ShapeClipInspector({
               background: 'var(--ra-bg-row-sub)'
             }}
           >
-            Drag riffs from the shelf to import stems.
+            drag riffs from the shelf to import stems.
           </span>
         </div>
       </aside>
@@ -1224,7 +1224,7 @@ function ShapeClipInspector({
             letterSpacing: '0.08em'
           }}
         >
-          INSPECTOR
+          inspector
         </span>
         <span
           style={{
@@ -1273,10 +1273,10 @@ function ShapeClipInspector({
       >
         <div style={{ marginBottom: 5 }}>
           <span style={{ fontSize: 10, color: 'var(--ra-text-3)', letterSpacing: '0.08em' }}>
-            TRANSFORM
+            transform
           </span>
         </div>
-        <div style={{ fontSize: 10, color: 'var(--ra-text-2)', marginBottom: 3 }}>Transpose</div>
+        <div style={{ fontSize: 10, color: 'var(--ra-text-2)', marginBottom: 3 }}>transpose</div>
         <div
           style={{
             display: 'grid',
@@ -1334,7 +1334,7 @@ function ShapeClipInspector({
         </div>
 
         <div style={compactDivider} />
-        <div style={{ fontSize: 10, color: 'var(--ra-text-2)', marginBottom: 3 }}>Detune</div>
+        <div style={{ fontSize: 10, color: 'var(--ra-text-2)', marginBottom: 3 }}>detune</div>
         <div
           style={{
             display: 'grid',
@@ -1375,7 +1375,7 @@ function ShapeClipInspector({
           title="spectral envelope shift"
           style={{ fontSize: 10, color: 'var(--ra-text-2)', marginBottom: 3 }}
         >
-          Formant
+          formant
         </div>
         <div
           style={{
@@ -1432,7 +1432,7 @@ function ShapeClipInspector({
             title="circularly shift the selected stem lanes"
             style={{ fontSize: 10, color: 'var(--ra-text-2)' }}
           >
-            Rotate
+            rotate
           </div>
           <button
             disabled={!enabled || !canResetRotation}
@@ -1510,7 +1510,7 @@ function ShapeClipInspector({
             title="speed + pitch · changes clip length"
             style={{ fontSize: 10, color: 'var(--ra-text-2)' }}
           >
-            Rate
+            rate
           </div>
           <button
             disabled={!enabled || rate === 0.25}
@@ -1546,7 +1546,7 @@ function ShapeClipInspector({
             disabled={!enabled}
             aria-pressed={character === 'smooth'}
             onClick={() => onCharacter(character === 'smooth' ? 'raw' : 'smooth')}
-            title="smooth anti-aliasing — off uses crispy Raw resampling"
+            title="smooth anti-aliasing — off uses crispy raw resampling"
             style={{
               border: 0,
               padding: 0,
@@ -1621,7 +1621,7 @@ function ShapeClipInspector({
                   opacity: enabled ? 1 : 0.35
                 }}
               >
-                {shapeProcessLabel(unit.process.type).toUpperCase()}
+                {shapeProcessLabel(unit.process.type)}
               </button>
               {activeUnit && (
                 <button
@@ -3511,8 +3511,8 @@ export function ShapePanel({
       if (destination === 'stem' && draft.lanes.length + addedLaneCount > MAX_RIFFF_STEM_SLOTS) {
         setProcessError(
           addedLaneCount === 1
-            ? 'No empty stem lane is available.'
-            : `Not enough empty stem lanes are available (${addedLaneCount} needed).`
+            ? 'no empty stem lane is free.'
+            : `not enough empty stem lanes are free (${addedLaneCount} needed).`
         )
         return
       }
@@ -3564,7 +3564,7 @@ export function ShapePanel({
       } catch (error) {
         console.error('ShapePanel: failed to add process:', error)
         if (mountedRef.current)
-          setProcessError(error instanceof Error ? error.message : 'Failed to add process.')
+          setProcessError(error instanceof Error ? error.message : "couldn't add the treatment.")
       } finally {
         processBakeInFlightRef.current = false
         if (mountedRef.current) setProcessBakeDestination(null)
@@ -4716,9 +4716,9 @@ export function ShapePanel({
                   textAlign: 'center'
                 }}
               >
-                DROP RIFF HERE
+                drop a riff here
                 <br />
-                TO OPEN DONOR TRAY
+                to open it as a donor
               </div>
             </div>
           )}

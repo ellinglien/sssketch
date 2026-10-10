@@ -2972,7 +2972,7 @@ app.on('before-quit', (event) => {
       cancelId: 2,
       message: 'This project has unsaved changes.',
       detail:
-        'Do you want to save before quitting? Any unpublished Shape riff will be added to the shelf.'
+        'Do you want to save before quitting? Any unpublished EEEDIT riff will be added to the shelf.'
     })
     if (choice === 2) {
       // Cancel -- stay open; the next quit checks for plugin edits again.
