@@ -180,7 +180,7 @@ namespace sssketch
                 tone.deleteFile();
             }
 
-            beginTest("a live project replacement fades in without resetting the playhead");
+            beginTest("a plain live project replacement does not fade: live edits and radio turnovers sound as before");
             {
                 auto tone = writeConstantToneWav("sssketch_transport_project_swap.wav", 44100);
 
@@ -211,16 +211,107 @@ namespace sssketch
                 transport.play(0.125, false);
                 transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
                 const double beforeSwap = transport.currentPositionBars();
+                expect(std::abs(l.back()) > 0.2f, "the tone never reached full level");
 
                 engine.setProject(project);
                 transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
 
-                expectWithinAbsoluteError(l.front(), 0.0f, 1.0e-7f);
+                float quietest = 1.0f;
+                for (const float sample : l)
+                    quietest = std::min(quietest, std::abs(sample));
+                expect(quietest > 0.2f,
+                       "a default swap dipped the output: " + juce::String(quietest));
                 expect(transport.currentPositionBars() > beforeSwap,
                        "project replacement reset or stalled the playhead");
                 expect(transport.isPlaying());
 
                 tone.deleteFile();
+            }
+
+            beginTest("a swap dip fades out, swaps under silence and fades back in, with no step and no playhead jump");
+            {
+                auto tone = writeConstantToneWav("sssketch_transport_swap_dip.wav", 44100);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 1.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
+                transport.setBpm(60.0);
+
+                constexpr int numSamples = 256;
+                std::vector<float> l((size_t) numSamples), r((size_t) numSamples);
+                float* channels[2] = { l.data(), r.data() };
+                transport.play(0.125, false);
+                transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                const double beforeSwap = transport.currentPositionBars();
+                float previous = l.back();
+                float largestStep = 0.0f;
+                const auto trackSteps = [&]()
+                {
+                    for (const float sample : l)
+                    {
+                        largestStep = std::max(largestStep, std::abs(sample - previous));
+                        previous = sample;
+                    }
+                };
+
+                const auto dip = transport.requestSwapDip();
+                expect(dip != 0, "a playing transport refused the dip");
+                for (int block = 0; block < 8 && !transport.swapDipIsSilent(dip); ++block)
+                {
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                    trackSteps();
+                }
+                expect(transport.swapDipIsSilent(dip), "the dip never reached silence");
+                expectWithinAbsoluteError(l.back(), 0.0f, 1.0e-7f);
+
+                engine.setProject(project);
+                // Not released yet: still silent.
+                transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                trackSteps();
+                expectWithinAbsoluteError(l.back(), 0.0f, 1.0e-7f);
+
+                transport.releaseSwapDip(dip);
+                for (int block = 0; block < 4; ++block)
+                {
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                    trackSteps();
+                }
+                expect(std::abs(l.back()) > 0.7f, "the output never came back to full level");
+                expect(largestStep < 0.02f,
+                       "the swap dip still contains a click-sized step: " + juce::String(largestStep));
+                expect(transport.currentPositionBars() > beforeSwap,
+                       "the swap dip reset or stalled the playhead");
+                expect(transport.isPlaying());
+
+                tone.deleteFile();
+            }
+
+            beginTest("a swap dip asked for while stopped is silent already");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
+                const auto dip = transport.requestSwapDip();
+                expect(dip == 0);
+                expect(transport.swapDipIsSilent(dip));
             }
 
             beginTest("a fresh play() cancels an in-flight stop fade instead of getting stuck fading out forever");

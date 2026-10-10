@@ -11,6 +11,7 @@
 #include "MasterStage.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <atomic>
+#include <functional>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -40,8 +41,13 @@ namespace sssketch
          * attempt at fixing it (raw atomic<T*> + a detached thread deleting
          * the superseded snapshot, mirroring ChannelChainRegistry's own
          * pattern) turned out to still be unsafe under sustained load --
-         * see published's own doc comment for why shared_ptr replaced it. */
-        void setProject(const EngineProject& project);
+         * see published's own doc comment for why shared_ptr replaced it.
+         * `beforePublish`, when set, runs on this thread after the snapshot is
+         * built (every decode done) and just before it is published: the
+         * load-project handler's swap dip (Transport::requestSwapDip) waits
+         * for silence there, so the dip lasts milliseconds, not a decode. */
+        void setProject(const EngineProject& project,
+                        const std::function<void()>& beforePublish = nullptr);
 
         /** What applyStagedProject() actually did -- three outcomes, not two,
          * because "nothing was waiting" and "something was waiting but this
@@ -411,14 +417,6 @@ namespace sssketch
             metronomeVolume.store(volume < 0.0f ? 0.0f : (volume > 2.0f ? 2.0f : volume));
         }
         float getMetronomeVolume() const { return metronomeVolume.load(); }
-
-        /** Generation of the immutable snapshot most recently rendered by
-         * the audio thread. Transport uses a change here to apply its short
-         * project-swap declick ramp without stopping or moving playback. */
-        unsigned long long lastRenderedProjectGeneration() const
-        {
-            return renderedSnapshotGeneration.load(std::memory_order_relaxed);
-        }
 
         /** Message-thread API: called by IpcServer's set-live-param handler
          * to push a new live volume/fade value, and by its load-project
@@ -882,6 +880,5 @@ namespace sssketch
         mutable DubDelayBus dubBus;
         /** Counts buildSnapshot calls (message thread), for ProjectSnapshot::generation. */
         unsigned long long snapshotGeneration = 0;
-        mutable std::atomic<unsigned long long> renderedSnapshotGeneration { 0 };
     };
 }

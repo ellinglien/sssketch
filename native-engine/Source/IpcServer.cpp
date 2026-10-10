@@ -13,6 +13,32 @@ namespace sssketch
         constexpr int kLinkPollTimerId = 1; // LinkSession::checkForExternalTempoChange -- always running
         constexpr int kHaltAckTimerId = 2; // short-lived poll until the audio thread's halt fade is silent
 
+        /** MESSAGE THREAD. Blocks until the audio thread has faded the swap dip
+         * to silence (Transport::requestSwapDip): normally one device block or
+         * two. Gives up when the device isn't calling back (HaltAck.h's stall
+         * rule) or after a second, so a dead device never hangs a load. */
+        void waitForSwapDipSilence(Transport& transport, unsigned long long request)
+        {
+            if (request == 0)
+                return;
+            HaltAckWait wait;
+            wait.commandGeneration = 1; // never "completed": only the stall rule ends it early
+            wait.lastSeenRenderedCallbacks = transport.renderedCallbacks();
+            wait.lastAdvanceMs = juce::Time::getMillisecondCounter();
+            const auto startMs = wait.lastAdvanceMs;
+            const auto stallMs = haltAckStallMs(transport.currentBlockSize(), transport.currentSampleRate());
+            while (!transport.swapDipIsSilent(request))
+            {
+                const auto nowMs = juce::Time::getMillisecondCounter();
+                if (haltAckDue(wait, 0, transport.audioDeviceRunning(), transport.renderedCallbacks(),
+                               nowMs, stallMs))
+                    return;
+                if ((std::uint32_t) (nowMs - startMs) >= 1000)
+                    return;
+                juce::Thread::sleep(1);
+            }
+        }
+
         // ~500ms-1s, per this feature's own design doc -- frequent enough that a
         // peer's tempo nudge reaches Maschine/Ableton/etc. via sssketch within
         // roughly a second, infrequent enough that a captureAppSessionState()
@@ -580,13 +606,19 @@ namespace sssketch
             // after this process has decoded and published the snapshot.
             // Export/test clients that still send the project directly keep
             // the original fire-and-forget protocol.
+            // `fadeSwap` (wrapper only, so the EngineProject wire twin is
+            // untouched) asks for the swap dip: EEEDIT's preview swaps fade
+            // out, swap under silence and fade back in. Every other load
+            // replaces the project under full level, as it always has.
             int loadToken = -1;
+            bool fadeSwap = false;
             auto projectPayload = payload;
             if (auto* wrapper = payload.getDynamicObject())
             {
                 if (wrapper->hasProperty("token") && wrapper->hasProperty("project"))
                 {
                     loadToken = (int) wrapper->getProperty("token");
+                    fadeSwap = (bool) wrapper->getProperty("fadeSwap");
                     projectPayload = wrapper->getProperty("project");
                 }
             }
@@ -622,7 +654,20 @@ namespace sssketch
                 // Same order as before this feature existed: transport
                 // settings, publish, then the post-publish pair.
                 applyProjectTransportSettings(project);
-                engine.setProject(project);
+                if (fadeSwap)
+                {
+                    unsigned long long dip = 0;
+                    engine.setProject(project, [this, &dip]
+                    {
+                        dip = transport.requestSwapDip();
+                        waitForSwapDipSilence(transport, dip);
+                    });
+                    transport.releaseSwapDip(dip);
+                }
+                else
+                {
+                    engine.setProject(project);
+                }
                 const auto tTraceSetProject = juce::Time::getMillisecondCounterHiRes();
                 int tTraceStems = 0;
                 for (const auto& r : project.rifffs)

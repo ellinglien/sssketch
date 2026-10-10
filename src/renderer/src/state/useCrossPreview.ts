@@ -94,6 +94,9 @@ export class PreviewHaltBarrier {
 /** A narrow throwaway-project controller for Cross. One ownership token
  * covers source audition and the child mix, so switching modes can never
  * leave an older source playing underneath a newer one. */
+/** EEEDIT ('shape-preview') waits for the engine to publish each preview (its
+ * renders are temporary files) and swaps a playing preview under the swap dip, so
+ * a live render replacement doesn't click. Cross keeps the plain load. */
 export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cross-preview'): {
   preview: (
     mode: CrossPreviewMode,
@@ -243,7 +246,10 @@ export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cros
           }
         }
         const loadIsCurrent = await issueCrossPreviewLoad(
-          () => window.rifffApi.engineLoadProject(project),
+          () =>
+            owner === 'shape-preview'
+              ? window.rifffApi.engineLoadProjectAcked(project, { fadeSwap: true })
+              : window.rifffApi.engineLoadProject(project),
           () => {
             needsRestoreRef.current = true
           },

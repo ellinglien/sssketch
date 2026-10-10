@@ -72,14 +72,24 @@ describe('startPlaybackEngine', () => {
   it('remembers the last project sent via sendLoadProject, for crash-recovery resend', async () => {
     handle = await startPlaybackEngine()
     const project = { bpm: 100, snapDiv: 8, rifffs: [] }
-    await handle.sendLoadProject(project)
+    handle.sendLoadProject(project)
     expect(handle.getLastProject()).toEqual(project)
+  }, 30000)
+
+  it('an acknowledged load resolves once the engine published it, swap dip asked for or not', async () => {
+    handle = await startPlaybackEngine()
+    const project = { bpm: 110, snapDiv: 8, rifffs: [] }
+    await handle.sendLoadProjectAcked(project, { fadeSwap: true })
+    expect(handle.getLastProject()).toEqual(project)
+    const plain = { bpm: 111, snapDiv: 8, rifffs: [] }
+    await handle.sendLoadProjectAcked(plain)
+    expect(handle.getLastProject()).toEqual(plain)
   }, 30000)
 
   it('detects a crashed engine process, respawns, reconnects, resends the last project, and notifies onRestarted', async () => {
     handle = await startPlaybackEngine()
     const project = { bpm: 90, snapDiv: 4, rifffs: [] }
-    await handle.sendLoadProject(project)
+    handle.sendLoadProject(project)
 
     const restarted = new Promise<void>((resolve) => {
       handle!.onRestarted(() => resolve())
@@ -112,7 +122,7 @@ describe('startPlaybackEngine', () => {
     // correctly follows respawns. The old instance is disconnected and never
     // receives another push; the new instance starts with no listeners.
     handle = await startPlaybackEngine()
-    await handle.sendLoadProject({ bpm: 90, snapDiv: 4, rifffs: [] })
+    handle.sendLoadProject({ bpm: 90, snapDiv: 4, rifffs: [] })
 
     const seenBeforeCrash: unknown[] = []
     handle.client.on('position-update', (payload) => seenBeforeCrash.push(payload))

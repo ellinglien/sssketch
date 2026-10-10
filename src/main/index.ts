@@ -1665,8 +1665,16 @@ app.whenReady().then(async () => {
       }
     })
 
-  ipcMain.handle('engine-load-project', (_event, project: unknown) =>
+  ipcMain.handle('engine-load-project', (_event, project: unknown) => {
     playbackEngine?.sendLoadProject(project)
+  })
+
+  // EEEDIT's preview loads: answered once the engine has published the project,
+  // optionally with the swap dip (playbackEngineLifecycle.ts).
+  ipcMain.handle(
+    'engine-load-project-acked',
+    (_event, project: unknown, options?: { fadeSwap?: boolean }) =>
+      playbackEngine?.sendLoadProjectAcked(project, options)
   )
 
   // Radio's scheduled swap. The project rides NESTED inside the payload

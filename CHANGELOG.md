@@ -48,7 +48,7 @@
 - Shape intervention knobs now remain visually responsive while dragging but launch a single offline preview render when the gesture ends, preventing repeated mid-playback audio swaps and their crunchy zipper artifacts.
 - Hardened rapid Shape Transform editing: cancelled previews now stop their private native render process, shared pitch/stretch cache WAVs publish atomically only after validation, extreme pitch uses smaller safe stages, and repeated Add clicks cannot create duplicate baked assets.
 - Fixed Shape intervention Bake getting stranded after a development hot reload, and set Saturation's default Drive to 9×.
-- Live Shape render replacement now keeps the current playhead position and applies a microscopic native fade to the newly loaded audio instead of introducing a project-swap discontinuity.
+- Live EEEDIT render replacement keeps the current playhead position and swaps under a 3 ms dip (fade out, swap, fade in) instead of a click. Only EEEDIT's preview swaps dip: radio turnovers and live edits elsewhere sound exactly as before.
 - Hardened Shape after review: unsaved drafts now participate in New/Open/Quit protection and are materialized into the exact saved project snapshot; Save As and project renames no longer detach the draft; stale async stem searches cannot alter a newer session; and gain-only edits no longer rebuild preview audio.
 - Corrected reversed-clip slicing, overwrite, coalescing, and repeated-source seam healing; prevented incompatible Shape provenance from creating silent tails after Cross changes loop length.
 - Bounded native Shape-preview memory with snapshot-pinned audio buffers, and fixed a smooth Solo handoff race that could leave the interface showing playback while the native transport was stopped.

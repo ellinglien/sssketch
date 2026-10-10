@@ -59,6 +59,30 @@ namespace sssketch
         void setPosition(double positionBars);
         double currentPositionBars() const { return positionBars.load(); }
 
+        /** The swap dip: an opt-in, click-free live project replacement, for EEEDIT's
+         * preview swaps only (load-project's `fadeSwap`). Every other load and every
+         * staged (radio) swap replaces the project under full level exactly as before.
+         * MESSAGE THREAD, in order:
+         *  1. requestSwapDip(): the audio thread fades the output to silence over
+         *     kSwapFadeSec and holds it there. Returns the request, or 0 when nothing
+         *     is playing (no dip needed).
+         *  2. wait until swapDipIsSilent(request) (IpcServer bounds the wait).
+         *  3. publish the new project (PlaybackEngine::setProject).
+         *  4. releaseSwapDip(request): the next callback renders the new snapshot,
+         *     holds the master stage's latency in silence, then fades back in.
+         * A dip held for longer than kSwapDipMaxHoldSec fades back in by itself, so a
+         * missing release can't leave the output silent. */
+        unsigned long long requestSwapDip();
+        bool swapDipIsSilent(unsigned long long request) const
+        {
+            return request == 0 || swapDipSilentRequest.load(std::memory_order_acquire) >= request;
+        }
+        void releaseSwapDip(unsigned long long request)
+        {
+            if (request != 0)
+                swapDipReleaseRequest.store(request, std::memory_order_release);
+        }
+
         /** The audio thread's lap clock, for tests that drive the callback themselves (read it
          * between callbacks, never while one runs). */
         LapClock lapClockForTest() const { return lapClock(); }
@@ -404,9 +428,12 @@ namespace sssketch
         /** AUDIO THREAD. Applies the transparent play-start declick ramp after
          * every other processor, immediately before the device output. */
         void applyPlayStartFade(float* outL, float* outR, int numSamples);
-        /** AUDIO THREAD. Starts the same microscopic output ramp when a
-         * freshly published project snapshot first reaches playback. */
-        void detectProjectSwap();
+        /** AUDIO THREAD. Before rendering: takes a new swap-dip request or its
+         * release (requestSwapDip). Reading the release here, before the block
+         * renders, is what makes the block after it render the new snapshot. */
+        void advanceSwapDipState(bool outputActive);
+        /** AUDIO THREAD. After every other processor: the swap dip's gain. */
+        void applySwapDip(float* outL, float* outR, int numSamples);
 
 
         PlaybackEngine& engine;
@@ -436,6 +463,10 @@ namespace sssketch
         std::atomic<unsigned long long> completedHaltCommandGeneration { 0 };
         std::atomic<double> requestedPlayPosition { 0.0 };
         std::atomic<bool> requestedPlayFadeIn { false };
+        std::atomic<unsigned long long> swapDipRequestCounter { 0 }; // message thread only writes
+        std::atomic<unsigned long long> swapDipLatestRequest { 0 };
+        std::atomic<unsigned long long> swapDipSilentRequest { 0 };
+        std::atomic<unsigned long long> swapDipReleaseRequest { 0 };
         std::atomic<unsigned long long> renderedCallbackCount { 0 };
         std::atomic<bool> repositionRequested { false }; // set by setPosition(), consumed by the audio thread
         std::atomic<double> repositionTarget { 0.0 }; // always the latest requested position
@@ -447,6 +478,13 @@ namespace sssketch
         double haltFadeElapsedSec = 0.0;
         bool fadingIn = false;
         double playFadeElapsedSec = 0.0;
+        // Swap dip (requestSwapDip), audio-thread only.
+        enum class SwapDip { None, FadingOut, Holding, FadingIn };
+        SwapDip swapDip = SwapDip::None;
+        unsigned long long swapDipAppliedRequest = 0;
+        float swapDipGain = 1.0f;
+        double swapDipHeldSec = 0.0;
+        double swapDipFadeInDelaySec = 0.0;
         bool repositioning = false;
         // Audio-thread-only. True only in the should-never-happen case
         // where applyStagedProjectAtWrap found the retirement slot still
@@ -506,7 +544,6 @@ namespace sssketch
         std::atomic<double> secPerBar { 2.0 };
         double deviceSampleRate = 44100.0;
         int deviceBlockSize = 512;
-        unsigned long long renderedProjectGeneration = 0;
         std::atomic<int> callbackBlockSize { 0 };
 
         // The device name that setRecordingInputDevice() last SUCCESSFULLY

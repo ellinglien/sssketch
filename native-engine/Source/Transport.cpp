@@ -18,6 +18,11 @@ namespace sssketch
         // the existing per-clip micro-fade: it removes the edge without
         // rounding off a musically meaningful transient.
         constexpr double kPlayFadeSec = 0.003;
+        // The swap dip (requestSwapDip): the same 3 ms each way, so an EEEDIT
+        // preview swap is a brief dip, not a cut from full level to silence.
+        constexpr double kSwapFadeSec = 0.003;
+        // A held dip whose release never came fades back in by itself after this.
+        constexpr double kSwapDipMaxHoldSec = 0.5;
 
         // Longer than the loop-seam declick above on purpose — these are
         // deliberate, audible transitions rather than invisible
@@ -343,17 +348,87 @@ namespace sssketch
             fadingIn = false;
     }
 
-    void Transport::detectProjectSwap()
+    unsigned long long Transport::requestSwapDip()
     {
-        const auto generation = engine.lastRenderedProjectGeneration();
-        if (generation == 0)
-            return;
-        if (renderedProjectGeneration != 0 && generation != renderedProjectGeneration)
+        if (!playing.load())
+            return 0;
+        const auto request = swapDipRequestCounter.fetch_add(1) + 1;
+        swapDipLatestRequest.store(request, std::memory_order_release);
+        return request;
+    }
+
+    void Transport::advanceSwapDipState(bool outputActive)
+    {
+        const auto request = swapDipLatestRequest.load(std::memory_order_acquire);
+        if (!outputActive)
         {
-            fadingIn = true;
-            playFadeElapsedSec = 0.0;
+            // Nothing is audible: any dip asked for is silent already, and the
+            // next play starts with its own fade.
+            if (request != swapDipAppliedRequest)
+            {
+                swapDipAppliedRequest = request;
+                swapDipSilentRequest.store(request, std::memory_order_release);
+            }
+            swapDip = SwapDip::None;
+            swapDipGain = 1.0f;
+            return;
         }
-        renderedProjectGeneration = generation;
+        if (request != swapDipAppliedRequest)
+        {
+            // A new dip: fade out from wherever the gain stands (a dip asked for
+            // while the last one fades back in starts from that partial level).
+            swapDipAppliedRequest = request;
+            if (swapDip == SwapDip::Holding)
+                swapDipSilentRequest.store(request, std::memory_order_release);
+            else
+                swapDip = SwapDip::FadingOut;
+            swapDipHeldSec = 0.0;
+        }
+        if (swapDip == SwapDip::Holding
+            && (swapDipReleaseRequest.load(std::memory_order_acquire) >= swapDipAppliedRequest
+                || swapDipHeldSec >= kSwapDipMaxHoldSec))
+        {
+            swapDip = SwapDip::FadingIn;
+            // The new snapshot enters the master stage's input this block, but
+            // its limiter lookahead still holds the old audio: stay silent that
+            // much longer, so the fade-in starts on the new audio (as a seek
+            // does, repositionHoldSec).
+            swapDipFadeInDelaySec = engine.masterLatencySamples() / deviceSampleRate;
+        }
+    }
+
+    void Transport::applySwapDip(float* outL, float* outR, int numSamples)
+    {
+        if (swapDip == SwapDip::None || deviceSampleRate <= 0.0)
+            return;
+        const float step = (float) (1.0 / (kSwapFadeSec * deviceSampleRate));
+        for (int i = 0; i < numSamples; ++i)
+        {
+            if (swapDip == SwapDip::FadingOut)
+            {
+                swapDipGain = std::max(0.0f, swapDipGain - step);
+                if (swapDipGain <= 0.0f)
+                    swapDip = SwapDip::Holding;
+            }
+            else if (swapDip == SwapDip::FadingIn)
+            {
+                if (swapDipFadeInDelaySec > 0.0)
+                    swapDipFadeInDelaySec -= 1.0 / deviceSampleRate;
+                else
+                    swapDipGain = std::min(1.0f, swapDipGain + step);
+            }
+            outL[i] *= swapDipGain;
+            outR[i] *= swapDipGain;
+        }
+        if (swapDip == SwapDip::Holding)
+        {
+            swapDipHeldSec += (double) numSamples / deviceSampleRate;
+            swapDipSilentRequest.store(swapDipAppliedRequest, std::memory_order_release);
+        }
+        else if (swapDip == SwapDip::FadingIn && swapDipGain >= 1.0f)
+        {
+            swapDip = SwapDip::None;
+        }
     }
 
     void Transport::play(double fromPositionBars, bool fadeIn)
@@ -868,6 +943,8 @@ namespace sssketch
             }
         }
 
+        advanceSwapDipState(playing.load() || fadingOut);
+
         if (!playing.load() && !fadingOut)
         {
             // Fully halted, no fade in progress -- true silence. Nothing
@@ -927,8 +1004,8 @@ namespace sssketch
             // plugins (a plugin after the limiter would undo its ceiling), and before this
             // fade -- the same call RenderExport makes. See PlaybackEngine::processMaster.
             engine.processMaster(deviceSampleRate, numSamples, outL, outR);
-            detectProjectSwap();
             applyPlayStartFade(outL, outR, numSamples);
+            applySwapDip(outL, outR, numSamples);
             for (int i = 0; i < numSamples; ++i)
             {
                 // The fade-in starts repositionHoldSec late (0 unless the master stage is on;
@@ -982,8 +1059,8 @@ namespace sssketch
         masterChain.process(numSamples, outL, outR);
         // As above: the master stage, then the halt fade.
         engine.processMaster(deviceSampleRate, numSamples, outL, outR);
-        detectProjectSwap();
         applyPlayStartFade(outL, outR, numSamples);
+        applySwapDip(outL, outR, numSamples);
 
         if (fadingOut)
         {

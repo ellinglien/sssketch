@@ -345,9 +345,12 @@ namespace sssketch
         return next;
     }
 
-    void PlaybackEngine::setProject(const EngineProject& project)
+    void PlaybackEngine::setProject(const EngineProject& project,
+                                    const std::function<void()>& beforePublish)
     {
         auto next = buildSnapshot(project);
+        if (beforePublish)
+            beforePublish();
 
         // An explicit, immediate project load supersedes anything that was
         // waiting for a loop top -- otherwise a staged swap parked before
@@ -605,7 +608,6 @@ namespace sssketch
             drumPump.idle();
             return;
         }
-        renderedSnapshotGeneration.store(snap->generation, std::memory_order_relaxed);
         // For processMaster, which runs after this block's render(s): the settings travel
         // with the snapshot, so a staged swap's mastering starts with its project.
         masterSettingsSeen = MasterStage::settingsFor(snap->project.sound);

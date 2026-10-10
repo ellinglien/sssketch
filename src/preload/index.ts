@@ -321,6 +321,10 @@ const api = {
     ipcRenderer.invoke('export-stem-tracks-next-to-source', stateJson, sourcePath),
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
+  /** EEEDIT's preview loads: resolves once the engine has published the
+   * project; `fadeSwap` asks for the swap dip (Transport.h requestSwapDip). */
+  engineLoadProjectAcked: (project: unknown, options?: { fadeSwap?: boolean }): Promise<void> =>
+    ipcRenderer.invoke('engine-load-project-acked', project, options),
   /** Radio's scheduled swap -- hand the engine a project now, have it
    * become real exactly at the next loop top, or at `atBars` of the
    * current lap when one is given (radio's mid-lap bare cuts, the one

@@ -11,9 +11,14 @@ class ShutdownAbort extends Error {}
 
 export interface PlaybackEngineHandle {
   client: EngineClient
+  /** Fire-and-forget, as every caller but EEEDIT wants: Discover, radio and the
+   * arrangement keep their push timing. */
+  sendLoadProject: (project: unknown) => void
   /** Resolves only after the native engine has parsed and published this
-   * exact project, so callers may safely release temporary source files. */
-  sendLoadProject: (project: unknown) => Promise<void>
+   * exact project, so the caller may release temporary source files (EEEDIT's
+   * preview renders). `fadeSwap` asks for the swap dip (Transport.h's
+   * requestSwapDip): fade out, replace under silence, fade back in. */
+  sendLoadProjectAcked: (project: unknown, options?: { fadeSwap?: boolean }) => Promise<void>
   /** Radio's scheduled swap: hands the engine a project NOW and asks it to
    * make it real at the next loop top -- or, with `atBars`, at that bar
    * of the current lap (IpcServer.cpp's stage-project handler). Deliberately a sibling of sendLoadProject rather than a flag
@@ -187,15 +192,21 @@ export async function startPlaybackEngine(
     get client(): EngineClient {
       return client
     },
-    async sendLoadProject(project: unknown): Promise<void> {
+    sendLoadProject(project: unknown) {
+      lastProject = project
       // A load-project makes the engine drop whatever is staged
       // (resolveStagedBefore("load-project")), so nothing here can still
       // be waiting to become the live project.
       stagedProjects.clear()
+      client.send('load-project', project)
+    },
+    async sendLoadProjectAcked(project: unknown, options?: { fadeSwap?: boolean }): Promise<void> {
+      // As sendLoadProject: the engine drops whatever is staged.
+      stagedProjects.clear()
       const token = ++loadToken
       const result = await client.sendAndAwaitType(
         'load-project',
-        { token, project },
+        { token, project, fadeSwap: options?.fadeSwap === true },
         'project-load-result',
         30000,
         (payload) =>
