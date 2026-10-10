@@ -29,6 +29,7 @@ import {
 import { bakeOffset } from './bakeOffset'
 import { resolveRecipe } from './reonedRecipe'
 import { sessionIssuedNames } from './reonedCopiesSession'
+import { pinShapeCachePaths } from './shapeCachePins'
 
 const DAY = 24 * 60 * 60 * 1000
 const name = (n: number): string => `${String(n).padStart(32, '0')}.baked.wav`
@@ -378,6 +379,20 @@ describe('surveyShapes and cleanShapes: EEEDIT leftovers only, never a render', 
     await cleanShapes(shapes, now)
     expect(existsSync(join(shapes, lane(1)))).toBe(true)
     expect(existsSync(join(shapes, base(2)))).toBe(true)
+  })
+
+  it('leaves a preview cache file a running render has pinned, until it lets go', async () => {
+    const old = join(shapes, '.preview-cache', 'old.shape-preview.wav')
+    const release = pinShapeCachePaths([old])
+    const survey = await surveyShapes(shapes, now)
+    expect(survey.unused.map((e) => e.path)).not.toContain(
+      join('.preview-cache', 'old.shape-preview.wav')
+    )
+    await cleanShapes(shapes, now)
+    expect(existsSync(old)).toBe(true)
+    release()
+    await cleanShapes(shapes, now)
+    expect(existsSync(old)).toBe(false)
   })
 
   it('no .shapes folder at all: nothing unused, nothing cleaned', async () => {

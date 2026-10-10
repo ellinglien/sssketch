@@ -9,6 +9,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { CLEANUP_GRACE_MS } from '@shared/reonedCleanup'
 import { isReonedCopyFileName, isStaleTempFileName, reonedNamesInText } from '@shared/reonedNames'
 import { sessionKeptNames, withReonedCopiesLock } from './reonedCopiesSession'
+import { isShapeCachePathPinned } from './shapeCachePins'
 import type { KnownProject } from './reonedCopiesStore'
 
 const SLICE_CHARS = 1_000_000
@@ -288,7 +289,11 @@ export async function surveyShapes(
       const rel = relFolder === '' ? entry.name : join(relFolder, entry.name)
       const staging =
         entry.isDirectory() && entry.name.startsWith('.') && entry.name !== PREVIEW_CACHE
-      const cached = relFolder === PREVIEW_CACHE && entry.isFile()
+      // A cache file a running render has pinned (shapeCachePins.ts) is in use, however old.
+      const cached =
+        relFolder === PREVIEW_CACHE &&
+        entry.isFile() &&
+        !isShapeCachePathPinned(join(shapesDir, rel))
       if (!staging && !cached) continue
       try {
         const path = join(shapesDir, rel)
@@ -324,6 +329,8 @@ export function cleanShapes(
     let failedCount = 0
     for (const entry of unused) {
       const path = join(shapesDir, entry.path)
+      // Checked again right before the delete: a render may have pinned it since the survey.
+      if (!entry.folder && isShapeCachePathPinned(path)) continue
       try {
         if (entry.folder) await rm(path, { recursive: true, force: true })
         else await unlink(path)

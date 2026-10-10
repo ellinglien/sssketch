@@ -14,6 +14,7 @@ import { pathsToEvict, renderShapeFormant, renderShapePitch } from './rubberband
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { readWavHeader } from './wavHeader'
+import { isShapeCachePathPinned, pinShapeCachePaths } from './shapeCachePins'
 
 interface NativeShapeReply {
   success?: boolean
@@ -361,20 +362,13 @@ async function shapePreviewCacheDir(durableRoot: string, mayCreateRoot: boolean)
   return path
 }
 
-// Preview cache files a running job reads or wrote: eviction leaves them alone until it ends.
-const pinnedCachePaths = new Map<string, number>()
-function pinCachePath(pins: Set<string>, path: string): void {
-  if (pins.has(path)) return
-  pins.add(path)
-  pinnedCachePaths.set(path, (pinnedCachePaths.get(path) ?? 0) + 1)
+// Preview cache files a running job reads or wrote are pinned (shapeCachePins.ts) until it ends:
+// neither eviction nor the cleanup deletes them.
+function pinCachePath(pins: (() => void)[], path: string): void {
+  pins.push(pinShapeCachePaths([path]))
 }
-function unpinCachePaths(pins: Set<string>): void {
-  for (const path of pins) {
-    const count = (pinnedCachePaths.get(path) ?? 1) - 1
-    if (count <= 0) pinnedCachePaths.delete(path)
-    else pinnedCachePaths.set(path, count)
-  }
-  pins.clear()
+function unpinCachePaths(pins: (() => void)[]): void {
+  for (const release of pins.splice(0)) release()
 }
 
 let previewCacheLimitBytes = MAX_SHAPE_PREVIEW_CACHE_BYTES
@@ -399,7 +393,7 @@ async function enforceShapePreviewCacheLimit(dir: string): Promise<void> {
       const path = join(dir, name)
       try {
         const info = await stat(path)
-        if (info.isFile() && !pinnedCachePaths.has(path))
+        if (info.isFile() && !isShapeCachePathPinned(path))
           entries.push({ path, size: info.size, mtimeMs: info.mtimeMs })
       } catch {
         // gone meanwhile
@@ -641,7 +635,7 @@ export async function materializeShape(
   materializeAbortControllers.set(request.jobId, abortController)
   const mayCreateRoot = options.mayCreateRoot ?? true
   await assertLibraryReachable(durableRoot, mayCreateRoot)
-  const pins = new Set<string>()
+  const pins: (() => void)[] = []
   const batchId = `${safeJobName(request.jobId)}-${randomUUID()}`
   // Staged beside where the results are renamed to (the preview cache, or the
   // library's .shapes for a commit), never in the system temp folder: a rename
