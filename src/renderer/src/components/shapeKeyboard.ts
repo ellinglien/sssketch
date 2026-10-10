@@ -56,6 +56,7 @@ export function shapeClipResizeDestination({
   clipEnd,
   sourceStart,
   sourceEnd,
+  rate = 1,
   reversed,
   snapBars,
   loopBars
@@ -66,27 +67,29 @@ export function shapeClipResizeDestination({
   clipEnd: number
   sourceStart: number
   sourceEnd: number
+  rate?: number
   reversed: boolean
   snapBars: number
   loopBars: number
 }): number {
   if (
-    ![rawBar, clipStart, clipEnd, sourceStart, sourceEnd, snapBars, loopBars].every(
+    ![rawBar, clipStart, clipEnd, sourceStart, sourceEnd, rate, snapBars, loopBars].every(
       Number.isFinite
     ) ||
-    clipEnd <= clipStart
+    clipEnd <= clipStart ||
+    rate <= 0
   )
     return edge === 'left' ? clipStart : clipEnd
   const snapped = snapBars > 0 ? Math.round(rawBar / snapBars) * snapBars : rawBar
   const minimumLength = snapBars > 0 ? Math.min(snapBars, clipEnd - clipStart) : 1e-6
   if (edge === 'left') {
-    const availableBefore = reversed ? loopBars - sourceEnd : sourceStart
+    const availableBefore = (reversed ? loopBars - sourceEnd : sourceStart) / rate
     return Math.max(
       Math.max(0, clipStart - Math.max(0, availableBefore)),
       Math.min(clipEnd - minimumLength, snapped)
     )
   }
-  const availableAfter = reversed ? sourceStart : loopBars - sourceEnd
+  const availableAfter = (reversed ? sourceStart : loopBars - sourceEnd) / rate
   return Math.min(
     Math.min(loopBars, clipEnd + Math.max(0, availableAfter)),
     Math.max(clipStart + minimumLength, snapped)

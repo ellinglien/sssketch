@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { cacheKey, pathsToEvict } from './rubberband'
+import {
+  cacheKey,
+  pathsToEvict,
+  shapeFormantCacheKey,
+  shapePitchCacheKey,
+  shapePitchStages
+} from './rubberband'
 
 describe('cacheKey', () => {
   it('is deterministic for the same path and ratio', () => {
@@ -20,6 +26,40 @@ describe('cacheKey', () => {
 
   it('always produces a .wav filename', () => {
     expect(cacheKey('/x/a.wav', 1.5)).toMatch(/^[0-9a-f]{40}\.wav$/)
+  })
+})
+
+describe('shapePitchCacheKey', () => {
+  it('separates pitch, tempo, and source identity', () => {
+    const key = shapePitchCacheKey('/x/a.wav', 1, 7.25)
+    expect(key).not.toBe(shapePitchCacheKey('/x/a.wav', 1, 7.5))
+    expect(key).not.toBe(shapePitchCacheKey('/x/a.wav', 0.5, 7.25))
+    expect(key).not.toBe(shapePitchCacheKey('/x/b.wav', 1, 7.25))
+  })
+})
+
+describe('shapePitchStages', () => {
+  it('keeps ordinary shifts in one render pass', () => {
+    expect(shapePitchStages(24)).toEqual([24])
+    expect(shapePitchStages(-48)).toEqual([-48])
+  })
+
+  it('splits extreme shifts into safe equal passes without changing the requested total', () => {
+    for (const pitch of [-512, 512]) {
+      const stages = shapePitchStages(pitch)
+      expect(stages.length).toBeGreaterThan(1)
+      expect(stages.every((stage) => Math.abs(stage) <= 48)).toBe(true)
+      expect(stages.reduce((total, stage) => total + stage, 0)).toBeCloseTo(pitch, 8)
+    }
+  })
+})
+
+describe('shapeFormantCacheKey', () => {
+  it('separates spectral-envelope shift and source identity', () => {
+    const key = shapeFormantCacheKey('/x/a.wav', 7)
+    expect(key).toBe(shapeFormantCacheKey('/x/a.wav', 7))
+    expect(key).not.toBe(shapeFormantCacheKey('/x/a.wav', -7))
+    expect(key).not.toBe(shapeFormantCacheKey('/x/b.wav', 7))
   })
 })
 

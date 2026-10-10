@@ -392,6 +392,9 @@ namespace sssketch
         /** AUDIO THREAD. Applies the transparent play-start declick ramp after
          * every other processor, immediately before the device output. */
         void applyPlayStartFade(float* outL, float* outR, int numSamples);
+        /** AUDIO THREAD. Starts the same microscopic output ramp when a
+         * freshly published project snapshot first reaches playback. */
+        void detectProjectSwap();
 
 
         PlaybackEngine& engine;
@@ -490,6 +493,7 @@ namespace sssketch
         std::atomic<double> secPerBar { 2.0 };
         double deviceSampleRate = 44100.0;
         int deviceBlockSize = 512;
+        unsigned long long renderedProjectGeneration = 0;
         std::atomic<int> callbackBlockSize { 0 };
 
         // The device name that setRecordingInputDevice() last SUCCESSFULLY

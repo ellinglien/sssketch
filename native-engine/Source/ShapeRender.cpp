@@ -2,6 +2,7 @@
 #include "StemBufferCache.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <limits>
 
@@ -42,9 +43,305 @@ namespace sssketch
         }
     }
 
-    bool renderShapeStemToWav(
+    bool renderShapeRawSourceToWav(
         const juce::String& sourcePath,
-        double sourceDurationSec,
+        double rate,
+        const juce::String& outputPath,
+        ShapeRenderInfo& infoOut,
+        juce::String& errorOut)
+    {
+        if (!finitePositive(rate) || rate < 0.03125 || rate > 32.0)
+        {
+            errorOut = "invalid Shape Raw resampling rate";
+            return false;
+        }
+        juce::AudioBuffer<float> source;
+        double sampleRate = 0.0;
+        if (!decodeRawAudioFile(sourcePath, source, sampleRate)
+            || !finitePositive(sampleRate)
+            || source.getNumSamples() <= 0
+            || source.getNumChannels() <= 0)
+        {
+            errorOut = "failed to decode Shape Raw source: " + sourcePath;
+            return false;
+        }
+        const double exactFrames = (double) source.getNumSamples() / rate;
+        if (!std::isfinite(exactFrames) || exactFrames <= 0.0
+            || exactFrames > (double) std::numeric_limits<int>::max())
+        {
+            errorOut = "invalid Shape Raw output length";
+            return false;
+        }
+        const int frames = std::max(1, (int) std::ceil(exactFrames));
+        juce::AudioBuffer<float> output(source.getNumChannels(), frames);
+        for (int ch = 0; ch < output.getNumChannels(); ++ch)
+        {
+            const auto* input = source.getReadPointer(ch);
+            auto* result = output.getWritePointer(ch);
+            for (int frame = 0; frame < frames; ++frame)
+            {
+                const int sourceFrame = std::min(
+                    source.getNumSamples() - 1,
+                    (int) std::floor((double) frame * rate));
+                result[frame] = input[sourceFrame];
+            }
+        }
+
+        auto file = juce::File(outputPath);
+        if (!file.getParentDirectory().createDirectory() && !file.getParentDirectory().isDirectory())
+        {
+            errorOut = "failed to create Shape Raw output directory";
+            return false;
+        }
+        file.deleteFile();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> stream(file.createOutputStream());
+        if (stream == nullptr)
+        {
+            errorOut = "failed to open Shape Raw output: " + outputPath;
+            return false;
+        }
+        std::unique_ptr<juce::AudioFormatWriter> writer(
+            wav.createWriterFor(stream.get(), sampleRate, (unsigned int) output.getNumChannels(), 32, {}, 0));
+        if (writer == nullptr)
+        {
+            errorOut = "failed to create Shape Raw float WAV writer";
+            return false;
+        }
+        stream.release();
+        if (!writer->writeFromAudioSampleBuffer(output, 0, frames))
+        {
+            writer.reset();
+            file.deleteFile();
+            errorOut = "failed while writing Shape Raw output";
+            return false;
+        }
+        writer.reset();
+        infoOut.durationSec = (double) frames / sampleRate;
+        infoOut.sampleRate = sampleRate;
+        infoOut.frames = frames;
+        infoOut.channels = output.getNumChannels();
+        return true;
+    }
+
+    bool renderShapeProcessSourceToWav(
+        const juce::String& sourcePath,
+        const juce::String& processType,
+        double primary,
+        double secondary,
+        double tertiary,
+        double mix,
+        const juce::String& outputPath,
+        ShapeRenderInfo& infoOut,
+        juce::String& errorOut)
+    {
+        const bool known = processType == "wavefold" || processType == "saturation"
+            || processType == "hard-clip" || processType == "rectify"
+            || processType == "bit-crush" || processType == "rate-crush"
+            || processType == "ring-mod" || processType == "comb"
+            || processType == "smear";
+        bool valid = known && std::isfinite(primary) && std::isfinite(secondary)
+            && std::isfinite(tertiary)
+            && std::isfinite(mix) && mix >= 0.0 && mix <= 1.0;
+        if (processType == "wavefold")
+            valid = valid && primary >= 1.0 && primary <= 16.0
+                && secondary >= -1.0 && secondary <= 1.0;
+        else if (processType == "saturation")
+            valid = valid && primary >= 1.0 && primary <= 16.0
+                && secondary >= -1.0 && secondary <= 1.0
+                && tertiary >= -24.0 && tertiary <= 24.0;
+        else if (processType == "hard-clip")
+            valid = valid && primary >= 0.05 && primary <= 1.0
+                && secondary >= -1.0 && secondary <= 1.0;
+        else if (processType == "rectify")
+            valid = valid && (primary == 0.0 || primary == 1.0)
+                && secondary >= 1.0 && secondary <= 8.0;
+        else if (processType == "bit-crush")
+            valid = valid && primary >= 2.0 && primary <= 16.0
+                && secondary >= 0.0 && secondary <= 1.0;
+        else if (processType == "rate-crush")
+            valid = valid && primary >= 1.0 && primary <= 64.0
+                && secondary >= 0.0 && secondary <= 1.0;
+        else if (processType == "ring-mod")
+            valid = valid && primary >= 1.0 && primary <= 2000.0
+                && secondary >= 0.0 && secondary <= 1.0;
+        else if (processType == "comb")
+            valid = valid && primary >= 1.0 && primary <= 50.0
+                && secondary >= -0.95 && secondary <= 0.95
+                && tertiary >= 0.0 && tertiary <= 1.0;
+        else if (processType == "smear")
+            valid = valid && primary >= 5.0 && primary <= 250.0
+                && secondary >= 0.0 && secondary <= 1.0;
+        if (!valid)
+        {
+            errorOut = "invalid Shape Process parameters for " + processType;
+            return false;
+        }
+        juce::AudioBuffer<float> audio;
+        double sampleRate = 0.0;
+        if (!decodeRawAudioFile(sourcePath, audio, sampleRate)
+            || !finitePositive(sampleRate)
+            || audio.getNumSamples() <= 0
+            || audio.getNumChannels() <= 0)
+        {
+            errorOut = "failed to decode Shape Process source: " + sourcePath;
+            return false;
+        }
+        const auto fold = [](double value) {
+            double wrapped = std::fmod(value + 1.0, 4.0);
+            if (wrapped < 0.0)
+                wrapped += 4.0;
+            return wrapped <= 2.0 ? wrapped - 1.0 : 3.0 - wrapped;
+        };
+        const double processOutputGain = processType == "saturation"
+            ? std::pow(10.0, tertiary / 20.0)
+            : 1.0;
+        for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+        {
+            auto* samples = audio.getWritePointer(ch);
+            const int holdFrames = std::max(1, (int) std::round(primary));
+            const int combFrames = std::max(1, (int) std::round(primary * sampleRate / 1000.0));
+            const int smearMaxDelay = std::max(1, (int) std::round(primary * sampleRate / 1000.0));
+            const int smearTaps = 4 + (int) std::round(secondary * 12.0);
+            std::vector<float> combHistory(
+                processType == "comb" ? (size_t) audio.getNumSamples() : 0);
+            std::vector<float> dryCopy;
+            if (processType == "smear")
+                dryCopy.assign(samples, samples + audio.getNumSamples());
+            float held = samples[0];
+            int nextHoldFrame = 0;
+            float dampedComb = 0.0f;
+            for (int frame = 0; frame < audio.getNumSamples(); ++frame)
+            {
+                const double dry = samples[frame];
+                double wet = dry;
+                if (processType == "wavefold")
+                    wet = fold(dry * primary + secondary);
+                else if (processType == "saturation")
+                {
+                    const double center = std::tanh(secondary * primary);
+                    wet = (std::tanh((dry + secondary) * primary) - center) / std::tanh(primary);
+                }
+                else if (processType == "hard-clip")
+                {
+                    const double positiveThreshold = primary * (1.0 - secondary * 0.75);
+                    const double negativeThreshold = primary * (1.0 + secondary * 0.75);
+                    wet = dry >= 0.0
+                        ? std::clamp(dry / positiveThreshold, 0.0, 1.0)
+                        : std::clamp(dry / negativeThreshold, -1.0, 0.0);
+                }
+                else if (processType == "rectify")
+                {
+                    const double driven = std::clamp(dry * secondary, -1.0, 1.0);
+                    wet = primary == 0.0 ? std::max(0.0, driven) : std::abs(driven);
+                }
+                else if (processType == "bit-crush")
+                {
+                    const double levels = std::pow(2.0, std::round(primary) - 1.0);
+                    uint32_t noiseState = (uint32_t) (frame + 1) * 747796405u
+                        ^ (uint32_t) (ch + 1) * 2891336453u;
+                    noiseState ^= noiseState >> 16;
+                    noiseState *= 2246822519u;
+                    noiseState ^= noiseState >> 13;
+                    const double noise = ((double) noiseState
+                        / (double) std::numeric_limits<uint32_t>::max()) - 0.5;
+                    wet = std::round((dry + noise * secondary / levels) * levels) / levels;
+                }
+                else if (processType == "rate-crush")
+                {
+                    if (frame >= nextHoldFrame)
+                    {
+                        held = (float) dry;
+                        uint32_t jitterState = (uint32_t) (frame + 1) * 277803737u
+                            ^ (uint32_t) (ch + 1) * 1597334677u;
+                        jitterState ^= jitterState >> 15;
+                        const double noise = ((double) jitterState
+                            / (double) std::numeric_limits<uint32_t>::max()) * 2.0 - 1.0;
+                        const int variedHold = std::max(
+                            1, (int) std::round((double) holdFrames * (1.0 + noise * secondary * 0.75)));
+                        nextHoldFrame = frame + variedHold;
+                    }
+                    wet = held;
+                }
+                else if (processType == "ring-mod")
+                {
+                    const double sine = std::sin(
+                        juce::MathConstants<double>::twoPi * primary * (double) frame / sampleRate);
+                    const double square = sine >= 0.0 ? 1.0 : -1.0;
+                    wet = dry * (sine + (square - sine) * secondary);
+                }
+                else if (processType == "comb")
+                {
+                    const double delayed = frame >= combFrames
+                        ? combHistory[(size_t) (frame - combFrames)]
+                        : 0.0;
+                    const double dampingCoefficient = 1.0 - tertiary * 0.95;
+                    dampedComb += (float) ((delayed - dampedComb) * dampingCoefficient);
+                    wet = dry + secondary * dampedComb;
+                    combHistory[(size_t) frame] = (float) wet;
+                }
+                else if (processType == "smear")
+                {
+                    double sum = dry * 0.25;
+                    double weightSum = 0.25;
+                    for (int tap = 1; tap <= smearTaps; ++tap)
+                    {
+                        const double position = (double) tap / (double) smearTaps;
+                        const double curve = std::pow(position, 0.6 + secondary * 1.8);
+                        const int delay = std::max(1, (int) std::round(curve * smearMaxDelay));
+                        const double weight = 1.0 - position * 0.45;
+                        if (frame >= delay)
+                            sum += dryCopy[(size_t) (frame - delay)] * weight;
+                        weightSum += weight;
+                    }
+                    wet = sum / weightSum;
+                }
+                samples[frame] = (float) std::clamp(
+                    (dry + (wet - dry) * mix) * processOutputGain,
+                    -1.0,
+                    1.0);
+            }
+        }
+
+        auto file = juce::File(outputPath);
+        if (!file.getParentDirectory().createDirectory() && !file.getParentDirectory().isDirectory())
+        {
+            errorOut = "failed to create Shape Process output directory";
+            return false;
+        }
+        file.deleteFile();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::FileOutputStream> stream(file.createOutputStream());
+        if (stream == nullptr)
+        {
+            errorOut = "failed to open Shape Process output: " + outputPath;
+            return false;
+        }
+        std::unique_ptr<juce::AudioFormatWriter> writer(
+            wav.createWriterFor(stream.get(), sampleRate, (unsigned int) audio.getNumChannels(), 32, {}, 0));
+        if (writer == nullptr)
+        {
+            errorOut = "failed to create Shape Process float WAV writer";
+            return false;
+        }
+        stream.release();
+        if (!writer->writeFromAudioSampleBuffer(audio, 0, audio.getNumSamples()))
+        {
+            writer.reset();
+            file.deleteFile();
+            errorOut = "failed while writing Shape Process output";
+            return false;
+        }
+        writer.reset();
+        infoOut.durationSec = (double) audio.getNumSamples() / sampleRate;
+        infoOut.sampleRate = sampleRate;
+        infoOut.frames = audio.getNumSamples();
+        infoOut.channels = audio.getNumChannels();
+        return true;
+    }
+
+    bool renderShapeStemToWav(
+        const std::vector<ShapeRenderSource>& sources,
         double sourceBarLength,
         double targetBpm,
         double loopBars,
@@ -53,37 +350,77 @@ namespace sssketch
         ShapeRenderInfo& infoOut,
         juce::String& errorOut)
     {
-        if (!finitePositive(sourceDurationSec) || !finitePositive(sourceBarLength)
+        if (sources.empty() || !finitePositive(sourceBarLength)
             || !finitePositive(targetBpm) || !finitePositive(loopBars))
         {
             errorOut = "invalid Shape timing metadata";
             return false;
         }
 
-        juce::AudioBuffer<float> source;
+        struct DecodedSource
+        {
+            juce::AudioBuffer<float> audio;
+            double durationSec = 0.0;
+            double barLength = 0.0;
+            int musicalFrames = 0;
+            bool alreadySewn = false;
+        };
+        std::vector<DecodedSource> decoded;
+        decoded.reserve(sources.size());
         double sampleRate = 0.0;
-        if (!decodeRawAudioFile(sourcePath, source, sampleRate))
+        int channels = 0;
+        for (const auto& sourceSpec : sources)
         {
-            errorOut = "failed to decode Shape source: " + sourcePath;
-            return false;
-        }
-        if (!finitePositive(sampleRate) || source.getNumSamples() <= 0 || source.getNumChannels() <= 0)
-        {
-            errorOut = "Shape source decoded to an empty buffer: " + sourcePath;
-            return false;
-        }
-        const double decodedDurationSec = (double) source.getNumSamples() / sampleRate;
-        const double durationToleranceSec = std::max(0.05, sourceDurationSec * 0.02);
-        if (std::abs(decodedDurationSec - sourceDurationSec) > durationToleranceSec)
-        {
-            errorOut = "Shape source duration does not match decoded audio";
-            return false;
-        }
-        const int musicalSourceFrames = (int) std::llround(sourceDurationSec * sampleRate);
-        if (musicalSourceFrames <= 0 || musicalSourceFrames > source.getNumSamples())
-        {
-            errorOut = "Shape musical source length exceeds decoded audio";
-            return false;
+            const double itemBarLength = finitePositive(sourceSpec.barLength)
+                ? sourceSpec.barLength
+                : sourceBarLength;
+            if (!finitePositive(sourceSpec.durationSec) || !finitePositive(itemBarLength))
+            {
+                errorOut = "invalid Shape source duration";
+                return false;
+            }
+            DecodedSource item;
+            double itemRate = 0.0;
+            if (!decodeRawAudioFile(sourceSpec.path, item.audio, itemRate))
+            {
+                errorOut = "failed to decode Shape source: " + sourceSpec.path;
+                return false;
+            }
+            if (!finitePositive(itemRate) || item.audio.getNumSamples() <= 0
+                || item.audio.getNumChannels() <= 0)
+            {
+                errorOut = "Shape source decoded to an empty buffer: " + sourceSpec.path;
+                return false;
+            }
+            if (decoded.empty())
+            {
+                sampleRate = itemRate;
+                channels = item.audio.getNumChannels();
+            }
+            else if (std::abs(itemRate - sampleRate) > 1.0e-6
+                || item.audio.getNumChannels() != channels)
+            {
+                errorOut = "Shape transformed sources do not share an audio format";
+                return false;
+            }
+            const double decodedDurationSec = (double) item.audio.getNumSamples() / itemRate;
+            const double durationToleranceSec = std::max(0.05, sourceSpec.durationSec * 0.02);
+            if (std::abs(decodedDurationSec - sourceSpec.durationSec) > durationToleranceSec)
+            {
+                errorOut = "Shape source duration does not match decoded audio";
+                return false;
+            }
+            item.durationSec = sourceSpec.durationSec;
+            item.barLength = itemBarLength;
+            item.musicalFrames = (int) std::llround(sourceSpec.durationSec * itemRate);
+            if (item.musicalFrames <= 0 || item.musicalFrames > item.audio.getNumSamples())
+            {
+                errorOut = "Shape musical source length exceeds decoded audio";
+                return false;
+            }
+            item.alreadySewn = sourceSpec.path.endsWithIgnoreCase(".shape.wav")
+                || sourceSpec.path.endsWithIgnoreCase(".shape-preview.wav");
+            decoded.push_back(std::move(item));
         }
 
         const double secPerBar = 240.0 / targetBpm;
@@ -95,10 +432,6 @@ namespace sssketch
             return false;
         }
         const int frames = (int) std::ceil(exactFrames);
-        const int channels = source.getNumChannels();
-        const bool sourceAlreadySewn =
-            sourcePath.endsWithIgnoreCase(".shape.wav")
-            || sourcePath.endsWithIgnoreCase(".shape-preview.wav");
         juce::AudioBuffer<float> output(channels, frames);
         output.clear();
         std::vector<std::pair<int, int>> tiledSourceSeams;
@@ -120,8 +453,9 @@ namespace sssketch
                 || !std::isfinite(segment.destStartBars)
                 || segment.sourceStartBars < 0.0
                 || segment.sourceEndBars <= segment.sourceStartBars + kEps
-                || segment.sourceEndBars > loopBars + kEps
-                || segment.destStartBars < 0.0)
+                || segment.destStartBars < 0.0
+                || segment.sourceIndex < 0
+                || segment.sourceIndex >= (int) decoded.size())
             {
                 errorOut = "invalid Shape fragment coordinates";
                 return false;
@@ -134,6 +468,8 @@ namespace sssketch
                 return false;
             }
             previousEnd = destEndBars;
+            const auto& source = decoded[(size_t) segment.sourceIndex];
+            const double segmentSourceBarLength = source.barLength;
 
             const int destStart = std::max(0, (int) std::llround(segment.destStartBars * secPerBar * sampleRate));
             const bool reachesOutputEnd = std::abs(destEndBars - loopBars) <= kEps;
@@ -164,8 +500,8 @@ namespace sssketch
             // inside a longer Shape lane cannot acquire new clicks.
             int sourceTileStartFrame = destStart;
             double sourceWrap = segment.reversed
-                ? std::floor((segment.sourceEndBars - kEps) / sourceBarLength) * sourceBarLength
-                : (std::floor(segment.sourceStartBars / sourceBarLength) + 1.0) * sourceBarLength;
+                ? std::floor((segment.sourceEndBars - kEps) / segmentSourceBarLength) * segmentSourceBarLength
+                : (std::floor(segment.sourceStartBars / segmentSourceBarLength) + 1.0) * segmentSourceBarLength;
             const auto hasAnotherWrap = [&]() {
                 return segment.reversed
                     ? sourceWrap > segment.sourceStartBars + kEps
@@ -180,11 +516,11 @@ namespace sssketch
                     (int) std::llround(wrapDestBars * secPerBar * sampleRate);
                 if (wrapFrame > destStart && wrapFrame < destEnd)
                 {
-                    if (!sourceAlreadySewn)
+                    if (!source.alreadySewn)
                         tiledSourceSeams.push_back({ wrapFrame, wrapFrame - sourceTileStartFrame });
                     sourceTileStartFrame = wrapFrame;
                 }
-                sourceWrap += segment.reversed ? -sourceBarLength : sourceBarLength;
+                sourceWrap += segment.reversed ? -segmentSourceBarLength : segmentSourceBarLength;
             }
             if (reachesOutputEnd)
                 outputTailStartFrame = sourceTileStartFrame;
@@ -196,18 +532,18 @@ namespace sssketch
                 const double sourcePosition = segment.reversed
                     ? segment.sourceEndBars - sampleBars - localBars
                     : segment.sourceStartBars + localBars;
-                double sourceBar = std::fmod(sourcePosition, sourceBarLength);
+                double sourceBar = std::fmod(sourcePosition, segmentSourceBarLength);
                 if (sourceBar < 0.0)
-                    sourceBar += sourceBarLength;
+                    sourceBar += segmentSourceBarLength;
                 // Match PlaybackEngine's nearest-sample policy exactly.
                 // sourceDurationSec is the app's true musical tile length;
                 // decoded files may contain a small codec-padding tail that
                 // ordinary playback intentionally never schedules.
-                const double sourceTimeSec = sourceBar * (sourceDurationSec / sourceBarLength);
+                const double sourceTimeSec = sourceBar * (source.durationSec / segmentSourceBarLength);
                 int sourceSample = (int) std::llround(sourceTimeSec * sampleRate);
-                if (sourceSample == musicalSourceFrames)
+                if (sourceSample == source.musicalFrames)
                     sourceSample = 0;
-                if (sourceSample < 0 || sourceSample >= musicalSourceFrames)
+                if (sourceSample < 0 || sourceSample >= source.musicalFrames)
                 {
                     errorOut = "Shape fragment reads outside decoded source audio";
                     return false;
@@ -220,7 +556,7 @@ namespace sssketch
                 if (fadeOut && fromEnd < fadeFrames)
                     gain *= (float) fromEnd / (float) fadeFrames;
                 for (int ch = 0; ch < channels; ++ch)
-                    output.setSample(ch, destStart + i, source.getSample(ch, sourceSample) * gain);
+                    output.setSample(ch, destStart + i, source.audio.getSample(ch, sourceSample) * gain);
             }
         }
 
@@ -230,17 +566,20 @@ namespace sssketch
         // recognizes Shape's private suffixes), so heal its outer loop once
         // here as well. This keeps preview and committed playback identical.
         bool outerBoundaryAlreadySewn = false;
-        if (sourceAlreadySewn && hasAudioAtLoopStart && hasAudioAtLoopEnd)
+        if (hasAudioAtLoopStart && hasAudioAtLoopEnd
+            && segments.front().sourceIndex == segments.back().sourceIndex
+            && decoded[(size_t) segments.front().sourceIndex].alreadySewn)
         {
             const auto& first = segments.front();
             const auto& last = segments.back();
+            const double boundaryBarLength = decoded[(size_t) first.sourceIndex].barLength;
             const double firstBoundary = first.reversed ? first.sourceEndBars : first.sourceStartBars;
             const double lastBoundary = last.reversed ? last.sourceStartBars : last.sourceEndBars;
-            double phaseDifference = std::fmod(lastBoundary - firstBoundary, sourceBarLength);
+            double phaseDifference = std::fmod(lastBoundary - firstBoundary, boundaryBarLength);
             if (phaseDifference < 0.0)
-                phaseDifference += sourceBarLength;
+                phaseDifference += boundaryBarLength;
             outerBoundaryAlreadySewn = phaseDifference <= kEps
-                || std::abs(phaseDifference - sourceBarLength) <= kEps;
+                || std::abs(phaseDifference - boundaryBarLength) <= kEps;
         }
         if (hasAudioAtLoopStart && hasAudioAtLoopEnd && !outerBoundaryAlreadySewn)
         {

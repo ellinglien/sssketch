@@ -1,22 +1,36 @@
 import { describe, expect, it } from 'vitest'
-import type { Rifff } from './types'
+import type { Rifff, ShapeClipProcessV1 } from './types'
 import {
+  addBakedShapeProcessLanes,
   addShapeLane,
   assembleShapeRifff,
+  bakeShapeFragmentProcesses,
   copyShapeFragment,
   createShapeDraft,
   duplicateShapeFragment,
+  discardOrphanedShapeProcessPreview,
   finishShapeLaneGain,
   groupShapeEdits,
   isolateShapeFragmentRange,
   moveShapeFragment,
+  normalizeShapeClipProcess,
   previewShapeLaneGain,
   removeShapeFragmentRange,
   removeShapeFragments,
+  removeShapeLane,
   resizeShapeFragment,
   reverseShapeFragments,
+  setShapeFragmentCharacter,
+  setShapeFragmentFormant,
+  setShapeFragmentProcess,
+  setShapeFragmentRate,
+  setShapeFragmentTransform,
+  shapeClipTransform,
+  shapeFragmentEndBars,
+  shapeFragmentLengthBars,
   replaceShapeLaneSource,
   resetShapeLane,
+  resetShapeFragmentsToOriginal,
   shapeContentFingerprint,
   shapeRenderFingerprint,
   splitShapeFragment,
@@ -59,6 +73,17 @@ describe('Shape draft', () => {
     })
   })
 
+  it('compresses or expands the waveform immediately with playback rate', () => {
+    expect(shapeWaveformLayout(3, 2, 5, 2)).toEqual({
+      tileWidthPct: 20,
+      maskOffsetPct: -10
+    })
+    expect(shapeWaveformLayout(3, 2, 5, 0.5)).toEqual({
+      tileWidthPct: 80,
+      maskOffsetPct: -40
+    })
+  })
+
   it('starts each lane as one identity fragment across the complete riff', () => {
     const value = draft()
     expect(value.loopBars).toBe(8)
@@ -69,7 +94,14 @@ describe('Shape draft', () => {
         sourceStartBars: 0,
         sourceEndBars: 8,
         destStartBars: 0,
-        disabled: false
+        disabled: false,
+        transform: {
+          pitchSemitones: 0,
+          detuneCents: 0,
+          formantSemitones: 0,
+          rate: 1,
+          character: 'raw'
+        }
       }
     ])
   })
@@ -114,6 +146,29 @@ describe('Shape draft', () => {
     })
   })
 
+  it('removes a stem lane as one undoable edit but preserves the final lane', () => {
+    const before = addShapeLane(
+      draft(),
+      {
+        author: 'b',
+        name: 'new bass',
+        type: 'bass',
+        path: '/bass.wav',
+        durationSec: 4,
+        barLength: 2
+      },
+      1,
+      'lane-2',
+      'clip-2'
+    )
+    const removed = removeShapeLane(before, 'lane-2')
+
+    expect(removed.lanes).toHaveLength(1)
+    expect(removed.lanes[0].id).toBe(before.lanes[0].id)
+    expect(undoShape(removed).lanes).toEqual(before.lanes)
+    expect(removeShapeLane(removed, removed.lanes[0].id)).toBe(removed)
+  })
+
   it('replaces a lane source while preserving its arrangement and mix state', () => {
     const before = draft()
     const lane = before.lanes[0]
@@ -154,18 +209,32 @@ describe('Shape draft', () => {
         sourceStartBars: 0,
         sourceEndBars: 3,
         destStartBars: 0,
-        disabled: false
+        disabled: false,
+        transform: {
+          pitchSemitones: 0,
+          detuneCents: 0,
+          formantSemitones: 0,
+          rate: 1,
+          character: 'raw'
+        }
       },
       {
         id: 'right',
         sourceStartBars: 3,
         sourceEndBars: 8,
         destStartBars: 3,
-        disabled: false
+        disabled: false,
+        transform: {
+          pitchSemitones: 0,
+          detuneCents: 0,
+          formantSemitones: 0,
+          rate: 1,
+          character: 'raw'
+        }
       }
     ])
     expect(shapeRenderSegments(after.lanes[0])).toEqual([
-      { sourceStartBars: 0, sourceEndBars: 8, destStartBars: 0 }
+      { sourceStartBars: 0, sourceEndBars: 8, destStartBars: 0, character: 'raw' }
     ])
   })
 
@@ -194,7 +263,13 @@ describe('Shape draft', () => {
       })
     ])
     expect(shapeRenderSegments(after.lanes[0])).toEqual([
-      { sourceStartBars: 0, sourceEndBars: 8, destStartBars: 0, reversed: true }
+      {
+        sourceStartBars: 0,
+        sourceEndBars: 8,
+        destStartBars: 0,
+        reversed: true,
+        character: 'raw'
+      }
     ])
   })
 
@@ -315,12 +390,469 @@ describe('Shape draft', () => {
     const reversed = reverseShapeFragments(split, new Set(['right']))
     expect(reversed.lanes[0].fragments[1].reversed).toBe(true)
     expect(shapeRenderSegments(reversed.lanes[0])).toEqual([
-      { sourceStartBars: 0, sourceEndBars: 3, destStartBars: 0 },
-      { sourceStartBars: 3, sourceEndBars: 8, destStartBars: 3, reversed: true }
+      { sourceStartBars: 0, sourceEndBars: 3, destStartBars: 0, character: 'raw' },
+      {
+        sourceStartBars: 3,
+        sourceEndBars: 8,
+        destStartBars: 3,
+        reversed: true,
+        character: 'raw'
+      }
     ])
     expect(reverseShapeFragments(reversed, new Set(['right'])).lanes[0].fragments[1].reversed).toBe(
       false
     )
+  })
+
+  it('stores pitch transforms in the default Raw recipe and restores them with undo', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const transformed = setShapeFragmentTransform(before, new Set([clipId]), {
+      pitchSemitones: -12,
+      detuneCents: 17
+    })
+
+    expect(shapeClipTransform(transformed.lanes[0].fragments[0])).toEqual({
+      pitchSemitones: -12,
+      detuneCents: 17,
+      formantSemitones: 0,
+      rate: 1,
+      character: 'raw'
+    })
+    expect(shapeRenderSegments(transformed.lanes[0])).toEqual([
+      {
+        sourceStartBars: 0,
+        sourceEndBars: 8,
+        destStartBars: 0,
+        pitchSemitones: -11.83,
+        character: 'raw'
+      }
+    ])
+    expect(undoShape(transformed).lanes).toEqual(before.lanes)
+  })
+
+  it('supports extreme transpose values through plus or minus 512 semitones', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const high = setShapeFragmentTransform(before, new Set([clipId]), {
+      pitchSemitones: 512,
+      detuneCents: 0
+    })
+    const low = setShapeFragmentTransform(before, new Set([clipId]), {
+      pitchSemitones: -999,
+      detuneCents: 0
+    })
+
+    expect(shapeClipTransform(high.lanes[0].fragments[0]).pitchSemitones).toBe(512)
+    expect(shapeClipTransform(low.lanes[0].fragments[0]).pitchSemitones).toBe(-512)
+  })
+
+  it('does not merge adjacent clips that have different pitch processing', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const split = splitShapeFragment(before, lane.id, lane.fragments[0].id, 4, ['a', 'b'])
+    const transformed = setShapeFragmentTransform(split, new Set(['b']), {
+      pitchSemitones: 7,
+      detuneCents: 0
+    })
+
+    expect(shapeRenderSegments(transformed.lanes[0])).toEqual([
+      { sourceStartBars: 0, sourceEndBars: 4, destStartBars: 0, character: 'raw' },
+      {
+        sourceStartBars: 4,
+        sourceEndBars: 8,
+        destStartBars: 4,
+        pitchSemitones: 7,
+        character: 'raw'
+      }
+    ])
+  })
+
+  it('stores independent formant shifts without changing pitch, rate, or clip length', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const shifted = setShapeFragmentFormant(before, new Set([clipId]), -7)
+
+    expect(shapeClipTransform(shifted.lanes[0].fragments[0])).toMatchObject({
+      pitchSemitones: 0,
+      detuneCents: 0,
+      formantSemitones: -7,
+      rate: 1
+    })
+    expect(shapeFragmentLengthBars(shifted.lanes[0].fragments[0])).toBe(8)
+    expect(shapeRenderSegments(shifted.lanes[0])).toEqual([
+      {
+        sourceStartBars: 0,
+        sourceEndBars: 8,
+        destStartBars: 0,
+        formantSemitones: -7,
+        character: 'raw'
+      }
+    ])
+    expect(undoShape(shifted).lanes).toEqual(before.lanes)
+  })
+
+  it('does not merge adjacent clips with different formant shifts', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const split = splitShapeFragment(before, lane.id, lane.fragments[0].id, 4, ['a', 'b'])
+    const shifted = setShapeFragmentFormant(split, new Set(['b']), 5)
+    expect(shapeRenderSegments(shifted.lanes[0])).toHaveLength(2)
+  })
+
+  it('changes tape rate, clip duration, render metadata, and undo as one edit', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const split = splitShapeFragment(before, lane.id, lane.fragments[0].id, 4, ['a', 'b'])
+    const slowed = setShapeFragmentRate(split, new Set(['a']), 0.5)
+
+    expect(slowed.lanes[0].fragments).toHaveLength(1)
+    expect(shapeClipTransform(slowed.lanes[0].fragments[0])).toMatchObject({ rate: 0.5 })
+    expect(shapeFragmentLengthBars(slowed.lanes[0].fragments[0])).toBe(8)
+    expect(shapeFragmentEndBars(slowed.lanes[0].fragments[0])).toBe(8)
+    expect(shapeRenderSegments(slowed.lanes[0])).toEqual([
+      { sourceStartBars: 0, sourceEndBars: 4, destStartBars: 0, rate: 0.5, character: 'raw' }
+    ])
+    expect(undoShape(slowed).lanes).toEqual(split.lanes)
+
+    const resetRate = setShapeFragmentRate(slowed, new Set(['a']), 1)
+    expect(resetRate.lanes[0].fragments[0]).toMatchObject({
+      sourceStartBars: 0,
+      sourceEndBars: 4,
+      destStartBars: 0,
+      transform: expect.objectContaining({ rate: 1, character: 'raw' })
+    })
+
+    const identity = draft()
+    const identityId = identity.lanes[0].fragments[0].id
+    const cropped = setShapeFragmentRate(identity, new Set([identityId]), 0.5)
+    const restored = setShapeFragmentRate(cropped, new Set([identityId]), 1)
+    expect(restored.lanes[0].fragments[0]).toMatchObject({
+      sourceStartBars: 0,
+      sourceEndBars: 8,
+      transform: expect.objectContaining({ rate: 1, character: 'raw' })
+    })
+  })
+
+  it('maps cuts through playback rate and keeps differently-rated neighbors separate', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const fast = setShapeFragmentRate(before, new Set([lane.fragments[0].id]), 2)
+    const split = splitShapeFragment(fast, lane.id, lane.fragments[0].id, 2, ['a', 'b'])
+
+    expect(split.lanes[0].fragments).toEqual([
+      expect.objectContaining({ id: 'a', sourceStartBars: 0, sourceEndBars: 4, destStartBars: 0 }),
+      expect.objectContaining({ id: 'b', sourceStartBars: 4, sourceEndBars: 8, destStartBars: 2 })
+    ])
+    expect(shapeRenderSegments(split.lanes[0])).toEqual([
+      { sourceStartBars: 0, sourceEndBars: 8, destStartBars: 0, rate: 2, character: 'raw' }
+    ])
+
+    const resetSecond = setShapeFragmentRate(split, new Set(['b']), 1)
+    expect(shapeRenderSegments(resetSecond.lanes[0])).toEqual([
+      { sourceStartBars: 0, sourceEndBars: 4, destStartBars: 0, rate: 2, character: 'raw' },
+      { sourceStartBars: 4, sourceEndBars: 8, destStartBars: 2, character: 'raw' }
+    ])
+  })
+
+  it('defaults early v2 transform recipes without rate to normal speed', () => {
+    const before = draft()
+    const legacy = {
+      ...before.lanes[0].fragments[0],
+      transform: { pitchSemitones: 3, detuneCents: 0, character: 'smooth' as const }
+    }
+    expect(shapeClipTransform(legacy as never)).toEqual({
+      pitchSemitones: 3,
+      detuneCents: 0,
+      formantSemitones: 0,
+      rate: 1,
+      character: 'smooth'
+    })
+  })
+
+  it('defaults output trim for Saturation interventions saved before output gain existed', () => {
+    expect(
+      normalizeShapeClipProcess({
+        type: 'saturation',
+        drive: 9,
+        bias: 0,
+        mix: 1
+      } as ShapeClipProcessV1)
+    ).toEqual({
+      type: 'saturation',
+      drive: 9,
+      bias: 0,
+      outputDb: 0,
+      mix: 1
+    })
+  })
+
+  it('stores Raw as a non-neutral clip property and keeps it through pitch and rate edits', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const raw = setShapeFragmentCharacter(before, new Set([clipId]), 'raw')
+    expect(shapeClipTransform(raw.lanes[0].fragments[0])).toMatchObject({
+      pitchSemitones: 0,
+      detuneCents: 0,
+      formantSemitones: 0,
+      rate: 1,
+      character: 'raw'
+    })
+    expect(shapeRenderSegments(raw.lanes[0])).toEqual([
+      { sourceStartBars: 0, sourceEndBars: 8, destStartBars: 0, character: 'raw' }
+    ])
+
+    const pitched = setShapeFragmentTransform(raw, new Set([clipId]), {
+      pitchSemitones: -7,
+      detuneCents: 0
+    })
+    const rated = setShapeFragmentRate(pitched, new Set([clipId]), 2)
+    expect(shapeClipTransform(rated.lanes[0].fragments[0])).toMatchObject({
+      pitchSemitones: -7,
+      rate: 2,
+      character: 'raw'
+    })
+  })
+
+  it('stores Wavefold as a non-destructive clip process and clears it independently', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const processed = setShapeFragmentProcess(before, new Set([clipId]), {
+      type: 'wavefold',
+      drive: 4,
+      bias: 0,
+      mix: 0.75
+    })
+
+    expect(shapeClipTransform(processed.lanes[0].fragments[0]).process).toEqual({
+      type: 'wavefold',
+      drive: 4,
+      bias: 0,
+      mix: 0.75
+    })
+    expect(shapeRenderSegments(processed.lanes[0])).toEqual([
+      {
+        sourceStartBars: 0,
+        sourceEndBars: 8,
+        destStartBars: 0,
+        character: 'raw',
+        process: { type: 'wavefold', drive: 4, bias: 0, mix: 0.75 }
+      }
+    ])
+    expect(undoShape(processed).lanes).toEqual(before.lanes)
+
+    const cleared = setShapeFragmentProcess(processed, new Set([clipId]), undefined)
+    expect(shapeClipTransform(cleared.lanes[0].fragments[0]).process).toBeUndefined()
+    expect(shapeClipTransform(cleared.lanes[0].fragments[0]).character).toBe('raw')
+  })
+
+  it('normalizes and persists every single-slot Shape treatment', () => {
+    const processes: ShapeClipProcessV1[] = [
+      { type: 'saturation', drive: 4, bias: 0.25, outputDb: -6, mix: 0.75 },
+      { type: 'hard-clip', threshold: 0.4, symmetry: -0.3, mix: 0.8 },
+      { type: 'rectify', mode: 'half', drive: 3, mix: 0.6 },
+      { type: 'bit-crush', bits: 7, dither: 0.4, mix: 1 },
+      { type: 'rate-crush', factor: 12, jitter: 0.5, mix: 0.9 },
+      { type: 'ring-mod', frequencyHz: 173, shape: 0.6, mix: 0.5 },
+      { type: 'comb', delayMs: 17, feedback: -0.4, damping: 0.7, mix: 0.7 },
+      { type: 'smear', timeMs: 90, scatter: 0.6, mix: 0.8 }
+    ]
+    for (const process of processes) {
+      const before = draft()
+      const clipId = before.lanes[0].fragments[0].id
+      const processed = setShapeFragmentProcess(before, new Set([clipId]), process)
+      expect(shapeClipTransform(processed.lanes[0].fragments[0]).process).toEqual(process)
+      expect(shapeRenderSegments(processed.lanes[0])[0].process).toEqual(process)
+    }
+  })
+
+  it('keeps Wavefold through pitch edits and does not merge clips with different processes', () => {
+    const before = draft()
+    const lane = before.lanes[0]
+    const split = splitShapeFragment(before, lane.id, lane.fragments[0].id, 4, ['a', 'b'])
+    const processed = setShapeFragmentProcess(split, new Set(['b']), {
+      type: 'wavefold',
+      drive: 8,
+      bias: 0,
+      mix: 1
+    })
+    const pitched = setShapeFragmentTransform(processed, new Set(['b']), {
+      pitchSemitones: -5,
+      detuneCents: 0
+    })
+
+    expect(shapeClipTransform(pitched.lanes[0].fragments[1]).process).toEqual({
+      type: 'wavefold',
+      drive: 8,
+      bias: 0,
+      mix: 1
+    })
+    expect(shapeRenderSegments(pitched.lanes[0])).toHaveLength(2)
+  })
+
+  it('bakes the current treatment into a durable base while keeping core transforms editable', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const pitched = setShapeFragmentTransform(before, new Set([clipId]), {
+      pitchSemitones: -7,
+      detuneCents: 12
+    })
+    const formantShifted = setShapeFragmentFormant(pitched, new Set([clipId]), 6)
+    const processed = setShapeFragmentProcess(formantShifted, new Set([clipId]), {
+      type: 'wavefold',
+      drive: 4,
+      bias: 0,
+      mix: 0.75
+    })
+    const baked = bakeShapeFragmentProcesses(
+      processed,
+      new Map([[clipId, { path: '/shape/base.shape-base.wav', durationSec: 4, barLength: 2 }]])
+    )
+
+    expect(shapeClipTransform(baked.lanes[0].fragments[0])).toMatchObject({
+      pitchSemitones: -7,
+      detuneCents: 12,
+      formantSemitones: 6,
+      bakedBase: { path: '/shape/base.shape-base.wav', durationSec: 4, barLength: 2 }
+    })
+    expect(shapeClipTransform(baked.lanes[0].fragments[0]).process).toBeUndefined()
+    expect(shapeRenderSegments(baked.lanes[0])[0]).toMatchObject({
+      pitchSemitones: -6.88,
+      bakedBase: { path: '/shape/base.shape-base.wav' }
+    })
+    expect(undoShape(baked).lanes).toEqual(processed.lanes)
+  })
+
+  it('groups adding and baking a treatment into one undo step', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const processed = setShapeFragmentProcess(before, new Set([clipId]), {
+      type: 'smear',
+      timeMs: 90,
+      scatter: 0.6,
+      mix: 0.5
+    })
+    const baked = bakeShapeFragmentProcesses(
+      processed,
+      new Map([[clipId, { path: '/shape/smear.shape-base.wav', durationSec: 4, barLength: 2 }]])
+    )
+    const added = groupShapeEdits(before, baked)
+
+    expect(shapeClipTransform(added.lanes[0].fragments[0])).toMatchObject({
+      bakedBase: { path: '/shape/smear.shape-base.wav' }
+    })
+    expect(shapeClipTransform(added.lanes[0].fragments[0]).process).toBeUndefined()
+    expect(added.past).toHaveLength(before.past.length + 1)
+    expect(undoShape(added).lanes).toEqual(before.lanes)
+  })
+
+  it('restores a stranded unbaked intervention preview without an undo artifact', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const preview = setShapeFragmentProcess(before, new Set([clipId]), {
+      type: 'rate-crush',
+      factor: 12,
+      jitter: 0.2,
+      mix: 1
+    })
+    const recovered = discardOrphanedShapeProcessPreview(preview)
+
+    expect(recovered.lanes).toEqual(before.lanes)
+    expect(recovered.past).toEqual(before.past)
+    expect(recovered.future).toEqual(before.future)
+    expect(recovered.revision).toBeGreaterThan(preview.revision)
+  })
+
+  it('adds a baked treatment on a new lane without changing the source clip', () => {
+    const before = draft()
+    const sourceClip = before.lanes[0].fragments[0]
+    const processed = setShapeFragmentProcess(before, new Set([sourceClip.id]), {
+      type: 'saturation',
+      drive: 9,
+      bias: 0.1,
+      outputDb: -3,
+      mix: 0.75
+    })
+    const ids = ['copy-clip', 'copy-lane']
+    const added = addBakedShapeProcessLanes(
+      before,
+      processed,
+      new Set([sourceClip.id]),
+      new Map([
+        [sourceClip.id, { path: '/shape/saturated.shape-base.wav', durationSec: 4, barLength: 2 }]
+      ]),
+      () => ids.shift()!
+    )
+
+    expect(added.laneIds).toEqual(['copy-lane'])
+    expect(added.fragmentIds).toEqual(['copy-clip'])
+    expect(added.draft.lanes[0]).toEqual(before.lanes[0])
+    expect(added.draft.lanes[1]).toMatchObject({
+      id: 'copy-lane',
+      gain: before.lanes[0].gain,
+      source: before.lanes[0].source,
+      fragments: [
+        {
+          id: 'copy-clip',
+          sourceStartBars: sourceClip.sourceStartBars,
+          sourceEndBars: sourceClip.sourceEndBars,
+          destStartBars: sourceClip.destStartBars,
+          transform: {
+            bakedBase: { path: '/shape/saturated.shape-base.wav' }
+          }
+        }
+      ]
+    })
+    expect(shapeClipTransform(added.draft.lanes[1].fragments[0]).process).toBeUndefined()
+    expect(added.draft.past).toHaveLength(before.past.length + 1)
+    expect(undoShape(added.draft).lanes).toEqual(before.lanes)
+  })
+
+  it('preserves the baked base through later pitch, rate, and character edits', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const baked = bakeShapeFragmentProcesses(
+      before,
+      new Map([[clipId, { path: '/shape/base.shape-base.wav', durationSec: 4, barLength: 2 }]])
+    )
+    const pitched = setShapeFragmentTransform(baked, new Set([clipId]), {
+      pitchSemitones: 3,
+      detuneCents: 0
+    })
+    const rated = setShapeFragmentRate(pitched, new Set([clipId]), 2)
+    const smooth = setShapeFragmentCharacter(rated, new Set([clipId]), 'smooth')
+
+    expect(shapeClipTransform(smooth.lanes[0].fragments[0]).bakedBase?.path).toBe(
+      '/shape/base.shape-base.wav'
+    )
+  })
+
+  it('resets a baked clip to its immutable source as one undoable edit', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const transformed = setShapeFragmentRate(
+      setShapeFragmentTransform(before, new Set([clipId]), {
+        pitchSemitones: -12,
+        detuneCents: 0
+      }),
+      new Set([clipId]),
+      2
+    )
+    const baked = bakeShapeFragmentProcesses(
+      transformed,
+      new Map([[clipId, { path: '/shape/base.shape-base.wav', durationSec: 4, barLength: 2 }]])
+    )
+    const reset = resetShapeFragmentsToOriginal(baked, new Set([clipId]))
+
+    expect(shapeClipTransform(reset.lanes[0].fragments[0])).toEqual({
+      pitchSemitones: 0,
+      detuneCents: 0,
+      formantSemitones: 0,
+      rate: 1,
+      character: 'raw'
+    })
+    expect(reset.lanes[0].fragments[0].reversed).toBe(false)
+    expect(undoShape(reset).lanes).toEqual(baked.lanes)
   })
 
   it('copies with overwrite semantics and preserves trimmed source offsets', () => {
@@ -599,10 +1131,9 @@ describe('Shape assembly', () => {
       phaseSourcePath: '/shape/1.wav',
       phaseBars: 0,
       shape: {
-        version: 1,
+        version: 2,
         loopBars: 8,
-        gain: 0.75,
-        laneDisabled: false
+        gain: 0.75
       }
     })
     expect(assembled.vol['child-riff:1']).toBe(0.75)
@@ -614,10 +1145,95 @@ describe('Shape assembly', () => {
       [{ path: '/shape/1.wav', durationSec: 16 }],
       'child-riff'
     )
-    legacy.rifff.stems[0].shape!.laneDisabled = true
+    const saved = legacy.rifff.stems[0].shape!
+    legacy.rifff.stems[0].shape = {
+      version: 1,
+      source: saved.source,
+      loopBars: saved.loopBars,
+      laneDisabled: true,
+      gain: saved.gain,
+      fragments: saved.fragments
+    }
     legacy.vol['child-riff:1'] = 0
     const reopened = createShapeDraft('project-session', legacy.rifff, legacy.vol, 'reopened')
     expect(reopened.lanes[0].fragments.every((fragment) => fragment.disabled)).toBe(true)
     expect(reopened.lanes[0].gain).toBe(0.75)
+  })
+
+  it('round-trips transformed clips through v2 provenance', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const transformed = setShapeFragmentCharacter(
+      setShapeFragmentFormant(
+        setShapeFragmentTransform(before, new Set([clipId]), {
+          pitchSemitones: 5,
+          detuneCents: -23
+        }),
+        new Set([clipId]),
+        7
+      ),
+      new Set([clipId]),
+      'raw'
+    )
+    const assembled = assembleShapeRifff(
+      transformed,
+      [{ path: '/shape/transformed.wav', durationSec: 16 }],
+      'transformed-riff'
+    )
+    const reopened = createShapeDraft('project-session', assembled.rifff, assembled.vol, 'reopened')
+
+    expect(assembled.rifff.stems[0].shape?.version).toBe(2)
+    expect(shapeClipTransform(reopened.lanes[0].fragments[0])).toEqual({
+      pitchSemitones: 5,
+      detuneCents: -23,
+      formantSemitones: 7,
+      rate: 1,
+      character: 'raw'
+    })
+  })
+
+  it('round-trips a Wavefold process through kept Shape provenance', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const processed = setShapeFragmentProcess(before, new Set([clipId]), {
+      type: 'wavefold',
+      drive: 3,
+      bias: 0,
+      mix: 0.5
+    })
+    const assembled = assembleShapeRifff(
+      processed,
+      [{ path: '/shape/wavefold.wav', durationSec: 16 }],
+      'wavefold-riff'
+    )
+    const reopened = createShapeDraft('project-session', assembled.rifff, assembled.vol, 'reopened')
+
+    expect(shapeClipTransform(reopened.lanes[0].fragments[0]).process).toEqual({
+      type: 'wavefold',
+      drive: 3,
+      bias: 0,
+      mix: 0.5
+    })
+  })
+
+  it('round-trips the latest durable baked base through Shape provenance', () => {
+    const before = draft()
+    const clipId = before.lanes[0].fragments[0].id
+    const baked = bakeShapeFragmentProcesses(
+      before,
+      new Map([[clipId, { path: '/shape/base.shape-base.wav', durationSec: 4, barLength: 2 }]])
+    )
+    const assembled = assembleShapeRifff(
+      baked,
+      [{ path: '/shape/final.wav', durationSec: 16 }],
+      'baked-riff'
+    )
+    const reopened = createShapeDraft('project-session', assembled.rifff, assembled.vol, 'reopened')
+
+    expect(shapeClipTransform(reopened.lanes[0].fragments[0]).bakedBase).toEqual({
+      path: '/shape/base.shape-base.wav',
+      durationSec: 4,
+      barLength: 2
+    })
   })
 })

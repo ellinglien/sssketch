@@ -605,6 +605,7 @@ namespace sssketch
             drumPump.idle();
             return;
         }
+        renderedSnapshotGeneration.store(snap->generation, std::memory_order_relaxed);
         // For processMaster, which runs after this block's render(s): the settings travel
         // with the snapshot, so a staged swap's mastering starts with its project.
         masterSettingsSeen = MasterStage::settingsFor(snap->project.sound);

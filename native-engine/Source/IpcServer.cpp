@@ -82,6 +82,28 @@ namespace sssketch
         return juce::var(obj.get());
     }
 
+    static juce::var makeShapeRawRenderResult(
+        bool success,
+        const ShapeRenderInfo& info,
+        const juce::String& error)
+    {
+        auto result = makeShapeRenderResult(success, info, error);
+        if (auto* object = result.getDynamicObject())
+            object->setProperty("type", "render-shape-raw-source-result");
+        return result;
+    }
+
+    static juce::var makeShapeProcessRenderResult(
+        bool success,
+        const ShapeRenderInfo& info,
+        const juce::String& error)
+    {
+        auto result = makeShapeRenderResult(success, info, error);
+        if (auto* object = result.getDynamicObject())
+            object->setProperty("type", "render-shape-process-source-result");
+        return result;
+    }
+
     IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc,
         bool linkEnabled)
         : engine(e), transport(t), masterChain(mc), channelChains(cc), linkSession(t.currentBpm(), linkEnabled)
@@ -1505,6 +1527,44 @@ namespace sssketch
             const bool ok = bakeStemToWav(sourcePath, rotationSec, outputPath, durationSec, error);
             sendJson(makeBakeStemResult(ok, durationSec, ok ? juce::String() : error));
         }
+        else if (type == "render-shape-raw-source")
+        {
+            ShapeRenderInfo info;
+            if (!payload.isObject())
+            {
+                sendJson(makeShapeRawRenderResult(false, info, "render-shape-raw-source payload must be an object"));
+                return;
+            }
+            juce::String error;
+            const bool ok = renderShapeRawSourceToWav(
+                payload.getProperty("sourcePath", "").toString(),
+                (double) payload.getProperty("rate", 0.0),
+                payload.getProperty("outputPath", "").toString(),
+                info,
+                error);
+            sendJson(makeShapeRawRenderResult(ok, info, ok ? juce::String() : error));
+        }
+        else if (type == "render-shape-process-source")
+        {
+            ShapeRenderInfo info;
+            if (!payload.isObject())
+            {
+                sendJson(makeShapeProcessRenderResult(false, info, "render-shape-process-source payload must be an object"));
+                return;
+            }
+            juce::String error;
+            const bool ok = renderShapeProcessSourceToWav(
+                payload.getProperty("sourcePath", "").toString(),
+                payload.getProperty("processType", "").toString(),
+                (double) payload.getProperty("primary", 0.0),
+                (double) payload.getProperty("secondary", 0.0),
+                (double) payload.getProperty("tertiary", 0.0),
+                (double) payload.getProperty("mix", -1.0),
+                payload.getProperty("outputPath", "").toString(),
+                info,
+                error);
+            sendJson(makeShapeProcessRenderResult(ok, info, ok ? juce::String() : error));
+        }
         else if (type == "render-shape-stem")
         {
             ShapeRenderInfo info;
@@ -1514,12 +1574,33 @@ namespace sssketch
                 return;
             }
 
-            const auto sourcePath = payload.getProperty("sourcePath", "").toString();
             const auto outputPath = payload.getProperty("outputPath", "").toString();
-            const double sourceDurationSec = (double) payload.getProperty("sourceDurationSec", 0.0);
             const double sourceBarLength = (double) payload.getProperty("sourceBarLength", 0.0);
             const double targetBpm = (double) payload.getProperty("targetBpm", 0.0);
             const double loopBars = (double) payload.getProperty("loopBars", 0.0);
+            std::vector<ShapeRenderSource> sources;
+            if (auto* array = payload.getProperty("sources", juce::var()).getArray())
+            {
+                sources.reserve((size_t) array->size());
+                for (const auto& entry : *array)
+                {
+                    if (!entry.isObject())
+                    {
+                        sendJson(makeShapeRenderResult(false, info, "Shape source must be an object"));
+                        return;
+                    }
+                    sources.push_back({
+                        entry.getProperty("path", "").toString(),
+                        (double) entry.getProperty("durationSec", 0.0),
+                        (double) entry.getProperty("barLength", sourceBarLength)
+                    });
+                }
+            }
+            else
+            {
+                sendJson(makeShapeRenderResult(false, info, "Shape sources must be an array"));
+                return;
+            }
             std::vector<ShapeRenderSegment> segments;
             if (auto* array = payload.getProperty("segments", juce::var()).getArray())
             {
@@ -1535,7 +1616,8 @@ namespace sssketch
                         (double) entry.getProperty("sourceStartBars", -1.0),
                         (double) entry.getProperty("sourceEndBars", -1.0),
                         (double) entry.getProperty("destStartBars", -1.0),
-                        (bool) entry.getProperty("reversed", false)
+                        (bool) entry.getProperty("reversed", false),
+                        (int) entry.getProperty("sourceIndex", -1)
                     });
                 }
             }
@@ -1547,8 +1629,7 @@ namespace sssketch
 
             juce::String error;
             const bool ok = renderShapeStemToWav(
-                sourcePath,
-                sourceDurationSec,
+                sources,
                 sourceBarLength,
                 targetBpm,
                 loopBars,

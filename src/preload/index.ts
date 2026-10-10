@@ -43,7 +43,12 @@ import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 import type { RemoteCommand, RemoteKeepOutcome, RemoteState } from '@shared/remoteState'
 import type { LanAddressCandidate } from '@shared/lanAddress'
-import type { ShapeMaterializeRequest, ShapeMaterializeResult } from '@shared/shape'
+import type {
+  ShapeBakeProcessRequest,
+  ShapeBakeProcessResult,
+  ShapeMaterializeRequest,
+  ShapeMaterializeResult
+} from '@shared/shape'
 
 /** What the gear menu needs to show the phone remote's whole state: whether
  * it is on, the URL to type, the pairing code, how many tries are left, and
@@ -145,6 +150,8 @@ const api = {
     ipcRenderer.invoke('bake-offset', jobs),
   materializeShape: (request: ShapeMaterializeRequest): Promise<ShapeMaterializeResult> =>
     ipcRenderer.invoke('shape-materialize', request),
+  bakeShapeProcess: (request: ShapeBakeProcessRequest): Promise<ShapeBakeProcessResult> =>
+    ipcRenderer.invoke('shape-bake-process', request),
   cancelShapeMaterialization: (jobId: string): Promise<void> =>
     ipcRenderer.invoke('shape-cancel', jobId),
   cleanupShapePreview: (paths: string[]): Promise<void> =>

@@ -343,6 +343,19 @@ namespace sssketch
             fadingIn = false;
     }
 
+    void Transport::detectProjectSwap()
+    {
+        const auto generation = engine.lastRenderedProjectGeneration();
+        if (generation == 0)
+            return;
+        if (renderedProjectGeneration != 0 && generation != renderedProjectGeneration)
+        {
+            fadingIn = true;
+            playFadeElapsedSec = 0.0;
+        }
+        renderedProjectGeneration = generation;
+    }
+
     void Transport::play(double fromPositionBars, bool fadeIn)
     {
         requestedPlayPosition.store(fromPositionBars);
@@ -910,6 +923,7 @@ namespace sssketch
             // plugins (a plugin after the limiter would undo its ceiling), and before this
             // fade -- the same call RenderExport makes. See PlaybackEngine::processMaster.
             engine.processMaster(deviceSampleRate, numSamples, outL, outR);
+            detectProjectSwap();
             applyPlayStartFade(outL, outR, numSamples);
             for (int i = 0; i < numSamples; ++i)
             {
@@ -964,6 +978,7 @@ namespace sssketch
         masterChain.process(numSamples, outL, outR);
         // As above: the master stage, then the halt fade.
         engine.processMaster(deviceSampleRate, numSamples, outL, outR);
+        detectProjectSwap();
         applyPlayStartFade(outL, outR, numSamples);
 
         if (fadingOut)

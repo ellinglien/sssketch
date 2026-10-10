@@ -127,4 +127,21 @@ describe('Shape keyboard ownership', () => {
       })
     ).toBe(7)
   })
+
+  it('converts available source material into destination time at the clip rate', () => {
+    expect(
+      shapeClipResizeDestination({
+        rawBar: 8,
+        edge: 'right',
+        clipStart: 2,
+        clipEnd: 4,
+        sourceStart: 2,
+        sourceEnd: 6,
+        rate: 2,
+        reversed: false,
+        snapBars: 0,
+        loopBars: 8
+      })
+    ).toBe(5)
+  })
 })

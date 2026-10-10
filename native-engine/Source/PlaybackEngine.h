@@ -412,6 +412,14 @@ namespace sssketch
         }
         float getMetronomeVolume() const { return metronomeVolume.load(); }
 
+        /** Generation of the immutable snapshot most recently rendered by
+         * the audio thread. Transport uses a change here to apply its short
+         * project-swap declick ramp without stopping or moving playback. */
+        unsigned long long lastRenderedProjectGeneration() const
+        {
+            return renderedSnapshotGeneration.load(std::memory_order_relaxed);
+        }
+
         /** Message-thread API: called by IpcServer's set-live-param handler
          * to push a new live volume/fade value, and by its load-project
          * handler to clear all overrides once a fresh project has been
@@ -874,5 +882,6 @@ namespace sssketch
         mutable DubDelayBus dubBus;
         /** Counts buildSnapshot calls (message thread), for ProjectSnapshot::generation. */
         unsigned long long snapshotGeneration = 0;
+        mutable std::atomic<unsigned long long> renderedSnapshotGeneration { 0 };
     };
 }

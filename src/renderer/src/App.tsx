@@ -34,7 +34,7 @@ import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './components/arrangementMixerRail'
 import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
 import { CrossPanel } from './components/CrossPanel'
-import { ShapePanel } from './components/ShapePanel'
+import { ShapePanel, type ShapeProcessRackUnit } from './components/ShapePanel'
 import { rifffForSketchCross } from './components/crossFromSketch'
 import { Playhead } from './components/Playhead'
 import { RiserExtentGesture } from './components/RiserExtentGesture'
@@ -1806,6 +1806,9 @@ function Frame(): React.JSX.Element {
   // Shape is also a disposable working copy. Only Add to Shelf publishes a
   // new riff; closing leaves the source and the shared riff selection intact.
   const [shapeDraft, setShapeDraft] = useState<ShapeDraft | null>(null)
+  const [shapeProcessRacks, setShapeProcessRacks] = useState<
+    Record<string, ShapeProcessRackUnit[]>
+  >({})
   const [shapeOpen, setShapeOpen] = useState(false)
   const [shapeDiscardPromptOpen, setShapeDiscardPromptOpen] = useState(false)
   const shapeDraftRef = useRef<ShapeDraft | null>(null)
@@ -3452,6 +3455,13 @@ function Frame(): React.JSX.Element {
             <ShapePanel
               draft={shapeDraft}
               setDraft={setShapeDraft}
+              processRack={shapeProcessRacks[shapeDraft.projectKey] ?? []}
+              onProcessRackChange={(rack) =>
+                setShapeProcessRacks((current) => ({
+                  ...current,
+                  [shapeDraft.projectKey]: rack
+                }))
+              }
               onPreviewStopReady={(stop) => {
                 shapePreviewStopRef.current = stop
               }}

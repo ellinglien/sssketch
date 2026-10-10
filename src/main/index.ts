@@ -256,8 +256,9 @@ import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
-import type { ShapeMaterializeRequest } from '@shared/shape'
+import type { ShapeBakeProcessRequest, ShapeMaterializeRequest } from '@shared/shape'
 import {
+  bakeShapeProcess,
   cancelShapeMaterialization,
   cleanupShapePreview,
   cleanupUncommittedShapeAssets,
@@ -1381,6 +1382,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('shape-materialize', (_event, request: ShapeMaterializeRequest) =>
     materializeShape(request, shapeAssetsDir())
+  )
+  ipcMain.handle('shape-bake-process', (_event, request: ShapeBakeProcessRequest) =>
+    bakeShapeProcess(request, shapeAssetsDir())
   )
   ipcMain.handle('shape-cancel', (_event, jobId: string) => cancelShapeMaterialization(jobId))
   ipcMain.handle('shape-cleanup-preview', (_event, paths: string[]) => cleanupShapePreview(paths))

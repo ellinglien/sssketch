@@ -1,6 +1,9 @@
 import {
   stemKey,
   type Rifff,
+  type ShapeBakedClipSource,
+  type ShapeClipTransformV1,
+  type ShapeClipProcessV1,
   type ShapeFragmentRecipe,
   type ShapeSourceStem,
   type Stem
@@ -45,6 +48,32 @@ export interface ShapeRenderSegment {
   sourceEndBars: number
   destStartBars: number
   reversed?: boolean
+  /** Duration-preserving pitch shift applied before lane assembly. */
+  pitchSemitones?: number
+  /** Independent spectral-envelope shift. */
+  formantSemitones?: number
+  /** Tape/tracker playback-rate multiple. Changes duration and pitch together. */
+  rate?: number
+  /** Raw keeps nearest-neighbour resampling artifacts in the prepared source. */
+  character?: 'raw'
+  process?: ShapeClipProcessV1
+  bakedBase?: ShapeBakedClipSource
+}
+
+export interface ShapeBakeProcessItem {
+  fragmentId: string
+  source: ShapeBakedClipSource
+  process: ShapeClipProcessV1
+}
+
+export interface ShapeBakeProcessRequest {
+  jobId: string
+  items: ShapeBakeProcessItem[]
+}
+
+export interface ShapeBakeProcessResult {
+  jobId: string
+  bases: Array<{ fragmentId: string; source: ShapeBakedClipSource }>
 }
 
 export interface ShapeMaterializeLane {
@@ -84,7 +113,8 @@ function fingerprintLanes(draft: ShapeDraft, includeGain: boolean): string {
           sourceEndBars: fragment.sourceEndBars,
           destStartBars: fragment.destStartBars,
           disabled: fragment.disabled,
-          reversed: Boolean(fragment.reversed)
+          reversed: Boolean(fragment.reversed),
+          transform: shapeClipTransform(fragment)
         }))
         .sort((a, b) => a.destStartBars - b.destStartBars)
     }))
@@ -104,12 +134,14 @@ export function shapeRenderFingerprint(draft: ShapeDraft): string {
 export function shapeWaveformLayout(
   sourceStartBars: number,
   sourceBarLength: number,
-  fragmentLengthBars: number
+  fragmentLengthBars: number,
+  rate = 1
 ): { tileWidthPct: number; maskOffsetPct: number } {
   const phaseBars = ((sourceStartBars % sourceBarLength) + sourceBarLength) % sourceBarLength
+  const safeRate = Number.isFinite(rate) && rate > 0 ? rate : 1
   return {
-    tileWidthPct: (sourceBarLength / fragmentLengthBars) * 100,
-    maskOffsetPct: -(phaseBars / fragmentLengthBars) * 100
+    tileWidthPct: (sourceBarLength / safeRate / fragmentLengthBars) * 100,
+    maskOffsetPct: -(phaseBars / safeRate / fragmentLengthBars) * 100
   }
 }
 
@@ -120,7 +152,173 @@ function id(): string {
 }
 
 function cloneFragment(fragment: ShapeFragmentRecipe): ShapeFragmentRecipe {
-  return { ...fragment }
+  return {
+    ...fragment,
+    ...(fragment.transform
+      ? {
+          transform: {
+            ...fragment.transform,
+            ...(fragment.transform.process ? { process: { ...fragment.transform.process } } : {}),
+            ...(fragment.transform.bakedBase
+              ? { bakedBase: { ...fragment.transform.bakedBase } }
+              : {})
+          }
+        }
+      : {})
+  }
+}
+
+export const DEFAULT_SHAPE_CLIP_TRANSFORM: ShapeClipTransformV1 = {
+  pitchSemitones: 0,
+  detuneCents: 0,
+  formantSemitones: 0,
+  rate: 1,
+  character: 'smooth'
+}
+
+export const SHAPE_PITCH_SEMITONE_LIMIT = 512
+
+export function normalizeShapeClipProcess(
+  process: ShapeClipProcessV1 | undefined
+): ShapeClipProcessV1 | undefined {
+  if (!process) return undefined
+  const mix = Number.isFinite(process.mix) ? Math.max(0, Math.min(1, process.mix)) : 1
+  switch (process.type) {
+    case 'wavefold':
+      return {
+        type: process.type,
+        drive: Number.isFinite(process.drive) ? Math.max(1, Math.min(16, process.drive)) : 2,
+        bias: Number.isFinite(process.bias) ? Math.max(-1, Math.min(1, process.bias)) : 0,
+        mix
+      }
+    case 'saturation':
+      return {
+        type: process.type,
+        drive: Number.isFinite(process.drive) ? Math.max(1, Math.min(16, process.drive)) : 9,
+        bias: Number.isFinite(process.bias) ? Math.max(-1, Math.min(1, process.bias)) : 0,
+        outputDb: Number.isFinite(process.outputDb)
+          ? Math.max(-24, Math.min(24, process.outputDb))
+          : 0,
+        mix
+      }
+    case 'hard-clip':
+      return {
+        type: process.type,
+        threshold: Number.isFinite(process.threshold)
+          ? Math.max(0.05, Math.min(1, process.threshold))
+          : 0.5,
+        symmetry: Number.isFinite(process.symmetry)
+          ? Math.max(-1, Math.min(1, process.symmetry))
+          : 0,
+        mix
+      }
+    case 'rectify':
+      return {
+        type: process.type,
+        mode: process.mode === 'half' ? 'half' : 'full',
+        drive: Number.isFinite(process.drive) ? Math.max(1, Math.min(8, process.drive)) : 1,
+        mix
+      }
+    case 'bit-crush':
+      return {
+        type: process.type,
+        bits: Number.isFinite(process.bits)
+          ? Math.max(2, Math.min(16, Math.round(process.bits)))
+          : 8,
+        dither: Number.isFinite(process.dither) ? Math.max(0, Math.min(1, process.dither)) : 0,
+        mix
+      }
+    case 'rate-crush':
+      return {
+        type: process.type,
+        factor: Number.isFinite(process.factor)
+          ? Math.max(1, Math.min(64, Math.round(process.factor)))
+          : 8,
+        jitter: Number.isFinite(process.jitter) ? Math.max(0, Math.min(1, process.jitter)) : 0,
+        mix
+      }
+    case 'ring-mod':
+      return {
+        type: process.type,
+        frequencyHz: Number.isFinite(process.frequencyHz)
+          ? Math.max(1, Math.min(2000, process.frequencyHz))
+          : 100,
+        shape: Number.isFinite(process.shape) ? Math.max(0, Math.min(1, process.shape)) : 0,
+        mix
+      }
+    case 'comb':
+      return {
+        type: process.type,
+        delayMs: Number.isFinite(process.delayMs) ? Math.max(1, Math.min(50, process.delayMs)) : 12,
+        feedback: Number.isFinite(process.feedback)
+          ? Math.max(-0.95, Math.min(0.95, process.feedback))
+          : 0.5,
+        damping: Number.isFinite(process.damping) ? Math.max(0, Math.min(1, process.damping)) : 0.5,
+        mix
+      }
+    case 'smear':
+      return {
+        type: process.type,
+        timeMs: Number.isFinite(process.timeMs) ? Math.max(5, Math.min(250, process.timeMs)) : 80,
+        scatter: Number.isFinite(process.scatter) ? Math.max(0, Math.min(1, process.scatter)) : 0.5,
+        mix
+      }
+  }
+}
+
+export function shapeClipTransform(fragment: ShapeFragmentRecipe): ShapeClipTransformV1 {
+  const transform = fragment.transform
+  const normalizedProcess = normalizeShapeClipProcess(transform?.process)
+  return transform
+    ? {
+        pitchSemitones: Number.isFinite(transform.pitchSemitones)
+          ? Math.max(
+              -SHAPE_PITCH_SEMITONE_LIMIT,
+              Math.min(SHAPE_PITCH_SEMITONE_LIMIT, transform.pitchSemitones)
+            )
+          : 0,
+        detuneCents: Number.isFinite(transform.detuneCents)
+          ? Math.max(-50, Math.min(50, transform.detuneCents))
+          : 0,
+        formantSemitones: Number.isFinite(transform.formantSemitones)
+          ? Math.max(-12, Math.min(12, transform.formantSemitones))
+          : 0,
+        rate: Number.isFinite(transform.rate) ? Math.max(0.25, Math.min(4, transform.rate)) : 1,
+        ...(Number.isFinite(transform.rateSourceStartBars) &&
+        Number.isFinite(transform.rateSourceEndBars)
+          ? {
+              rateSourceStartBars: transform.rateSourceStartBars,
+              rateSourceEndBars: transform.rateSourceEndBars
+            }
+          : {}),
+        character: transform.character === 'raw' ? 'raw' : 'smooth',
+        ...(normalizedProcess ? { process: normalizedProcess } : {}),
+        ...(transform.bakedBase?.path &&
+        Number.isFinite(transform.bakedBase.durationSec) &&
+        transform.bakedBase.durationSec > 0 &&
+        Number.isFinite(transform.bakedBase.barLength) &&
+        transform.bakedBase.barLength > 0
+          ? { bakedBase: { ...transform.bakedBase } }
+          : {})
+      }
+    : { ...DEFAULT_SHAPE_CLIP_TRANSFORM }
+}
+
+export function shapeFragmentRate(fragment: ShapeFragmentRecipe): number {
+  return shapeClipTransform(fragment).rate
+}
+
+export function shapeFragmentLengthBars(fragment: ShapeFragmentRecipe): number {
+  return (fragment.sourceEndBars - fragment.sourceStartBars) / shapeFragmentRate(fragment)
+}
+
+export function shapeFragmentEndBars(fragment: ShapeFragmentRecipe): number {
+  return fragment.destStartBars + shapeFragmentLengthBars(fragment)
+}
+
+export function shapeClipPitchSemitones(fragment: ShapeFragmentRecipe): number {
+  const transform = shapeClipTransform(fragment)
+  return transform.pitchSemitones + transform.detuneCents / 100
 }
 
 function cloneSource(source: ShapeSourceStem): ShapeSourceStem {
@@ -171,7 +369,11 @@ function identityFragment(loopBars: number, fragmentId = id()): ShapeFragmentRec
     sourceStartBars: 0,
     sourceEndBars: loopBars,
     destStartBars: 0,
-    disabled: false
+    disabled: false,
+    transform: {
+      ...DEFAULT_SHAPE_CLIP_TRANSFORM,
+      character: 'raw'
+    }
   }
 }
 
@@ -195,7 +397,8 @@ export function createShapeDraft(
     // it unchanged would render silence after the old endpoint. Treat that
     // audio as a fresh immutable baseline instead.
     const provenance =
-      stem.shape?.version === 1 && Math.abs(stem.shape.loopBars - rifff.barLength) <= EPS
+      (stem.shape?.version === 1 || stem.shape?.version === 2) &&
+      Math.abs(stem.shape.loopBars - rifff.barLength) <= EPS
         ? stem.shape
         : undefined
     const savedGain = vol[stemKey(rifff.groupId, stem.slot)]
@@ -203,9 +406,10 @@ export function createShapeDraft(
     // durable-disable concept only -- clips -- so migrate that legacy bit
     // onto every clip as the draft opens. Its remembered gain still wins
     // over the ordinary playback zero written by the older format.
-    const gain = provenance?.laneDisabled
-      ? provenance.gain
-      : (savedGain ?? provenance?.gain ?? groupGain)
+    const gain =
+      provenance?.version === 1 && provenance.laneDisabled
+        ? provenance.gain
+        : (savedGain ?? provenance?.gain ?? groupGain)
     return {
       id: id(),
       source: provenance ? cloneSource(provenance.source) : sourceFromStem(stem),
@@ -213,7 +417,7 @@ export function createShapeDraft(
       fragments: provenance
         ? provenance.fragments.map((fragment) => ({
             ...cloneFragment(fragment),
-            disabled: provenance.laneDisabled ? true : fragment.disabled
+            disabled: provenance.version === 1 && provenance.laneDisabled ? true : fragment.disabled
           }))
         : [identityFragment(rifff.barLength)]
     }
@@ -257,9 +461,10 @@ function sliceShapeFragment(
   destEndBars: number,
   fragmentId = fragment.id
 ): ShapeFragmentRecipe {
-  const offsetStart = destStartBars - fragment.destStartBars
-  const offsetEnd = destEndBars - fragment.destStartBars
-  return fragment.reversed
+  const rate = shapeFragmentRate(fragment)
+  const offsetStart = (destStartBars - fragment.destStartBars) * rate
+  const offsetEnd = (destEndBars - fragment.destStartBars) * rate
+  const sliced = fragment.reversed
     ? {
         ...fragment,
         id: fragmentId,
@@ -274,6 +479,13 @@ function sliceShapeFragment(
         sourceEndBars: fragment.sourceStartBars + offsetEnd,
         destStartBars
       }
+  if (sliced.transform?.rateSourceStartBars !== undefined) {
+    const transform = { ...sliced.transform }
+    delete transform.rateSourceStartBars
+    delete transform.rateSourceEndBars
+    sliced.transform = transform
+  }
+  return sliced
 }
 
 export function splitShapeFragment(
@@ -287,7 +499,7 @@ export function splitShapeFragment(
     const index = lane.fragments.findIndex((fragment) => fragment.id === fragmentId)
     if (index === -1) return lane
     const fragment = lane.fragments[index]
-    const destEnd = fragment.destStartBars + fragment.sourceEndBars - fragment.sourceStartBars
+    const destEnd = shapeFragmentEndBars(fragment)
     if (atBars <= fragment.destStartBars + EPS || atBars >= destEnd - EPS) return lane
     const fragments = [...lane.fragments]
     fragments.splice(
@@ -316,7 +528,7 @@ export function isolateShapeFragmentRange(
   if (!fragment) return { draft, fragmentId }
 
   const clipStart = fragment.destStartBars
-  const clipEnd = clipStart + fragment.sourceEndBars - fragment.sourceStartBars
+  const clipEnd = shapeFragmentEndBars(fragment)
   const start = Math.max(clipStart, Math.min(rangeStartBars, rangeEndBars))
   const end = Math.min(clipEnd, Math.max(rangeStartBars, rangeEndBars))
   if (end <= start + EPS) return { draft, fragmentId }
@@ -355,7 +567,7 @@ export function removeShapeFragmentRange(
     const lane = draft.lanes.find((candidate) => candidate.id === laneId)
     const fragment = lane?.fragments.find((candidate) => candidate.id === fragmentId)
     if (!fragment) return draft
-    const clipEnd = fragment.destStartBars + fragment.sourceEndBars - fragment.sourceStartBars
+    const clipEnd = shapeFragmentEndBars(fragment)
     const start = Math.max(fragment.destStartBars, Math.min(rangeStartBars, rangeEndBars))
     const end = Math.min(clipEnd, Math.max(rangeStartBars, rangeEndBars))
     if (end <= start + EPS) return draft
@@ -380,6 +592,353 @@ export function reverseShapeFragments(
       )
     }))
   )
+}
+
+/** Applies absolute transform values to the selected clips as one recipe
+ * edit. Neutral values are omitted so v1-style clips stay compact. */
+export function setShapeFragmentTransform(
+  draft: ShapeDraft,
+  fragmentIds: ReadonlySet<string>,
+  values: Pick<ShapeClipTransformV1, 'pitchSemitones' | 'detuneCents'>
+): ShapeDraft {
+  if (fragmentIds.size === 0) return draft
+  return commit(
+    draft,
+    draft.lanes.map((lane) => ({
+      ...cloneLane(lane),
+      fragments: lane.fragments.map((fragment) => {
+        if (!fragmentIds.has(fragment.id)) return fragment
+        const current = shapeClipTransform(fragment)
+        const transform: ShapeClipTransformV1 = {
+          pitchSemitones: Math.max(
+            -SHAPE_PITCH_SEMITONE_LIMIT,
+            Math.min(SHAPE_PITCH_SEMITONE_LIMIT, Math.round(values.pitchSemitones))
+          ),
+          detuneCents: Math.max(-50, Math.min(50, Math.round(values.detuneCents))),
+          formantSemitones: current.formantSemitones,
+          rate: current.rate,
+          ...(current.rateSourceStartBars !== undefined
+            ? {
+                rateSourceStartBars: current.rateSourceStartBars,
+                rateSourceEndBars: current.rateSourceEndBars
+              }
+            : {}),
+          character: current.character,
+          ...(current.process ? { process: { ...current.process } } : {}),
+          ...(current.bakedBase ? { bakedBase: { ...current.bakedBase } } : {})
+        }
+        const neutral =
+          transform.pitchSemitones === 0 &&
+          transform.detuneCents === 0 &&
+          transform.formantSemitones === 0 &&
+          transform.rate === 1 &&
+          transform.character === 'smooth' &&
+          !transform.process &&
+          !transform.bakedBase
+        return { ...fragment, transform: neutral ? undefined : transform }
+      })
+    }))
+  )
+}
+
+/** Changes tape/tracker rate in place. Slower clips grow to the right and
+ * overwrite anything beneath their new extent. At the riff boundary the
+ * source range is cropped, while the underlying source file stays untouched. */
+export function setShapeFragmentRate(
+  draft: ShapeDraft,
+  fragmentIds: ReadonlySet<string>,
+  value: number
+): ShapeDraft {
+  if (fragmentIds.size === 0 || !Number.isFinite(value)) return draft
+  const rate = Math.max(0.25, Math.min(4, value))
+  const lanes = draft.lanes.map((sourceLane) => {
+    let fragments = sourceLane.fragments.map(cloneFragment)
+    const targets = fragments
+      .filter((fragment) => fragmentIds.has(fragment.id))
+      .sort((a, b) => a.destStartBars - b.destStartBars)
+    for (const original of targets) {
+      const current = fragments.find((fragment) => fragment.id === original.id)
+      if (!current) continue
+      const currentTransform = shapeClipTransform(current)
+      const baselineStart = currentTransform.rateSourceStartBars ?? current.sourceStartBars
+      const baselineEnd = currentTransform.rateSourceEndBars ?? current.sourceEndBars
+      const availableDest = Math.max(0, draft.loopBars - current.destStartBars)
+      const desiredSourceLength = baselineEnd - baselineStart
+      const retainedSourceLength = Math.min(desiredSourceLength, availableDest * rate)
+      if (retainedSourceLength <= EPS) continue
+      const transform: ShapeClipTransformV1 = {
+        ...currentTransform,
+        rate,
+        ...(rate === 1
+          ? { rateSourceStartBars: undefined, rateSourceEndBars: undefined }
+          : { rateSourceStartBars: baselineStart, rateSourceEndBars: baselineEnd }),
+        character: currentTransform.character
+      }
+      const neutral =
+        transform.pitchSemitones === 0 &&
+        transform.detuneCents === 0 &&
+        transform.formantSemitones === 0 &&
+        transform.rate === 1 &&
+        transform.character === 'smooth' &&
+        !transform.process &&
+        !transform.bakedBase
+      const updated: ShapeFragmentRecipe = {
+        ...current,
+        sourceStartBars: current.reversed ? baselineEnd - retainedSourceLength : baselineStart,
+        sourceEndBars: current.reversed ? baselineEnd : baselineStart + retainedSourceLength,
+        transform: neutral ? undefined : transform
+      }
+      const end = shapeFragmentEndBars(updated)
+      fragments = sortFragments([
+        ...trimForOverwrite(
+          fragments.filter((fragment) => fragment.id !== current.id),
+          updated.destStartBars,
+          end
+        ),
+        updated
+      ])
+    }
+    return { ...sourceLane, fragments }
+  })
+  return commit(draft, lanes)
+}
+
+export function setShapeFragmentCharacter(
+  draft: ShapeDraft,
+  fragmentIds: ReadonlySet<string>,
+  character: ShapeClipTransformV1['character']
+): ShapeDraft {
+  if (fragmentIds.size === 0) return draft
+  return commit(
+    draft,
+    draft.lanes.map((lane) => ({
+      ...cloneLane(lane),
+      fragments: lane.fragments.map((fragment) => {
+        if (!fragmentIds.has(fragment.id)) return fragment
+        const transform: ShapeClipTransformV1 = {
+          ...shapeClipTransform(fragment),
+          character
+        }
+        const neutral =
+          transform.pitchSemitones === 0 &&
+          transform.detuneCents === 0 &&
+          transform.formantSemitones === 0 &&
+          transform.rate === 1 &&
+          transform.character === 'smooth' &&
+          !transform.process &&
+          !transform.bakedBase
+        return { ...fragment, transform: neutral ? undefined : transform }
+      })
+    }))
+  )
+}
+
+export function setShapeFragmentFormant(
+  draft: ShapeDraft,
+  fragmentIds: ReadonlySet<string>,
+  formantSemitones: number
+): ShapeDraft {
+  if (fragmentIds.size === 0 || !Number.isFinite(formantSemitones)) return draft
+  return commit(
+    draft,
+    draft.lanes.map((lane) => ({
+      ...cloneLane(lane),
+      fragments: lane.fragments.map((fragment) => {
+        if (!fragmentIds.has(fragment.id)) return fragment
+        const transform: ShapeClipTransformV1 = {
+          ...shapeClipTransform(fragment),
+          formantSemitones: Math.max(-12, Math.min(12, Math.round(formantSemitones)))
+        }
+        const neutral =
+          transform.pitchSemitones === 0 &&
+          transform.detuneCents === 0 &&
+          transform.formantSemitones === 0 &&
+          transform.rate === 1 &&
+          transform.character === 'smooth' &&
+          !transform.process &&
+          !transform.bakedBase
+        return { ...fragment, transform: neutral ? undefined : transform }
+      })
+    }))
+  )
+}
+
+export function setShapeFragmentProcess(
+  draft: ShapeDraft,
+  fragmentIds: ReadonlySet<string>,
+  process: ShapeClipProcessV1 | undefined
+): ShapeDraft {
+  if (fragmentIds.size === 0) return draft
+  return commit(
+    draft,
+    draft.lanes.map((lane) => ({
+      ...cloneLane(lane),
+      fragments: lane.fragments.map((fragment) => {
+        if (!fragmentIds.has(fragment.id)) return fragment
+        const normalized = normalizeShapeClipProcess(process)
+        const transform: ShapeClipTransformV1 = {
+          ...shapeClipTransform(fragment),
+          ...(normalized ? { process: normalized } : { process: undefined })
+        }
+        const neutral =
+          transform.pitchSemitones === 0 &&
+          transform.detuneCents === 0 &&
+          transform.formantSemitones === 0 &&
+          transform.rate === 1 &&
+          transform.character === 'smooth' &&
+          !transform.process &&
+          !transform.bakedBase
+        return { ...fragment, transform: neutral ? undefined : transform }
+      })
+    }))
+  )
+}
+
+/** Recovers an intervention audition that outlived its local UI session (for
+ * example after closing Shape or a development remount). One-off processes
+ * are never durable until Bake, so the exact pre-preview snapshot is restored
+ * without adding another undo entry. */
+export function discardOrphanedShapeProcessPreview(draft: ShapeDraft): ShapeDraft {
+  const hasPreview = draft.lanes.some((lane) =>
+    lane.fragments.some((fragment) => shapeClipTransform(fragment).process !== undefined)
+  )
+  if (!hasPreview) return draft
+
+  const previous = draft.past[draft.past.length - 1]
+  const previousHasProcess = previous?.lanes.some((lane) =>
+    lane.fragments.some((fragment) => shapeClipTransform(fragment).process !== undefined)
+  )
+  if (previous && !previousHasProcess) {
+    return {
+      ...draft,
+      lanes: cloneLanes(previous.lanes),
+      past: draft.past.slice(0, -1),
+      revision: draft.revision + 1
+    }
+  }
+
+  const affected = new Set(
+    draft.lanes.flatMap((lane) =>
+      lane.fragments
+        .filter((fragment) => shapeClipTransform(fragment).process !== undefined)
+        .map((fragment) => fragment.id)
+    )
+  )
+  const cleaned = setShapeFragmentProcess(draft, affected, undefined)
+  return { ...cleaned, past: draft.past, future: draft.future }
+}
+
+/** Promotes completed one-off treatments to durable per-clip bases. Core
+ * pitch/rate/character properties remain editable and the lane source stays
+ * available as the immutable reset root. */
+export function bakeShapeFragmentProcesses(
+  draft: ShapeDraft,
+  bakedBases: ReadonlyMap<string, ShapeBakedClipSource>
+): ShapeDraft {
+  if (bakedBases.size === 0) return draft
+  return commit(
+    draft,
+    draft.lanes.map((lane) => ({
+      ...cloneLane(lane),
+      fragments: lane.fragments.map((fragment) => {
+        const bakedBase = bakedBases.get(fragment.id)
+        if (!bakedBase) return fragment
+        const transform: ShapeClipTransformV1 = {
+          ...shapeClipTransform(fragment),
+          process: undefined,
+          bakedBase: { ...bakedBase }
+        }
+        return { ...fragment, transform }
+      })
+    }))
+  )
+}
+
+export interface AddedShapeProcessLanes {
+  draft: ShapeDraft
+  laneIds: string[]
+  fragmentIds: string[]
+}
+
+/** Adds processed copies to new lanes while leaving the source lanes untouched.
+ * Clips retain their musical placement and editable core transforms; only the
+ * one-off intervention is promoted to the copied clip's durable baked base. */
+export function addBakedShapeProcessLanes(
+  before: ShapeDraft,
+  processed: ShapeDraft,
+  fragmentIds: ReadonlySet<string>,
+  bakedBases: ReadonlyMap<string, ShapeBakedClipSource>,
+  makeId: () => string = id
+): AddedShapeProcessLanes {
+  const laneIds: string[] = []
+  const addedFragmentIds: string[] = []
+  const addedLanes: ShapeLane[] = []
+
+  for (const lane of processed.lanes) {
+    const fragments = lane.fragments.flatMap((fragment) => {
+      if (!fragmentIds.has(fragment.id)) return []
+      const bakedBase = bakedBases.get(fragment.id)
+      if (!bakedBase) return []
+      const fragmentId = makeId()
+      addedFragmentIds.push(fragmentId)
+      return [
+        {
+          ...cloneFragment(fragment),
+          id: fragmentId,
+          transform: {
+            ...shapeClipTransform(fragment),
+            process: undefined,
+            bakedBase: { ...bakedBase }
+          }
+        }
+      ]
+    })
+    if (fragments.length === 0) continue
+    const laneId = makeId()
+    laneIds.push(laneId)
+    addedLanes.push({
+      id: laneId,
+      source: cloneSource(lane.source),
+      gain: lane.gain,
+      fragments
+    })
+  }
+
+  if (addedLanes.length === 0) return { draft: before, laneIds, fragmentIds: addedFragmentIds }
+  return {
+    draft: commit(before, [...cloneLanes(before.lanes), ...addedLanes]),
+    laneIds,
+    fragmentIds: addedFragmentIds
+  }
+}
+
+/** Returns selected clips to their immutable lane source while preserving
+ * arrangement placement and clip boundaries. */
+export function resetShapeFragmentsToOriginal(
+  draft: ShapeDraft,
+  fragmentIds: ReadonlySet<string>
+): ShapeDraft {
+  if (fragmentIds.size === 0) return draft
+  const rateReset = setShapeFragmentRate(draft, fragmentIds, 1)
+  const reset = commit(
+    rateReset,
+    rateReset.lanes.map((lane) => ({
+      ...cloneLane(lane),
+      fragments: lane.fragments.map((fragment) =>
+        fragmentIds.has(fragment.id)
+          ? {
+              ...fragment,
+              reversed: false,
+              transform: {
+                ...DEFAULT_SHAPE_CLIP_TRANSFORM,
+                character: 'raw'
+              }
+            }
+          : fragment
+      )
+    }))
+  )
+  return groupShapeEdits(draft, reset)
 }
 
 export function addShapeLane(
@@ -450,7 +1009,7 @@ function trimForOverwrite(
   const result: ShapeFragmentRecipe[] = []
   for (const fragment of fragments) {
     const fragmentStart = fragment.destStartBars
-    const fragmentEnd = fragmentStart + fragment.sourceEndBars - fragment.sourceStartBars
+    const fragmentEnd = shapeFragmentEndBars(fragment)
     if (fragmentEnd <= start + EPS || fragmentStart >= end - EPS) {
       result.push(cloneFragment(fragment))
       continue
@@ -485,7 +1044,8 @@ export function resizeShapeFragment(
     if (!fragment) return lane
 
     const oldStart = fragment.destStartBars
-    const oldEnd = oldStart + fragment.sourceEndBars - fragment.sourceStartBars
+    const oldEnd = shapeFragmentEndBars(fragment)
+    const rate = shapeFragmentRate(fragment)
     let start = oldStart
     let end = oldEnd
     let sourceStart = fragment.sourceStartBars
@@ -493,23 +1053,23 @@ export function resizeShapeFragment(
 
     if (edge === 'left') {
       const availableBefore = fragment.reversed
-        ? draft.loopBars - fragment.sourceEndBars
-        : fragment.sourceStartBars
+        ? (draft.loopBars - fragment.sourceEndBars) / rate
+        : fragment.sourceStartBars / rate
       start = Math.max(0, Math.min(oldEnd - EPS, Math.max(oldStart - availableBefore, edgeBars)))
       const delta = start - oldStart
-      if (fragment.reversed) sourceEnd -= delta
-      else sourceStart += delta
+      if (fragment.reversed) sourceEnd -= delta * rate
+      else sourceStart += delta * rate
     } else {
       const availableAfter = fragment.reversed
-        ? fragment.sourceStartBars
-        : draft.loopBars - fragment.sourceEndBars
+        ? fragment.sourceStartBars / rate
+        : (draft.loopBars - fragment.sourceEndBars) / rate
       end = Math.min(
         draft.loopBars,
         Math.max(oldStart + EPS, Math.min(oldEnd + availableAfter, edgeBars))
       )
       const delta = end - oldEnd
-      if (fragment.reversed) sourceStart -= delta
-      else sourceEnd += delta
+      if (fragment.reversed) sourceStart -= delta * rate
+      else sourceEnd += delta * rate
     }
 
     if (Math.abs(start - oldStart) <= EPS && Math.abs(end - oldEnd) <= EPS) return lane
@@ -521,6 +1081,12 @@ export function resizeShapeFragment(
       sourceStartBars: Math.max(0, sourceStart),
       sourceEndBars: Math.min(draft.loopBars, sourceEnd),
       destStartBars: start
+    }
+    if (resized.transform?.rateSourceStartBars !== undefined) {
+      const transform = { ...resized.transform }
+      delete transform.rateSourceStartBars
+      delete transform.rateSourceEndBars
+      resized.transform = transform
     }
     const withoutSource = lane.fragments.filter((candidate) => candidate.id !== fragmentId)
     return {
@@ -542,7 +1108,7 @@ function placeShapeFragment(
   return updateLane(draft, laneId, (lane) => {
     const source = lane.fragments.find((fragment) => fragment.id === fragmentId)
     if (!source) return lane
-    const length = source.sourceEndBars - source.sourceStartBars
+    const length = shapeFragmentLengthBars(source)
     const destEnd = destStartBars + length
     if (!(length > EPS) || destEnd > draft.loopBars + EPS) return lane
     const withoutSource = copy
@@ -591,7 +1157,7 @@ export function duplicateShapeFragment(
   const lane = draft.lanes.find((candidate) => candidate.id === laneId)
   const fragment = lane?.fragments.find((candidate) => candidate.id === fragmentId)
   if (!fragment) return draft
-  const length = fragment.sourceEndBars - fragment.sourceStartBars
+  const length = shapeFragmentLengthBars(fragment)
   const destination = fragment.destStartBars + length
   if (destination + length > draft.loopBars + EPS) return draft
   return copyShapeFragment(draft, laneId, fragmentId, destination, copyId)
@@ -621,6 +1187,11 @@ export function removeShapeFragments(
       fragments: lane.fragments.filter((fragment) => !fragmentIds.has(fragment.id))
     }))
   )
+}
+
+export function removeShapeLane(draft: ShapeDraft, laneId: string): ShapeDraft {
+  if (draft.lanes.length <= 1 || !draft.lanes.some((lane) => lane.id === laneId)) return draft
+  return commit(draft, draft.lanes.filter((lane) => lane.id !== laneId).map(cloneLane))
 }
 
 export function resetShapeLane(draft: ShapeDraft, laneId: string, fragmentId = id()): ShapeDraft {
@@ -682,24 +1253,50 @@ export function shapeRenderSegments(lane: ShapeLane): ShapeRenderSegment[] {
   )
   const result: ShapeRenderSegment[] = []
   for (const fragment of audible) {
+    const transform = shapeClipTransform(fragment)
     const segment: ShapeRenderSegment = {
       sourceStartBars: fragment.sourceStartBars,
       sourceEndBars: fragment.sourceEndBars,
       destStartBars: fragment.destStartBars,
-      ...(fragment.reversed ? { reversed: true } : {})
+      ...(fragment.reversed ? { reversed: true } : {}),
+      ...(Math.abs(shapeClipPitchSemitones(fragment)) > EPS
+        ? { pitchSemitones: shapeClipPitchSemitones(fragment) }
+        : {}),
+      ...(Math.abs(transform.formantSemitones) > EPS
+        ? { formantSemitones: transform.formantSemitones }
+        : {}),
+      ...(Math.abs(shapeFragmentRate(fragment) - 1) > EPS
+        ? { rate: shapeFragmentRate(fragment) }
+        : {}),
+      ...(transform.character === 'raw' ? { character: 'raw' as const } : {}),
+      ...(transform.process ? { process: { ...transform.process } } : {}),
+      ...(transform.bakedBase ? { bakedBase: { ...transform.bakedBase } } : {})
     }
     const previous = result[result.length - 1]
     const previousDestEnd = previous
-      ? previous.destStartBars + previous.sourceEndBars - previous.sourceStartBars
+      ? previous.destStartBars +
+        (previous.sourceEndBars - previous.sourceStartBars) / (previous.rate ?? 1)
       : Number.NaN
     const continuousForward =
       previous &&
       !previous.reversed &&
       !segment.reversed &&
+      (previous.rate ?? 1) === (segment.rate ?? 1) &&
+      (previous.character ?? 'smooth') === (segment.character ?? 'smooth') &&
+      JSON.stringify(previous.process) === JSON.stringify(segment.process) &&
+      JSON.stringify(previous.bakedBase) === JSON.stringify(segment.bakedBase) &&
+      (previous.pitchSemitones ?? 0) === (segment.pitchSemitones ?? 0) &&
+      (previous.formantSemitones ?? 0) === (segment.formantSemitones ?? 0) &&
       Math.abs(previous.sourceEndBars - segment.sourceStartBars) <= EPS
     const continuousReverse =
       previous?.reversed &&
       segment.reversed &&
+      (previous.rate ?? 1) === (segment.rate ?? 1) &&
+      (previous.character ?? 'smooth') === (segment.character ?? 'smooth') &&
+      JSON.stringify(previous.process) === JSON.stringify(segment.process) &&
+      JSON.stringify(previous.bakedBase) === JSON.stringify(segment.bakedBase) &&
+      (previous.pitchSemitones ?? 0) === (segment.pitchSemitones ?? 0) &&
+      (previous.formantSemitones ?? 0) === (segment.formantSemitones ?? 0) &&
       Math.abs(previous.sourceStartBars - segment.sourceEndBars) <= EPS
     if (
       previous &&
@@ -737,12 +1334,9 @@ export function assembleShapeRifff(
       trimStartSec: undefined,
       trimEndSec: undefined,
       shape: {
-        version: 1,
+        version: 2,
         source: cloneSource(lane.source),
         loopBars: draft.loopBars,
-        // Retained in v1 provenance so older builds can still parse the
-        // recipe, but new Shape edits express durable silence on clips.
-        laneDisabled: false,
         gain: lane.gain,
         fragments: lane.fragments.map(cloneFragment)
       }
