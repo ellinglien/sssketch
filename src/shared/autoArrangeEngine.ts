@@ -50,8 +50,8 @@ export const MIN_STEMS_FOR_FULL_ARC = 4
 
 export interface ArrangeStemInput {
   stemKey: string
-  // Opaque grouping key for role diversity -- the ArrangeRole string
-  // StemRoleInfo resolved. The engine only compares equality, it doesn't
+  // Opaque grouping key for role diversity -- the drum sub-role or category
+  // word engineRoleFor (stemRole.ts) resolved. The engine only compares equality, it doesn't
   // need to know the concrete type.
   role: string
   densityScore: number // 0..1, from computeDensityScore

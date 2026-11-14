@@ -958,7 +958,7 @@ export type Action =
  * hand. `busOf` must already reflect the assignment this call is
  * reacting to (the reducer cases below build it first, then pass it in
  * here) so the majority-bus tie-break sees the new assignment, not the
- * stale one. Mirrors busForRifff's own tie-break exactly, duplicated
+ * stale one. Mirrors categoryForRifff's own tie-break exactly, duplicated
  * rather than imported (selectors.ts imports this file) -- a rifff with stems split
  * across buses gets named for whichever bus most of its stems are
  * actually on, same as tidied view's own row-grouping logic. */
@@ -984,13 +984,13 @@ function renameRifffsForBusAssignment(
       const category = categoryOfBus(busOf[stemKey(groupId, stem.slot)] ?? 'aux')
       counts[category] = (counts[category] ?? 0) + 1
     }
-    let bestBus: BusId = CATEGORY_BUS.back
+    let best: StemCategory = 'back'
     let bestCount = -1
     for (const category of STEM_CATEGORY_OPTIONS) {
       const count = counts[category] ?? 0
       if (count > bestCount) {
         bestCount = count
-        bestBus = CATEGORY_BUS[category]
+        best = category
       }
     }
     // Reads Object.values(result) (not the original `rifffs`) so multiple
@@ -1001,7 +1001,7 @@ function renameRifffsForBusAssignment(
     // of nesting ("bass 2 — drums 1 — Highpass").
     const newName = nextBusClipName(
       Object.values(result).map((r) => r.name),
-      bestBus,
+      CATEGORY_BUS[best],
       originalNameFromBusName(rifff.name)
     )
     result[groupId] = { ...rifff, name: newName }

@@ -124,7 +124,7 @@ function newGuid(): string {
 // Sampled from the same real, hand-recolored-in-Ableton reference project
 // buildAlsXml.ts's own ABLETON_BUS_COLORS is built from (see that file's
 // doc comment) -- these exact hex values are src/renderer/src/theme/
-// typeColor.ts's own BUS_COLOR_HEX, the actual source palette both exports
+// typeColor.ts's own CATEGORY_COLOR_HEX, the actual source palette both exports
 // draw from, including that same file's drums/bass swap (2026-08-21) and
 // its aux grey-to-taupe swap (2026-09-01, fixing aux reading as visually
 // indistinguishable from a muted clip's own grey -- see that file's own

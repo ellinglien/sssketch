@@ -2314,6 +2314,18 @@ describe('reducer', () => {
       expect(state.rifffs.r1.name).toBe('drums 1 — Audio In')
     })
 
+    it('ASSIGN_TO_BUS names aux and backing rifffs across one back category', () => {
+      const r1 = makeRifff({ groupId: 'r1', name: 'X', stems: [makeRifff().stems[0]] })
+      const r2 = makeRifff({ groupId: 'r2', name: 'Y', stems: [makeRifff().stems[0]] })
+      let state = reducer(
+        { ...initialState, rifffs: { r1, r2 } },
+        { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r1', 1), busId: 'aux' }
+      )
+      expect(state.rifffs.r1.name).toBe('back 1 — X')
+      state = reducer(state, { type: 'ASSIGN_TO_BUS', stemKey: stemKey('r2', 1), busId: 'backing' })
+      expect(state.rifffs.r2.name).toBe('back 2 — Y')
+    })
+
     it('ASSIGN_TO_BUS overwrites a rifff that already has a real, hand-typed name -- keeping it, not discarding it', () => {
       const rifff = makeRifff({ name: 'my jam 150', stems: [makeRifff().stems[0]] })
       const state = reducer(

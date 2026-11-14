@@ -183,7 +183,8 @@ export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null
 /** What autoArrangeEngine.ts should actually treat this stem's "role" as,
  * for diversity-weighting/candidate-labeling purposes: the drum sub-role
  * (if arrangeRole is 'drums' and one was manually picked) instead of the
- * generic 'drums' bucket, otherwise the plain arrangeRole. The engine's own
+ * generic 'drums' bucket, otherwise the role's category
+ * (stemCategory.ts: back/front/drums/bass). The engine's own
  * roleDiversityBonus only ever compares role strings for equality -- it has
  * no idea what a "sub-role" is and needs no changes at all for this to
  * work: three drums-typed stems tagged kick/snare/hihat now correctly read

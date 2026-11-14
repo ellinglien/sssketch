@@ -100,8 +100,8 @@ export interface CoachMapRow {
    * SoundType> would have to make two colour assignments up. That is the
    * second colour table CLAUDE.md names as a mistake. The other tempting
    * source, busColorHex(ARRANGE_ROLE_TO_BUS[role]), is total and already
-   * exists -- but it is the TIDIED view's palette, it flattens four of the
-   * eight roles onto aux's taupe, and it would make a map row disagree in
+   * exists -- but it is the TIDIED view's palette, it flattens the
+   * eight roles onto four category colours, and it would make a map row disagree in
    * colour with the very clip it points at in the arranger. Colour stays
    * where it is until there is a real mapping to use. */
   soundType: SoundType | null

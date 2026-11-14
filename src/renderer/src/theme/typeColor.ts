@@ -47,7 +47,7 @@ export function stemColorVar(stem: Stem | undefined): string {
  * visual payoff of having tidied it. Use this instead of stemColorVar at
  * every call site that decides a CLIP'S OWN rendered color
  * (CollapsedRifffRow.tsx, StemWaveformRow.tsx, RifffBlockRow.tsx) -- NOT
- * at selectors.ts's busForRifff, which needs a bus that's always resolved
+ * at selectors.ts's categoryForRifff, which needs a bus that's always resolved
  * (defaulting unassigned stems to aux) for its own row-grouping tie-break.
  */
 export function stemDisplayColorVar(stem: Stem | undefined, bus: BusId | undefined): string {
@@ -70,36 +70,18 @@ export function stemDisplayColorVar(stem: Stem | undefined, bus: BusId | undefin
  * so an unavoidable guess at least stays inside this app's own palette
  * instead of introducing a new hue from nowhere.
  *
- * aux was ORIGINALLY a neutral cool grey (#8a97a3, "the app's own
- * border/ink family") -- per direct feedback this read as visually
- * indistinguishable from a fully-muted clip's own grey (StemWaveformRow's
- * always-visible `--ra-text-3` layer, revealed once the full-color layer
- * on top is suppressed by mute), making it genuinely hard to tell "is
- * this just an untidied/aux stem, or is it muted?" at a glance. Replaced
- * (2026-09-01) with a warm taupe/sand instead -- still reads as "neutral,
- * no strong category" (unlike the other four bus colors, which are all
- * clearly saturated hues), but its warm cast keeps it visually distinct
- * from every grey already in use (both --ra-text-3's muted-state grey and
- * the app's own cool near-black chrome).
+ * Colour goes by category (stemCategory.ts): aux reads as back, so its old taupe swatch
+ * (2026-09-01) is retired.
  *
  * Literal hex, not a tokens.css var -- unlike typeColorVar's stem-type
  * palette, this is a narrow, single-purpose mapping with no other
  * consumer to keep in sync.
  */
-const BUS_COLOR_HEX: Record<BusId, string> = {
+const CATEGORY_COLOR_HEX: Record<StemCategory, string> = {
   drums: '#e8929b',
   bass: '#4a56ad',
-  lead: '#c7a4d2',
-  backing: '#7fc98a',
-  aux: '#a3937a'
-}
-
-// Colour goes by category (stemCategory.ts): aux reads as back, so the taupe aux swatch is retired.
-const CATEGORY_COLOR_HEX: Record<StemCategory, string> = {
-  drums: BUS_COLOR_HEX.drums,
-  bass: BUS_COLOR_HEX.bass,
-  back: BUS_COLOR_HEX.backing,
-  front: BUS_COLOR_HEX.lead
+  front: '#c7a4d2',
+  back: '#7fc98a'
 }
 
 export function busColorHex(bus: BusId): string {

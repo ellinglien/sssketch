@@ -150,13 +150,12 @@ export function channelsInOrder(state: AppState): Channel[] {
   return ordered.map((channelId) => ({ channelId, rifffs: byChannel.get(channelId) ?? [] }))
 }
 
-/** A rifff's own bus, for tidied-view grouping purposes only -- busOf itself
+/** A rifff's own category, for tidied-view grouping purposes only -- busOf itself
  * is per-stem (a rifff's stems can be split across buses), but the arranger
- * groups whole rifffs onto a row, so this picks whichever bus the most of
- * a rifff's stems are assigned to (counted by category, ties broken by STEM_CATEGORY_OPTIONS order), same
- * "aux is the fallback" convention buildAlsXml.ts already uses for a stem
- * with no assignment at all. */
-function busForRifff(state: AppState, rifff: Rifff): BusId {
+ * groups whole rifffs onto a row, so this picks the category the most of
+ * a rifff's stems are assigned to (ties broken by STEM_CATEGORY_OPTIONS order);
+ * a stem with no assignment counts as back, same as the exports. */
+function categoryForRifff(state: AppState, rifff: Rifff): StemCategory {
   const counts: Partial<Record<StemCategory, number>> = {}
   for (const stem of rifff.stems) {
     const category = categoryOfBus(state.busOf[stemKey(rifff.groupId, stem.slot)] ?? 'aux')
@@ -171,7 +170,7 @@ function busForRifff(state: AppState, rifff: Rifff): BusId {
       best = category
     }
   }
-  return CATEGORY_BUS[best]
+  return best
 }
 
 /** The plain busOf lookup with NO 'aux' fallback -- undefined means this
@@ -182,7 +181,7 @@ function busForRifff(state: AppState, rifff: Rifff): BusId {
  * are looking at freshly-imported, never-tidied content most of the time,
  * and collapsing that straight to a flat neutral color throws away real,
  * free information Endlesss's own stem metadata already provides.
- * busForRifff below has its own separate, always-resolving lookup (it
+ * categoryForRifff above has its own separate, always-resolving lookup (it
  * needs a definite bucket to count an unassigned stem into, mixed in with
  * real assignments, for its own row-grouping tie-break) -- deliberately
  * not shared with this one, since the two need different "no assignment"
@@ -196,7 +195,7 @@ export function busIfAssignedFromBusOf(
 }
 
 /** channelsInOrder's tidied-view layout: every placed rifff bucketed by its
- * own bus (busForRifff), then packed onto the minimum number of shared rows
+ * own category (categoryForRifff), then packed onto the minimum number of shared rows
  * within that bus via packIntoTracks -- the same interval-partitioning
  * buildAlsXml.ts already uses to build the Ableton export, so this is a
  * preview of that grouping rather than a second, potentially-diverging
@@ -210,7 +209,7 @@ function tidiedChannelsInOrder(state: AppState): Channel[] {
   const byCategory = new Map<StemCategory, Rifff[]>()
   for (const rifff of Object.values(state.rifffs)) {
     if (rifff.startBar === undefined) continue
-    const category = categoryOfBus(busForRifff(state, rifff))
+    const category = categoryForRifff(state, rifff)
     const list = byCategory.get(category)
     if (list) list.push(rifff)
     else byCategory.set(category, [rifff])
