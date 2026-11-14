@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  TRAINING_CONFIDENT_DRUMS_BASS,
   crossValidate,
   fitStemCategoryModel,
   meetsFloor,
   type TrainingSample
 } from './stemCategoryTraining'
-import { predictCategoryProbs } from './stemCategoryModel'
+import { CONFIDENT_DRUMS_BASS, predictCategoryProbs } from './stemCategoryModel'
 
 // Four clusters in 8 dimensions, each jam holding a few of every class.
 function synthetic(): TrainingSample[] {
@@ -42,6 +43,22 @@ describe('stemCategoryTraining', () => {
     expect(report.frontBackAccuracy).toBeGreaterThan(0.9)
     expect(report.perClass.drums.recall).toBeGreaterThan(0.9)
     expect(meetsFloor(report).ok).toBe(true)
+  })
+
+  it('measures the shipped rule: drums or bass only at the confidence threshold', () => {
+    const report = crossValidate(synthetic(), { folds: 5, confidentDrumsBass: 1.01 })
+    // Nothing reaches p > 1, so the rule never calls drums or bass...
+    expect(report.perClass.drums.recall).toBe(0)
+    expect(report.perClass.bass.recall).toBe(0)
+    expect(report.fourWayAccuracy).toBeLessThan(0.6)
+    // ...while argmax still does, for comparison.
+    expect(report.perClassArgmax.drums.recall).toBeGreaterThan(0.9)
+    // front/back is the side rule either way
+    expect(report.frontBackAccuracy).toBeGreaterThan(0.9)
+  })
+
+  it('defaults to the threshold the app uses', () => {
+    expect(TRAINING_CONFIDENT_DRUMS_BASS).toBe(CONFIDENT_DRUMS_BASS)
   })
 
   it('refuses a report below the floor', () => {

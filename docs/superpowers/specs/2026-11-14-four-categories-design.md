@@ -103,7 +103,7 @@ One small linear model replaces the guessers for roles:
   features are left out.
 - **Output:** probabilities for drums, bass, back, front.
 - **Weights ship with the app:** `src/shared/stemCategoryModel.json` (4 × ~1030 numbers, tens of
-  KB), made by `scripts/train-stem-category-model.mjs` from a copy of a library db: the owner's
+  KB), made by `scripts/train-stem-category-model.mts` from a copy of a library db: the owner's
   hand confirmations, plus Endlesss-masked drums and bass sampled to balance the classes (never
   thousands of them against a hundred front/back stems: that is today's bug). Weights are numbers,
   nothing personal. The script prints a cross-validated report (grouped by jam) and refuses to

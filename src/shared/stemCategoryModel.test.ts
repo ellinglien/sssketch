@@ -32,6 +32,10 @@ describe('predictCategoryProbs', () => {
     expect(predictCategoryProbs(tiny, [NaN, 0])).toBeNull()
     expect(predictCategoryProbs({ ...tiny, version: 0 }, [1, 0])).toBeNull()
   })
+  it('rejects a model whose numbers make the softmax non-finite (a zero scale)', () => {
+    expect(predictCategoryProbs({ ...tiny, scale: [0, 1] }, [1, 0])).toBeNull()
+    expect(predictCategoryProbs({ ...tiny, scale: [0, 1] }, [0, 0])).toBeNull()
+  })
 })
 
 describe('guessFromProbs', () => {

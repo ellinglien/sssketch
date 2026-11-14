@@ -9,6 +9,10 @@ import type { StemCategoryModel } from './stemCategoryModel'
 
 const CLASSES: StemCategory[] = ['drums', 'bass', 'back', 'front']
 
+/** Mirrors CONFIDENT_DRUMS_BASS (stemCategoryModel.ts), which this file can't import (type-only
+ * imports, so Node runs it); a test keeps the two equal. */
+export const TRAINING_CONFIDENT_DRUMS_BASS = 0.8
+
 export interface TrainingSample {
   embedding: number[]
   category: StemCategory
@@ -32,10 +36,16 @@ export interface ClassReport {
 export interface CvReport {
   n: number
   folds: number
+  /** Under the shipped rule (see crossValidate). */
   fourWayAccuracy: number
-  /** Balanced accuracy of front vs back among true back/front stems (the larger of the two wins). */
+  /** Balanced side recall among true back/front stems: the mean of back recall and front
+   * recall, deciding by p(front) >= p(back). */
   frontBackAccuracy: number
+  /** Under the shipped rule: drums if p(drums) >= the threshold, else bass if p(bass) >= it,
+   * else front if p(front) >= p(back), else back. */
   perClass: Record<StemCategory, ClassReport>
+  /** By plain argmax, for comparison in the printout. */
+  perClassArgmax: Record<StemCategory, ClassReport>
 }
 
 /** The 2026-10-15 test: centroid 0.55, live guesses 0.24, best model ~0.65 on unseen jams. */
@@ -92,7 +102,11 @@ export function fitStemCategoryModel(
 
 export function crossValidate(
   samples: TrainingSample[],
-  { folds = 5, ...fit }: FitOptions & { folds?: number } = {}
+  {
+    folds = 5,
+    confidentDrumsBass = TRAINING_CONFIDENT_DRUMS_BASS,
+    ...fit
+  }: FitOptions & { folds?: number; confidentDrumsBass?: number } = {}
 ): CvReport {
   const foldOf = (s: TrainingSample): number => fnv1a(s.group) % folds
   const predicted: { truth: StemCategory; probs: number[] }[] = []
@@ -110,16 +124,29 @@ export function crossValidate(
     }
   }
   const argmax = (p: number[]): StemCategory => CLASSES[p.indexOf(Math.max(...p))]
-  const perClass = {} as Record<StemCategory, ClassReport>
-  for (const c of CLASSES) {
-    const truths = predicted.filter((r) => r.truth === c)
-    const calls = predicted.filter((r) => argmax(r.probs) === c)
-    const hits = truths.filter((r) => argmax(r.probs) === c).length
-    perClass[c] = {
-      n: truths.length,
-      precision: calls.length ? hits / calls.length : 0,
-      recall: truths.length ? hits / truths.length : 0
+  const at = (p: number[], c: StemCategory): number => p[CLASSES.indexOf(c)]
+  // guessFromProbs' rule (stemCategoryModel.ts), the one the app ships.
+  const shipped = (p: number[]): StemCategory =>
+    at(p, 'drums') >= confidentDrumsBass
+      ? 'drums'
+      : at(p, 'bass') >= confidentDrumsBass
+        ? 'bass'
+        : at(p, 'front') >= at(p, 'back')
+          ? 'front'
+          : 'back'
+  const perClassBy = (call: (p: number[]) => StemCategory): Record<StemCategory, ClassReport> => {
+    const out = {} as Record<StemCategory, ClassReport>
+    for (const c of CLASSES) {
+      const truths = predicted.filter((r) => r.truth === c)
+      const calls = predicted.filter((r) => call(r.probs) === c)
+      const hits = truths.filter((r) => call(r.probs) === c).length
+      out[c] = {
+        n: truths.length,
+        precision: calls.length ? hits / calls.length : 0,
+        recall: truths.length ? hits / truths.length : 0
+      }
     }
+    return out
   }
   const sideRecall = (side: 'back' | 'front'): number => {
     const truths = predicted.filter((r) => r.truth === side)
@@ -134,10 +161,11 @@ export function crossValidate(
     n: predicted.length,
     folds,
     fourWayAccuracy: predicted.length
-      ? predicted.filter((r) => argmax(r.probs) === r.truth).length / predicted.length
+      ? predicted.filter((r) => shipped(r.probs) === r.truth).length / predicted.length
       : 0,
     frontBackAccuracy: (sideRecall('back') + sideRecall('front')) / 2,
-    perClass
+    perClass: perClassBy(shipped),
+    perClassArgmax: perClassBy(argmax)
   }
 }
 

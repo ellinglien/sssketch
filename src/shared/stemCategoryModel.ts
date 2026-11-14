@@ -48,6 +48,8 @@ export function predictCategoryProbs(
   const sum = exps.reduce((a, b) => a + b, 0)
   const out = {} as CategoryProbs
   model.classes.forEach((c, i) => (out[c] = exps[i] / sum))
+  // A bad model (a zero scale) gives NaN or Infinity: no guess rather than a wrong one.
+  if (!Object.values(out).every(Number.isFinite)) return null
   return out
 }
 

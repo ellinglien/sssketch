@@ -74,8 +74,14 @@ const rows = db
 const toSample = (r: Row): TrainingSample | null => {
   const category = ROLE_CATEGORY[r.Role]
   if (!category) return null
-  const embedding = JSON.parse(r.EmbeddingJSON) as number[]
-  if (embedding.length !== 1024 || !embedding.every(Number.isFinite)) return null
+  let embedding: number[]
+  try {
+    embedding = JSON.parse(r.EmbeddingJSON) as number[]
+  } catch {
+    return null // a corrupt row: skipped, like the app skips it
+  }
+  if (!Array.isArray(embedding) || embedding.length !== 1024 || !embedding.every(Number.isFinite))
+    return null
   // A stem with no Stems row in either db is its own group.
   return { embedding, category, group: r.Jam ?? r.StemCID }
 }
@@ -126,7 +132,8 @@ writeFileSync(
   JSON.stringify({
     ...model,
     mean: model.mean.map(round),
-    scale: model.scale.map(round),
+    // never 0: inference divides by it
+    scale: model.scale.map((v) => Math.max(round(v), 1e-5)),
     weights: model.weights.map((row) => row.map(round)),
     bias: model.bias.map(round),
     report: { ...report, trainedAt: new Date().toISOString(), samples: samples.length }
