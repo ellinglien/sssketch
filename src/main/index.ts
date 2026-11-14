@@ -2116,7 +2116,7 @@ app.whenReady().then(async () => {
     const dbs = candidateDbsForRiff()
     return getStemAutoClassifyProgress(
       ownDb,
-      currentAutoClassifyTrainingFingerprint(ownDb),
+      currentAutoClassifyTrainingFingerprint(),
       (stemCIDs) => lookupAutoClassifyInstrumentMasks(dbs, stemCIDs, getInstrumentMaskLookup)
     )
   })

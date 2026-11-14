@@ -1,13 +1,15 @@
 // src/main/stemAutoClassify.ts
-import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
-import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
+import type { ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
-import { createEmbeddingSuggester } from '@shared/embeddingMatch'
-import { suggestCategory, type CategoryCentroidStore } from '@shared/categoryCentroids'
-import { toFeatureArray, type StemFeatures } from '@shared/stemFeatures'
-import { getConfirmedEmbeddings } from './embeddingMatch'
-import { loadCategoryCentroidStore } from './categoryCentroidStore'
+import {
+  STEM_CATEGORY_MODEL,
+  guessFromProbs,
+  predictCategoryProbs,
+  type CategoryProbs,
+  type StemCategoryModel
+} from '@shared/stemCategoryModel'
+import { CATEGORY_ROLE } from '@shared/stemCategory'
 import {
   forgetStemTried,
   pruneStemsTriedSlice,
@@ -41,14 +43,13 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 // Real live freeze, profiled 2026-09-21 (typing lag + macOS beachball):
-// one BATCH_SIZE (200) transaction of embedding classification -- a
-// nearest-neighbor search against every confirmed embedding, per row
-// (~50ms each on Elling's real library: ~5,850 confirmed x 1024 dims) --
-// ran as a single multi-second synchronous block on the main process every
-// few seconds, stalling all input to the app. Rows are now committed in
+// one BATCH_SIZE (200) transaction of the old nearest-neighbour
+// classification (~50ms a row) ran as a single multi-second synchronous
+// block on the main process. The model is a dot product, far cheaper, but
+// the budget stays as the guard. Rows are now committed in
 // TIME-budgeted transactions: keep classifying into the current transaction
 // until TRANSACTION_BUDGET_MS has passed, then commit and yield. Cheap rows
-// (mask short-circuits, centroid guesses) still share one commit -- per-row
+// (mask short-circuits, model guesses) still share one commit -- per-row
 // commits are their own real cost, see "writes each pass batch inside a
 // single transaction" in the tests -- while an expensive row never holds
 // the thread much past one budget. Rows are a plain array (already
@@ -77,53 +78,6 @@ async function classifyInYieldingChunks<Row>(
   return count
 }
 
-// Real live freeze, profiled 2026-09-21 (typing lag + macOS beachball):
-// every call (one per BUSY_DELAY_MS, 3s) re-read and JSON-parsed EVERY
-// confirmed embedding -- ~5,850 x 1024 floats on Elling's real library,
-// 100+ MB of JSON -- in one synchronous block, then prepared it again.
-// That set only changes when a stem is confirmed (or gains an embedding),
-// which this batch loop never does itself, so it's prepared once and
-// reused until a cheap fingerprint query says otherwise. Keyed by db
-// connection (WeakMap) so separate dbs -- e.g. each test's fresh in-memory
-// one -- never share an entry.
-interface PreparedConfirmed {
-  fingerprint: string
-  embeddingAxisTrained: boolean
-  suggestFromEmbedding: (embedding: number[]) => string | null
-}
-const preparedConfirmedByDb = new WeakMap<Database.Database, PreparedConfirmed>()
-
-function confirmedEmbeddingsFingerprint(db: Database.Database): string {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS n, MAX(c.UpdatedAt) AS latest
-       FROM StemCategories c JOIN StemEmbeddingCache e ON e.StemCID = c.StemCID
-       WHERE c.ArrangeRole IS NOT NULL`
-    )
-    .get() as { n: number; latest: number | null }
-  // Deliberately NOT MAX(e.ExtractedAt): that column sits after the ~20KB
-  // EmbeddingJSON blob, so reading it walked every blob's overflow pages
-  // (~100ms). Count + latest confirmation catches every real change (a new
-  // confirmation, a changed role, a confirmed stem gaining an embedding);
-  // only a re-extraction of an ALREADY-confirmed stem's embedding goes
-  // unseen until the next confirmation, an acceptable staleness.
-  return `${row.n}:${row.latest}`
-}
-
-function getPreparedConfirmedEmbeddings(db: Database.Database): PreparedConfirmed {
-  const fingerprint = confirmedEmbeddingsFingerprint(db)
-  const cached = preparedConfirmedByDb.get(db)
-  if (cached && cached.fingerprint === fingerprint) return cached
-  const confirmed = getConfirmedEmbeddings(db, 'arrangeRole')
-  const prepared: PreparedConfirmed = {
-    fingerprint,
-    embeddingAxisTrained: confirmed.length > 0,
-    suggestFromEmbedding: createEmbeddingSuggester(confirmed)
-  }
-  preparedConfirmedByDb.set(db, prepared)
-  return prepared
-}
-
 // Real finding, 2026-09-18: a direct query against Elling's real library
 // showed 5,462 of 20,176 embedding-classified 'drums' stems were mask-
 // tagged 'notes'/'bass'/other, not drums at all (confirmed live with a
@@ -139,10 +93,11 @@ function getPreparedConfirmedEmbeddings(db: Database.Database): PreparedConfirme
 // processing cost, even at the expense of some precision -- "computers
 // aren't always good at [finding the perfect match]... if it means
 // trimming the processing time a lot we can go that way."
+// The notes bit says "melodic", not front or back, so it no longer decides (2026-11-14).
 // Changing this? Bump CLASSIFIER_VERSION (below).
-function reliableMaskSoundType(instrument: number): 'drums' | 'notes' | 'bass' | null {
+function reliableMaskSoundType(instrument: number): 'drums' | 'bass' | null {
   const soundType = instrumentMaskToSoundType(instrument)
-  return soundType === 'drums' || soundType === 'notes' || soundType === 'bass' ? soundType : null
+  return soundType === 'drums' || soundType === 'bass' ? soundType : null
 }
 
 /** Looks up each StemCID's own Instrument bitmask by checking `dbs` in
@@ -217,53 +172,32 @@ export interface ClassifyBatchOptions {
   /** Own stems, then favourites, first (stemPriority.ts; 2026-10-06). The
    * pending lists keep their random order within each group. */
   priority?: StemPrioritySets
+  /** The stem category model (tests inject their own); default the shipped one. */
+  model?: StemCategoryModel
 }
 
 interface EmbeddingCandidateRow {
   StemCID: string
   EmbeddingJSON: string
-  /** 1 when the stem has a StemFeatureCache row too (the feature pass's to
-   * record while the embedding axis is untrained), else 0. */
-  HasFeatures: number
-}
-
-interface FeatureCandidateRow {
-  StemCID: string
-  FeaturesJSON: string
 }
 
 // Shared by both the count and fetch queries below -- a stem is eligible
 // for either pass when it isn't already human-confirmed (ANY role) and
-// isn't already in StemAutoCategory. `e`/`f` is the outer table's own
-// alias (StemEmbeddingCache or StemFeatureCache).
+// has no StemAutoCategory row from the model or the mask. A row from an
+// older app's guessers (embedding, centroid, zero-shot; the dev and packaged
+// apps share this db) is guessed again (2026-11-14). `e`/`f` is the outer
+// table's own alias (StemEmbeddingCache or StemFeatureCache).
 const BASE_ELIGIBILITY_WHERE = (alias: string): string => `
   NOT EXISTS (SELECT 1 FROM StemCategories c WHERE c.StemCID = ${alias}.StemCID AND c.ArrangeRole IS NOT NULL)
-  AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = ${alias}.StemCID)
+  AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = ${alias}.StemCID AND a.Source IN ('model', 'instrumentMask'))
 `
 
-// Same as above, PLUS excludes any stem that has an embedding at all --
-// ONLY when `embeddingAxisTrained` is true. Real bug, found live: a stem
-// with ANY cached embedding used to be excluded from the centroid pass
-// UNCONDITIONALLY, even while the embedding axis had never been trained
-// (fewer than 3 confirmed+embedded samples in 2+ roles -- see
-// `embeddingAxisTrained` in getPreparedConfirmedEmbeddings). DiscoverLibraryScan.tsx's
-// own renderer-side extraction embeds AND extracts features for nearly
-// every stem, so almost the WHOLE backlog has an embedding -- with no
-// centroid fallback while untrained, this meant classification could
-// climb for a while (centroid catching feature-only stems while
-// extraction was still catching up) and then hit a hard, permanent wall
-// the moment extraction caught up and nearly everything had an embedding
-// too: confirmed live (progress frozen at "21766/45057" across multiple
-// full app restarts and a consent toggle, with zero errors logged --
-// the code was working exactly as written, just permanently reserving
-// almost the entire backlog for a classifier that may never train).
-// `embeddingAxisTrained` is passed in (not re-derived here) so both the
-// count and fetch queries for one call agree on the same answer.
-const featureEligibilityWhere = (alias: string, embeddingAxisTrained: boolean): string =>
-  embeddingAxisTrained
-    ? `${BASE_ELIGIBILITY_WHERE(alias)}
-       AND NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = ${alias}.StemCID)`
-    : BASE_ELIGIBILITY_WHERE(alias)
+// Same as above, PLUS excludes any stem that has an embedding at all: the
+// embedding pass (the model) takes those. The feature pass only places a
+// feature-only stem by its mask.
+const featureEligibilityWhere = (alias: string): string =>
+  `${BASE_ELIGIBILITY_WHERE(alias)}
+   AND NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = ${alias}.StemCID)`
 
 // Rows per keyset page when (re)building a pending list -- ids only, so a
 // page is a few hundred KB at most; the build yields between pages.
@@ -390,9 +324,9 @@ function membersHash(set: ReadonlySet<string>): number {
 /** Background efficiency B4: the classifier's own pending lists, built once
  * from the eligibility queries and consumed a batch at a time -- instead of
  * a COUNT(*) plus an `ORDER BY RANDOM()` over the whole eligible set on
- * every batch. Rebuilt when the training it was built against changed
- * (confirmed-embedding fingerprint, or a confirmation/centroid retrain
- * noted via stemAutoClassifyWake.ts), or when both lists are empty and no
+ * every batch. Rebuilt when the fingerprint changed (the model or the
+ * classifier's code), when a confirmation is noted via
+ * stemAutoClassifyWake.ts (it changes who is eligible), or when both lists are empty and no
  * new rows were noted (the scheduler's long safety wake, or a caller that
  * wrote rows without going through the stores). New embedding/feature rows
  * noted by the cache stores join the lists directly. An id's eligibility is
@@ -408,75 +342,32 @@ interface PendingState {
 }
 const pendingByDb = new WeakMap<Database.Database, PendingState>()
 
-/** The classifier's own code, as part of the training a stem is tried under
- * (trainingFingerprintOf): a stem recorded as tried and not placed
+/** The classifier's own code, as part of the fingerprint a stem is tried
+ * under (trainingFingerprintOf): a stem recorded as tried and not placed
  * (StemAutoClassifyTried) is only tried again once its fingerprint moves, so
  * any change that could place a stem the old code couldn't must move it too
  * (review of 0adc41ca, important 2). Bump it for a change to any of:
- * - categoryCentroids.ts: CONFIDENCE_RATIO, MIN_SAMPLES_PER_CATEGORY,
- *   MIN_TRAINED_CATEGORIES_FOR_SUGGESTION, or how suggestCategory measures;
- * - embeddingMatch.ts (the embedding suggester): SIMILARITY_MARGIN,
- *   MIN_SAMPLES_PER_CATEGORY, MIN_CATEGORIES_FOR_SUGGESTION, or how
- *   createEmbeddingSuggester ranks;
- * - reliableMaskSoundType (below), or which source is preferred in
- *   classifyAutoCategoryBatch;
- * - the feature layout: toFeatureArray / StemFeatures (stemFeatures.ts).
- * A bump re-tries the whole residue once (~10 min in the background on
- * Elling's library), so don't bump it for a change that can't move an
- * answer. */
-export const CLASSIFIER_VERSION = 1
+ * - the decision rule in this file (which source wins, what's placed);
+ * - CONFIDENT_DRUMS_BASS (stemCategoryModel.ts);
+ * - reliableMaskSoundType (above).
+ * New weights move the fingerprint by themselves (the model's version).
+ * A bump re-tries the whole residue once, so don't bump it for a change
+ * that can't move an answer. 2 since 2026-11-14 (the one model). */
+export const CLASSIFIER_VERSION = 2
 
-/** The training a stem is tried under, as it survives a restart
- * (2026-10-07): the confirmed-embedding fingerprint (COUNT:MAX(UpdatedAt))
- * and a hash of the two parts of the centroid store the centroid pass reads
- * (the arrangeRole axis and the global normalizer). A new confirmation or a
- * centroid retrain, in this app or the other one sharing the db, moves it;
- * a restart does not. Replaces the in-memory training generation, which
- * started at 0 every launch. The classifier's code is in it too
- * (CLASSIFIER_VERSION).
- *
- * One change it misses: a re-extracted embedding of an already-confirmed
- * stem (the confirmed fingerprint leaves out ExtractedAt, see
- * confirmedEmbeddingsFingerprint). Folding it in means reading past every
- * embedding blob (~100 ms a batch), and it matters little: a lone
- * re-extraction moves one reference among thousands, and a whole-library
- * re-extraction (a new embedding model) rewrites every unplaced stem's row
- * too, and each such write forgets that stem's record anyway
- * (stemAutoClassifyWake.ts). The next confirmation picks it up.
- *
- * The dev and the packaged app each have their
- * own centroid store, so each tries under its own fingerprint and keeps its
- * own record of the same stem (StemAutoClassifyTried is keyed on both). */
-function trainingFingerprintOf(
-  prepared: PreparedConfirmed,
-  centroidStore: CategoryCentroidStore
-): string {
-  return `c${CLASSIFIER_VERSION}|${prepared.fingerprint}|${centroidStoreHash(centroidStore)}`
+/** What a stem is tried under, as it survives a restart: the classifier's
+ * code and the model's version. A confirmation doesn't move it (the model
+ * doesn't train on device). The dev and packaged apps can ship different
+ * weights, so each tries under its own fingerprint and keeps its own record
+ * of the same stem (StemAutoClassifyTried is keyed on both). */
+function trainingFingerprintOf(model: StemCategoryModel): string {
+  return `c${CLASSIFIER_VERSION}|m${model.version}`
 }
 
-/** The persisted tried-ledger key for the classifier as trained right now.
- * Unlike getPreparedConfirmedEmbeddings, this does not parse the confirmed
- * embedding blobs or construct a suggester: the gear-menu progress request
- * needs the identity of the training, never the classifier itself. */
-export function currentAutoClassifyTrainingFingerprint(ownDb: Database.Database): string {
-  const preparedFingerprint = confirmedEmbeddingsFingerprint(ownDb)
-  return `c${CLASSIFIER_VERSION}|${preparedFingerprint}|${centroidStoreHash(loadCategoryCentroidStore())}`
-}
-
-/** Per store object: loadCategoryCentroidStore hands back the same object
- * until the file changes, so the sha1 over the store's JSON runs once per
- * save, not once per batch (review of 0adc41ca). */
-const centroidHashByStore = new WeakMap<CategoryCentroidStore, string>()
-
-function centroidStoreHash(centroidStore: CategoryCentroidStore): string {
-  const cached = centroidHashByStore.get(centroidStore)
-  if (cached !== undefined) return cached
-  const hash = createHash('sha1')
-    .update(JSON.stringify([centroidStore.arrangeRoles, centroidStore.global]))
-    .digest('hex')
-    .slice(0, 16)
-  centroidHashByStore.set(centroidStore, hash)
-  return hash
+/** The persisted tried-ledger key for the shipped model, for the gear-menu
+ * progress request. */
+export function currentAutoClassifyTrainingFingerprint(): string {
+  return trainingFingerprintOf(STEM_CATEGORY_MODEL)
 }
 
 /** Ids per mask lookup while filtering a rebuilt list: one IN query per db
@@ -530,7 +421,6 @@ const triedPruneCursorByDb = new WeakMap<Database.Database, number>()
 
 async function getPendingState(
   ownDb: Database.Database,
-  prepared: PreparedConfirmed,
   fingerprint: string,
   stemDbs: Database.Database[],
   options: ClassifyBatchOptions
@@ -566,11 +456,7 @@ async function getPendingState(
   }
   countWork('auto-classify:rebuild')
   const embedding = await eligibleStemCIDs(ownDb, 'StemEmbeddingCache', BASE_ELIGIBILITY_WHERE('t'))
-  const feature = await eligibleStemCIDs(
-    ownDb,
-    'StemFeatureCache',
-    featureEligibilityWhere('t', prepared.embeddingAxisTrained)
-  )
+  const feature = await eligibleStemCIDs(ownDb, 'StemFeatureCache', featureEligibilityWhere('t'))
   countWork('sql:auto-classify.tried-prune')
   triedPruneCursorByDb.set(ownDb, pruneStemsTriedSlice(ownDb, triedPruneCursorByDb.get(ownDb) ?? 0))
   countWork('sql:auto-classify.tried-read')
@@ -606,28 +492,23 @@ function fetchPendingEmbeddingRows(
   countWork('sql:auto-classify.fetch-embeddings')
   return ownDb
     .prepare(
-      `SELECT e.StemCID AS StemCID, e.EmbeddingJSON AS EmbeddingJSON,
-         EXISTS (SELECT 1 FROM StemFeatureCache f WHERE f.StemCID = e.StemCID) AS HasFeatures
+      `SELECT e.StemCID AS StemCID, e.EmbeddingJSON AS EmbeddingJSON
        FROM StemEmbeddingCache e
        WHERE e.StemCID IN (${inPlaceholders(ids)}) AND ${BASE_ELIGIBILITY_WHERE('e')}`
     )
     .all(...ids) as EmbeddingCandidateRow[]
 }
 
-function fetchPendingFeatureRows(
-  ownDb: Database.Database,
-  ids: string[],
-  embeddingAxisTrained: boolean
-): FeatureCandidateRow[] {
+function fetchPendingFeatureRows(ownDb: Database.Database, ids: string[]): { StemCID: string }[] {
   if (ids.length === 0) return []
   countWork('sql:auto-classify.fetch-features')
   return ownDb
     .prepare(
-      `SELECT f.StemCID AS StemCID, f.FeaturesJSON AS FeaturesJSON FROM StemFeatureCache f
+      `SELECT f.StemCID AS StemCID FROM StemFeatureCache f
        WHERE f.StemCID IN (${inPlaceholders(ids)})
-       AND ${featureEligibilityWhere('f', embeddingAxisTrained)}`
+       AND ${featureEligibilityWhere('f')}`
     )
-    .all(...ids) as FeatureCandidateRow[]
+    .all(...ids) as { StemCID: string }[]
 }
 
 export interface ClassifyBatchResult {
@@ -651,37 +532,20 @@ export interface ClassifyBatchResult {
  * SELECT instead of re-running classifiers on every single Discover roll,
  * which is what made rolling itself slow earlier the same day.
  *
- * Prefers the EMBEDDING classifier over the DSP/centroid one when a stem
- * has both AND the embedding axis is actually trained (described
- * elsewhere this session as noticeably more accurate) -- a stem with ANY
- * cached embedding is excluded from the feature/centroid pass
- * (featureEligibilityWhere, above), whether or not the embedding pass
- * actually gets to classify it THIS call. Real bug, found live: that
- * exclusion used to apply UNCONDITIONALLY, even while the embedding axis
- * had never been trained -- since extraction embeds nearly every stem,
- * that meant almost the entire backlog got permanently reserved for a
- * classifier that might never train, with no fallback (confirmed live:
- * progress frozen at "21766/45057" across multiple app restarts, zero
- * errors -- the code was working exactly as written). The exclusion is
- * now conditional on `embeddingAxisTrained`: an untrained axis means the
- * embedding classifier could never help those stems ANYWAY, so they fall
- * through to the centroid pass instead of waiting forever. Skips
- * anything already confirmed (StemCategories) for ANY role -- a real
- * human confirmation needs no auto-guess, same cross-role-leakage-
- * avoidance convention discoverCandidates.ts's own (now-retired at query
- * time, but still real) widening sources used.
+ * Since 2026-11-14 one shipped model decides (stemCategoryModel.ts): a
+ * stem with an embedding is placed by Endlesss's drums/bass bit if it has
+ * one, else by the model (a category and, for back/front, its dial). A stem
+ * with features but no embedding can only be placed by its mask; a stem
+ * with an embedding is never in the feature pass (featureEligibilityWhere).
+ * Skips anything already confirmed (StemCategories) for ANY role -- a real
+ * human confirmation needs no auto-guess.
  *
- * A stem neither classifier can confidently place (both return null) is
- * simply left out of StemAutoCategory rather than marked "tried and
- * failed" -- it'll be re-attempted on a LATER call, which is deliberate
- * (more Tidy Up confirmations over time can make a previously-unplaceable
- * stem classifiable later) at the cost of some repeated work on stems
- * that stay unclassifiable indefinitely -- re-attempted once the training
- * changes (a confirmation or centroid retrain rebuilds the pending lists,
- * see PendingState) or a store rewrites its row, rather than on every
- * batch as before B4 (the answer can't change until the training does),
- * and no longer at the scheduler's safety rebuild or a relaunch either
- * (StemAutoClassifyTried, see withoutTried). Each call's batch is taken from a SHUFFLED pending list,
+ * A stem neither pass can place (an untrained model, an embedding it can't
+ * read, a feature-only stem with no drums/bass bit) is recorded as tried
+ * (StemAutoClassifyTried, see withoutTried) and taken again only once the
+ * fingerprint moves (new weights, CLASSIFIER_VERSION), its own mask
+ * changes, or a store rewrites its row -- not at the scheduler's safety
+ * rebuild or a relaunch. Each call's batch is taken from a SHUFFLED pending list,
  * not a deterministic "first N" -- a real live bug found this way: a
  * deterministic batch can get permanently stuck retrying the exact same
  * unclassifiable stems forever once they out-number BATCH_SIZE, starving
@@ -742,30 +606,22 @@ export async function classifyAutoCategoryBatch(
   // never a COUNT of its own on the main thread.
   await Promise.all(stemDbs.map((db) => whenTableCountsSettled(db)))
 
-  // Computed ONCE per call, shared by both passes below -- the feature
-  // pass's own eligibility depends on whether the embedding axis is
-  // trained (see featureEligibilityWhere's own doc comment), so both
-  // passes must agree on the same answer within one call.
-  const prepared = getPreparedConfirmedEmbeddings(ownDb)
-  const { embeddingAxisTrained, suggestFromEmbedding } = prepared
-  const centroidStore = loadCategoryCentroidStore()
-  const fingerprint = trainingFingerprintOf(prepared, centroidStore)
-  const pending = await getPendingState(ownDb, prepared, fingerprint, stemDbs, options)
+  const model = options.model ?? STEM_CATEGORY_MODEL
+  const fingerprint = trainingFingerprintOf(model)
+  const pending = await getPendingState(ownDb, fingerprint, stemDbs, options)
   const now = Date.now()
 
   /** One row's outcome, written in the batch's transaction: placed (its
    * StemAutoCategory row, and any old tried record dropped), or not placed
    * (recorded as tried under this training with the mask it has now, so no
-   * rebuild -- or launch -- tries it again until either moves), or `skip`
-   * (not this pass's to record). */
+   * rebuild -- or launch -- tries it again until either moves). */
   function settle(
     stemCID: string,
     mask: number | undefined,
-    placed: { role: ArrangeRole; source: StemAutoCategorySource } | null | 'skip'
+    placed: { role: ArrangeRole; source: StemAutoCategorySource; frontScore: number | null } | null
   ): boolean {
-    if (placed === 'skip') return false
     if (placed) {
-      upsertStemAutoCategory(ownDb, stemCID, placed.role, placed.source, now)
+      upsertStemAutoCategory(ownDb, stemCID, placed.role, placed.source, now, placed.frontScore)
       forgetStemTried(ownDb, stemCID)
       return true
     }
@@ -774,23 +630,11 @@ export async function classifyAutoCategoryBatch(
     return false
   }
 
-  // --- Embedding pass (preferred) ---
+  // --- Embedding pass: the mask's drums/bass, else the model ---
   if (pending.embedding.ids.length > 0) {
-    // Fetched regardless of embeddingAxisTrained now (real change,
-    // 2026-09-18): the instrument-mask short-circuit below needs to see
-    // each row's own StemCID to check its mask, so there's no way to
-    // "count these as remaining without spending a call on them" the way
-    // an untrained axis alone used to allow -- a mask-resolvable stem must
-    // still be classified even while the embedding axis itself has never
-    // trained. `remaining` below only ever reflects ids not yet taken
-    // from the pending lists. A row left unplaced is recorded as tried
-    // (StemAutoClassifyTried) and taken again once the training moves or
-    // its own mask does -- except while the axis is untrained and the stem
-    // has a feature row: it is in the feature list too, and that pass
-    // records it (recording it here would keep it out of the feature list
-    // at the next rebuild). One with no feature row is recorded here, or
-    // it'd be fetched again at every rebuild and launch (review of
-    // 0adc41ca); a feature row arriving through the store forgets it.
+    // A row left unplaced (an untrained model, an embedding it can't read)
+    // is recorded as tried (StemAutoClassifyTried) and taken again once the
+    // fingerprint or its own mask moves, or a store rewrites its row.
     const taken = takePending(pending.embedding, BATCH_SIZE)
     const batchRows = fetchPendingEmbeddingRows(ownDb, taken)
     const masks = lookupInstrumentMasks(
@@ -803,40 +647,31 @@ export async function classifyAutoCategoryBatch(
       const reliable = instrument !== undefined ? reliableMaskSoundType(instrument) : null
       if (reliable) {
         return settle(row.StemCID, instrument, {
-          role: SOUND_TYPE_TO_ARRANGE_ROLE[reliable],
-          source: 'instrumentMask'
+          role: reliable,
+          source: 'instrumentMask',
+          frontScore: null
         })
       }
-      // Nothing trained yet on this axis -- every call would return null;
-      // leave it to the feature pass rather than spending a classify call,
-      // or, with no feature row for that pass, record it as not placed.
-      if (!embeddingAxisTrained) {
-        return settle(row.StemCID, instrument, row.HasFeatures ? 'skip' : null)
-      }
-      let guessed: string | null = null
+      let probs: CategoryProbs | null = null
       try {
-        guessed = suggestFromEmbedding(JSON.parse(row.EmbeddingJSON) as number[])
+        probs = predictCategoryProbs(model, JSON.parse(row.EmbeddingJSON) as number[])
       } catch {
-        // Corrupted row -- not placed, same defensive handling this
-        // table's own readers elsewhere already use. A re-extraction
-        // rewrites it through the store, which forgets the record.
+        // Corrupted row: not placed. A re-extraction rewrites it and forgets the record.
       }
-      return settle(
-        row.StemCID,
-        instrument,
-        guessed
-          ? { role: guessed as ArrangeRole, source: 'embedding' as StemAutoCategorySource }
-          : null // shortcut: replaced in Task 14
-      )
+      if (!probs) return settle(row.StemCID, instrument, null)
+      const guess = guessFromProbs(probs)
+      return settle(row.StemCID, instrument, {
+        role: CATEGORY_ROLE[guess.category],
+        source: 'model',
+        frontScore: guess.frontScore
+      })
     })
   }
 
-  // --- Feature/centroid pass (fallback) ---
+  // --- Feature pass: a feature-only stem is placed by its mask, or tried ---
   if (pending.feature.ids.length > 0) {
     const taken = takePending(pending.feature, BATCH_SIZE)
-    const batchRows = fetchPendingFeatureRows(ownDb, taken, embeddingAxisTrained)
-    // Same instrument-mask short-circuit as the embedding pass above --
-    // see reliableMaskSoundType's own doc comment for why.
+    const batchRows = fetchPendingFeatureRows(ownDb, taken)
     const masks = lookupInstrumentMasks(
       stemDbs,
       batchRows.map((r) => r.StemCID),
@@ -845,25 +680,10 @@ export async function classifyAutoCategoryBatch(
     processed += await classifyInYieldingChunks(ownDb, batchRows, (row) => {
       const instrument = masks.get(row.StemCID)
       const reliable = instrument !== undefined ? reliableMaskSoundType(instrument) : null
-      if (reliable) {
-        return settle(row.StemCID, instrument, {
-          role: SOUND_TYPE_TO_ARRANGE_ROLE[reliable],
-          source: 'instrumentMask'
-        })
-      }
-      let guessed: string | null = null
-      try {
-        const features = JSON.parse(row.FeaturesJSON) as StemFeatures
-        guessed = suggestCategory(centroidStore, 'arrangeRole', toFeatureArray(features))
-      } catch {
-        // Corrupted row -- not placed.
-      }
       return settle(
         row.StemCID,
         instrument,
-        guessed
-          ? { role: guessed as ArrangeRole, source: 'centroid' as StemAutoCategorySource }
-          : null // shortcut: replaced in Task 14
+        reliable ? { role: reliable, source: 'instrumentMask', frontScore: null } : null
       )
     })
   }

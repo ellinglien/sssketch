@@ -25,7 +25,8 @@ export function getAutoCategorizedStemCIDs(
 }
 
 export interface StemAutoClassifyProgress {
-  /** Eligible analysed stems that received an automatic category. */
+  /** Eligible analysed stems that received an automatic category from the
+   * model or the mask (an older app's guess is pending: it is guessed again). */
   categorized: number
   /** Distinct stems with a cached embedding or feature vector (whichever
    * of the two the background scan can classify from, see
@@ -67,7 +68,8 @@ export async function getStemAutoClassifyProgress(
     .prepare(
       `SELECT candidates.StemCID AS StemCID,
          EXISTS (SELECT 1 FROM StemAutoCategory a
-                 WHERE a.StemCID = candidates.StemCID) AS Categorized
+                 WHERE a.StemCID = candidates.StemCID
+                   AND a.Source IN ('model', 'instrumentMask')) AS Categorized
        FROM (
          SELECT StemCID FROM StemEmbeddingCache
          UNION

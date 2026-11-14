@@ -134,6 +134,23 @@ describe('getStemAutoClassifyProgress', () => {
     })
   })
 
+  it("counts an older app's guess as still pending: the model guesses it again", async () => {
+    const db = freshDb()
+    seedEmbedding(db, 's1')
+    db.prepare(
+      `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt)
+       VALUES ('s1', 'lead', 'centroid', 1)`
+    ).run()
+
+    expect(await getStemAutoClassifyProgress(db)).toEqual({
+      categorized: 0,
+      eligible: 1,
+      terminalUnclassified: 0,
+      pending: 1,
+      processed: 0
+    })
+  })
+
   it('excludes a stem confirmed for any role from eligible, even if it has an embedding', async () => {
     const db = freshDb()
     seedEmbedding(db, 's1')

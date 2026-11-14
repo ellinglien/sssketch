@@ -140,7 +140,8 @@ export const TRIED_PRUNE_SLICE = 2000
 
 /** Drops, from the rows after rowid `after` (up to `limit` of them), those no
  * classifier will read again (review of 0adc41ca): the stem was placed by
- * another source (StemAutoCategory: the zero-shot pass, the other app),
+ * another source (StemAutoCategory from the model or the mask, in the other
+ * app; an older app's guess doesn't count, the model guesses it again),
  * confirmed by hand (StemCategories), or has neither an embedding nor a
  * feature row left. The classifier calls it once per pending-list rebuild
  * (a launch, a training change, the 10-minute safety wake), so the whole
@@ -162,7 +163,8 @@ export function pruneStemsTriedSlice(
   if (slice.n === 0 || slice.last === null) return 0
   db.prepare(
     `DELETE FROM StemAutoClassifyTried AS t WHERE t.rowid > ? AND t.rowid <= ? AND (
-       EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = t.StemCID)
+       EXISTS (SELECT 1 FROM StemAutoCategory a
+               WHERE a.StemCID = t.StemCID AND a.Source IN ('model', 'instrumentMask'))
        OR EXISTS (SELECT 1 FROM StemCategories c
                   WHERE c.StemCID = t.StemCID AND c.ArrangeRole IS NOT NULL)
        OR (NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = t.StemCID)
