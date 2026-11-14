@@ -132,10 +132,10 @@ describe('ARRANGE_ROLE_TO_BUS', () => {
     expect(ARRANGE_ROLE_TO_BUS.aux).toBe('aux')
   })
 
-  it('maps the 3 bus-less arrangeRole values to aux', () => {
-    expect(ARRANGE_ROLE_TO_BUS.textureFx).toBe('aux')
-    expect(ARRANGE_ROLE_TO_BUS.fill).toBe('aux')
-    expect(ARRANGE_ROLE_TO_BUS.vocal).toBe('aux')
+  it('maps the 3 bus-less arrangeRole values to a bus of their own category', () => {
+    expect(ARRANGE_ROLE_TO_BUS.textureFx).toBe('backing')
+    expect(ARRANGE_ROLE_TO_BUS.fill).toBe('drums')
+    expect(ARRANGE_ROLE_TO_BUS.vocal).toBe('lead')
   })
 })
 

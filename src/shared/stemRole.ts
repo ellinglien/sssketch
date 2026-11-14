@@ -81,25 +81,16 @@ const BUS_ID_TO_ARRANGE_ROLE: Record<BusId, ArrangeRole> = {
   aux: 'aux'
 }
 
-/** The real Ableton export bus each of ArrangeRole's 8 values routes a stem
- * to -- BusId only has 5 values, so the 3 that ArrangeRole adds on top
- * (textureFx/fill/vocal) have no bus of their own and route to 'aux', same
- * as the generic aux catch-all. Added for ClusterStemsBrowser.tsx's own
- * Tidy Up picker (2026-09-14, direct request): picking one of those 3
- * there still needs a real busId to assign (Tidy Up's whole export model is
- * bus-based), while ALSO recording the finer arrangeRole via
- * upsertStemCategoryRole so it isn't lost and still trains the arrangeRole
- * classifier. The inverse of BUS_ID_TO_ARRANGE_ROLE above for the 5 shared
- * values; the 3 extras are the only genuinely new mappings. */
+/** The bus a role tidies to: always one of the role's own category (stemCategory.ts). */
 export const ARRANGE_ROLE_TO_BUS: Record<ArrangeRole, BusId> = {
   drums: 'drums',
   bass: 'bass',
   lead: 'lead',
   backing: 'backing',
   aux: 'aux',
-  textureFx: 'aux',
-  fill: 'aux',
-  vocal: 'aux'
+  textureFx: 'backing',
+  fill: 'drums',
+  vocal: 'lead'
 }
 
 // Exported (not just used internally by resolveStemRole below) so
