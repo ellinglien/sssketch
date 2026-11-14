@@ -1,22 +1,17 @@
 import type { ArrangeStemInput } from './autoArrangeEngine'
 
-// Stem names in real Endlesss material are frequently unintelligible
-// (auto-generated/generic) and can't be relied on to identify a candidate --
-// the stem's own arrangeRole (already user-confirmed in the role-confirm
-// wizard step) is a far more useful label. Includes DrumSubRole's own
-// values (kick/snare/hihat/clap/perc) alongside the 8 ArrangeRole values --
-// engineRoleFor (shared/stemRole.ts) substitutes a drum sub-role in for the
-// plain 'drums' bucket before this ever reaches the engine, so `role` here
-// is an opaque string that can genuinely be either.
+// Every stored role shows as its category (stemCategory.ts); drum sub-roles keep their own names.
 export const ROLE_LABELS: Record<string, string> = {
   drums: 'drums',
+  fill: 'drums',
   bass: 'bass',
-  lead: 'lead',
-  backing: 'backing',
-  aux: 'aux',
-  textureFx: 'texture/fx',
-  fill: 'fill',
-  vocal: 'vocal',
+  backing: 'back',
+  aux: 'back',
+  textureFx: 'back',
+  lead: 'front',
+  vocal: 'front',
+  back: 'back',
+  front: 'front',
   kick: 'kick',
   snare: 'snare',
   hihat: 'hi-hat',

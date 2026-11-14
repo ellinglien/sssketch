@@ -47,7 +47,7 @@ describe('coachMapRowLabels', () => {
 
   it('spells a role with ROLE_LABELS, not its raw value', () => {
     const rows = [row({ channelId: 'c0', path: 'a.wav' })]
-    expect(coachMapRowLabels(rows, { 'a.wav': 'textureFx' }).get('c0')).toBe('texture/fx')
+    expect(coachMapRowLabels(rows, { 'a.wav': 'textureFx' }).get('c0')).toBe('back')
   })
 
   it('leaves a riser row its own name', () => {

@@ -1,4 +1,5 @@
 import type { BusId, SoundType, Stem } from './types'
+import { categoryOfRole } from './stemCategory'
 import { guessArrangeRoleFromPresetName } from './presetNames'
 
 /** Arrangement-oriented role taxonomy for the auto-arrange role-confirmation
@@ -194,5 +195,5 @@ export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null
  * own identity. */
 export function engineRoleFor(role: StemRoleInfo): string {
   if (role.arrangeRole === 'drums' && role.drumSubRole) return role.drumSubRole
-  return role.arrangeRole
+  return categoryOfRole(role.arrangeRole)
 }

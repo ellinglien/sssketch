@@ -169,4 +169,12 @@ describe('engineRoleFor', () => {
     // switch as if it still applied to some other role.
     expect(engineRoleFor(roleInfo({ arrangeRole: 'bass', drumSubRole: 'kick' }))).toBe('bass')
   })
+
+  it('compares categories, keeping drum sub-roles apart', () => {
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'aux' }))).toBe('back')
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'textureFx' }))).toBe('back')
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'vocal' }))).toBe('front')
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'fill' }))).toBe('drums')
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'drums', drumSubRole: 'kick' }))).toBe('kick')
+  })
 })
