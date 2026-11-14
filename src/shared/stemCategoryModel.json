@@ -1,0 +1,1 @@
+{ "version": 0, "dims": 1024, "classes": ["drums", "bass", "back", "front"], "mean": [], "scale": [], "weights": [], "bias": [0, 0, 0, 0] }
