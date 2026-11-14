@@ -8,14 +8,15 @@ import type { ArrangeRole } from './stemRole'
 import { CATEGORY_ROLE, STEM_CATEGORY_OPTIONS, categoryOfRole } from './stemCategory'
 import {
   DISCOVER_SLOT_KIND_LABEL,
+  isDialKind,
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
   type DiscoverKindSource,
   type DiscoverKindSources,
   type DiscoverMaskKind,
-  type DiscoverSlotKind,
-  type DiscoverTraitKind
+  type DiscoverRankKind,
+  type DiscoverSlotKind
 } from './discoverSlotKind'
 import { DEFAULT_TRAIT_BAR } from './traitBar'
 import type { TraitPercentiles } from './traitQuantiles'
@@ -34,7 +35,8 @@ export interface MatchMeterMaskEntry {
 
 export interface MatchMeterTraitEntry {
   type: 'trait'
-  kind: DiscoverTraitKind
+  /** A trait kind, or a dial kind (back/front) the stem was guessed into. */
+  kind: DiscoverRankKind
   label: string
   /** 0..MATCH_METER_STEPS */
   filled: number
@@ -90,7 +92,7 @@ function maskEntry(
 }
 
 function traitEntry(
-  kind: DiscoverTraitKind,
+  kind: DiscoverRankKind,
   percentile: number | null | undefined,
   barUsed: number | null,
   barRequested: number
@@ -116,9 +118,10 @@ function traitEntry(
 }
 
 /** One entry per requested kind of the slot, mask kinds first:
- * - a mask kind shows why it admitted the stem (`drummy: tag`), omitted
+ * - a mask kind shows why it admitted the stem (`drums: tag`), omitted
  *   when that kind didn't (another mask kind of the set did, or the stem
- *   was reclassified away from it);
+ *   was reclassified away from it); a back or front kind that admitted it
+ *   by a guess shows bars from the dial instead, like a trait kind;
  * - a trait kind shows 5-step bars from the stem's library percentile, with
  *   the exact number (and a `· relaxed` marker when barUsed < the requested
  *   bar) in the tooltip;
@@ -147,7 +150,11 @@ export function buildMatchMeter({
   const maskKinds = normalized.filter(isMaskSlotKind) as DiscoverMaskKind[]
   for (const kind of maskKinds) {
     const source = kindSources[kind]
-    if (source) entries.push(maskEntry(kind, DISCOVER_SLOT_KIND_LABEL[kind], source))
+    if (!source) continue
+    // A guessed back/front shows where the dial put it; a label shows its source.
+    if (isDialKind(kind) && source !== 'confirmed')
+      entries.push(traitEntry(kind, traitPercentiles[kind], barUsed, barRequested))
+    else entries.push(maskEntry(kind, DISCOVER_SLOT_KIND_LABEL[kind], source))
   }
   if (reclassified && !maskKinds.includes(categoryOfRole(reclassified.role))) {
     entries.push(maskEntry(null, reclassified.label, 'confirmed'))

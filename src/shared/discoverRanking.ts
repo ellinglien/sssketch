@@ -5,7 +5,7 @@ import {
   DISCOVER_TRAIT_FIELD,
   DISCOVER_TRAIT_PREFERRED_FIELD
 } from './discoverTraits'
-import type { DiscoverTraitKind } from './discoverSlotKind'
+import { isDialRankKind, type DiscoverRankKind, type DiscoverTraitKind } from './discoverSlotKind'
 import { radioClashBedScore, radioClashTraitScore, type RankClash } from './radioClash'
 import { DIG_WEIGHT, radioDigCloseness, type RankDig } from './radioDig'
 import { intensityTerms, type RankIntensity } from './radioIntensity'
@@ -100,7 +100,7 @@ export function rankCandidates(
      * multiplies the whole favourites boost. Absent: 1, the full boost, as before. 0: no boost
      * at all -- exactly the ranking without favourites. */
     favouriteScale?: number
-    targetTraits?: readonly DiscoverTraitKind[]
+    targetTraits?: readonly DiscoverRankKind[]
     /** Radio fold mode's `clash` (@shared/radioClash): a requested rhythmic or bright trait
      * turns toward its other end, and distance from the bed on those two traits scores. Absent
      * or amount 0: exactly the ranking without it. */
@@ -122,8 +122,10 @@ export function rankCandidates(
   // every candidate with field values has it; otherwise everyone is ranked
   // on the fallback field, which every analysed row carries. Candidates
   // without field values (legacy constructors) use traitValues as-is.
+  // A dial kind (back/front) has no pool fallback: only its percentile ranks.
+  const traitKinds = targetTraits.filter((k): k is DiscoverTraitKind => !isDialRankKind(k))
   const poolValues = new Map<DiscoverTraitKind, (c: DiscoverCandidate) => number | null>()
-  for (const kind of targetTraits) {
+  for (const kind of traitKinds) {
     const preferred = DISCOVER_TRAIT_PREFERRED_FIELD[kind]
     const fallback = DISCOVER_TRAIT_FIELD[kind]
     const allHavePreferred = candidates.every((c) => {
@@ -140,7 +142,7 @@ export function rankCandidates(
   }
 
   const ranges = new Map<DiscoverTraitKind, { min: number; max: number }>()
-  for (const kind of targetTraits) {
+  for (const kind of traitKinds) {
     const valueOf = poolValues.get(kind)!
     let min = Infinity
     let max = -Infinity
@@ -166,14 +168,18 @@ export function rankCandidates(
         // spec) when main attached one -- already direction-adjusted, and
         // comparable across rolls, unlike the pool's own min-max range.
         const percentile = candidate.traitPercentiles?.[kind]
-        const trait =
-          typeof percentile === 'number' && Number.isFinite(percentile)
-            ? percentile
-            : traitScore(
-                poolValues.get(kind)!(candidate),
-                DISCOVER_TRAIT_DIRECTION[kind],
-                ranges.get(kind)
-              )
+        const hasPercentile = typeof percentile === 'number' && Number.isFinite(percentile)
+        if (isDialRankKind(kind)) {
+          if (hasPercentile) score += percentile * TRAIT_SCORE_WEIGHT
+          continue
+        }
+        const trait = hasPercentile
+          ? percentile
+          : traitScore(
+              poolValues.get(kind)!(candidate),
+              DISCOVER_TRAIT_DIRECTION[kind],
+              ranges.get(kind)
+            )
         score += radioClashTraitScore(kind, trait, clash?.amount ?? 0) * TRAIT_SCORE_WEIGHT
       }
       if (clash) score += radioClashBedScore(candidate.traitPercentiles ?? {}, clash)

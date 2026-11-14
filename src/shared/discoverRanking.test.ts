@@ -487,3 +487,21 @@ describe('rankCandidates: favouriteScale (the faves dial)', () => {
     expect(weighted[0].score - 1).toBeCloseTo(0.375, 6)
   })
 })
+
+describe('rankCandidates by the dial', () => {
+  it('ranks front by its dial value; one with no value ranks last', () => {
+    const high = candidate({
+      stemCID: 'high',
+      slotKinds: ['front'],
+      traitPercentiles: { front: 0.9 }
+    })
+    const low = candidate({
+      stemCID: 'low',
+      slotKinds: ['front'],
+      traitPercentiles: { front: 0.1 }
+    })
+    const none = candidate({ stemCID: 'none', slotKinds: ['front'] })
+    const ranked = rankCandidates([none, low, high], { targetBpm: 128, targetTraits: ['front'] })
+    expect(ranked.map((r) => r.candidate.stemCID)).toEqual(['high', 'low', 'none'])
+  })
+})

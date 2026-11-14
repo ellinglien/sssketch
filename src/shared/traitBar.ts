@@ -5,7 +5,7 @@
 // getDiscoverCandidates and rankCandidates, so a slot labelled "sparkly"
 // only draws from stems that are sparkly in LIBRARY terms (top 40% by
 // default), not merely the sparkliest of whatever slice was drawn.
-import type { DiscoverTraitKind } from './discoverSlotKind'
+import type { DiscoverRankKind } from './discoverSlotKind'
 import type { TraitPercentiles } from './traitQuantiles'
 
 /** The spec's bar (user choice: top 40%) -- a requested trait needs a
@@ -50,14 +50,14 @@ export interface TraitBarResult<T> {
   barUsed: number | null
 }
 
-function isAnalysed(p: TraitPercentiles, traits: readonly DiscoverTraitKind[]): boolean {
+function isAnalysed(p: TraitPercentiles, traits: readonly DiscoverRankKind[]): boolean {
   return traits.every((k) => {
     const v = p[k]
     return typeof v === 'number' && Number.isFinite(v)
   })
 }
 
-function minPercentile(p: TraitPercentiles, traits: readonly DiscoverTraitKind[]): number {
+function minPercentile(p: TraitPercentiles, traits: readonly DiscoverRankKind[]): number {
   let min = Infinity
   for (const k of traits) min = Math.min(min, p[k] as number)
   return min
@@ -70,7 +70,7 @@ function minPercentile(p: TraitPercentiles, traits: readonly DiscoverTraitKind[]
  * them (relax, don't fail). Input order is preserved within each group. */
 export function applyTraitBar<T extends { traitPercentiles: TraitPercentiles }>(
   candidates: T[],
-  targetTraits: readonly DiscoverTraitKind[],
+  targetTraits: readonly DiscoverRankKind[],
   { bar = DEFAULT_TRAIT_BAR, minPool = 12, step = 0.1 }: TraitBarOptions = {}
 ): TraitBarResult<T> {
   if (targetTraits.length === 0) return { pool: candidates, barUsed: null }

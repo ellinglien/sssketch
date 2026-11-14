@@ -337,3 +337,27 @@ describe('compactRadioMeter', () => {
     expect(compactRadioMeter(entries, 2)).toEqual(entries)
   })
 })
+
+describe('buildMatchMeter dial kinds', () => {
+  it('a guessed front shows as bars from its dial value', () => {
+    const entries = buildMatchMeter({
+      kinds: ['front'],
+      kindSources: { front: 'guess' },
+      traitPercentiles: { front: 0.7 },
+      barUsed: 0.6,
+      barRequested: 0.6
+    })
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ type: 'trait', kind: 'front', label: 'front', filled: 4 })
+  })
+
+  it('a confirmed front shows its source, not bars', () => {
+    const entries = buildMatchMeter({
+      kinds: ['front'],
+      kindSources: { front: 'confirmed' },
+      traitPercentiles: { front: 1 },
+      barUsed: 0.6
+    })
+    expect(entries.map((e) => e.text)).toEqual(['front: confirmed'])
+  })
+})

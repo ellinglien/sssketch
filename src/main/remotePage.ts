@@ -143,8 +143,8 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
 </html>`
 }
 
-/** The seven chips, in the desktop add row's own order and with its own
- * playful labels, plus which of the two groups each belongs to (mask kinds
+/** The eight chips, in the desktop add row's own order and with its own
+ * labels, plus which of the two groups each belongs to (mask kinds
  * filter, trait kinds rank -- the desktop draws a divider between them and
  * so does this). Generated from the shared list, so a new kind appears on
  * the phone by existing. */

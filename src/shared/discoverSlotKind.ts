@@ -126,6 +126,10 @@ export function isDialKind(kind: DiscoverSlotKind): kind is DiscoverDialKind {
   return kind === 'back' || kind === 'front'
 }
 
+export function isDialRankKind(kind: DiscoverRankKind): kind is DiscoverDialKind {
+  return kind === 'back' || kind === 'front'
+}
+
 /** What a kind set ranks by: its trait kinds and its dial kinds, in canonical order. */
 export function rankKindsOf(kinds: readonly DiscoverSlotKind[]): DiscoverRankKind[] {
   return normalizeSlotKinds(kinds).filter(

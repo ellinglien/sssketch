@@ -15,7 +15,7 @@ import {
   type TraitFieldValues,
   type TraitValues
 } from './discoverTraits'
-import type { DiscoverTraitKind } from './discoverSlotKind'
+import type { DiscoverRankKind, DiscoverTraitKind } from './discoverSlotKind'
 
 /** 0th..100th percentile, inclusive. */
 export const QUANTILE_BREAKPOINTS = 101
@@ -69,7 +69,7 @@ export type TraitQuantileTables = Partial<Record<QuantileField, QuantileTable>>
 /** Library percentile per requested trait kind, in [0, 1], already
  * direction-adjusted (warm = low centroid -> high percentile). null = the
  * stem has no value for it, or no table exists yet. */
-export type TraitPercentiles = Partial<Record<DiscoverTraitKind, number | null>>
+export type TraitPercentiles = Partial<Record<DiscoverRankKind, number | null>>
 
 /** Builds a 101-breakpoint quantile table (linear interpolation between
  * sorted values). Non-finite values are ignored; null when nothing is

@@ -318,6 +318,11 @@ describe('parseRemoteSlotKinds', () => {
     expect(parseRemoteSlotKinds(['drums', 'bright'])).toEqual(['drums', 'bright'])
   })
 
+  it("reads an old page's lead as front", () => {
+    expect(parseRemoteSlotKinds(['lead'])).toEqual(['front'])
+    expect(parseRemoteSlotKinds(['back', 'lead'])).toEqual(['back', 'front'])
+  })
+
   it('normalizes rather than trusting the order or the set it was handed', () => {
     expect(parseRemoteSlotKinds(['bright', 'drums', 'drums'])).toEqual(['drums', 'bright'])
     expect(parseRemoteSlotKinds(['bright', 'warm'])).toEqual(['bright'])

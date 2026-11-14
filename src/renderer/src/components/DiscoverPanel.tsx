@@ -26,6 +26,7 @@ import {
   DISCOVER_TRAIT_SLOT_KINDS,
   isTraitSlotKind,
   normalizeSlotKinds,
+  rankKindsOf,
   slotKindsKey,
   slotKindsLabel,
   toggleSlotKind,
@@ -10070,7 +10071,7 @@ export function DiscoverPanel({
       // above, before the source-dial fallback, which uses it too.
       const deduped = candidates.filter((c) => !usedElsewhere.has(c.stemCID))
       const pool = deduped.length > 0 ? deduped : candidates
-      const targetTraits = kinds.filter(isTraitSlotKind)
+      const targetTraits = rankKindsOf(kinds)
       // Library-wide trait bar (docs/superpowers/specs/2026-09-22-discover-
       // promise-vs-delivery-design.md, Phase 1): a requested trait needs a
       // top-40% library percentile, relaxing quietly when too few pass;
