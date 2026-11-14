@@ -22,6 +22,7 @@
 // re-tried the whole residue. A stem keeps its MAX_TRIED_FINGERPRINTS_PER_STEM
 // newest rows, so training that moves on doesn't grow the table without bound.
 import type Database from 'better-sqlite3'
+import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 
 /** Shared by riffLibrarySchema.ts and the tests' fixture dbs. sssketch-only,
  * on the own db, like StemAutoCategory. Mask is NULL for a stem with no mask
@@ -140,8 +141,8 @@ export const TRIED_PRUNE_SLICE = 2000
 
 /** Drops, from the rows after rowid `after` (up to `limit` of them), those no
  * classifier will read again (review of 0adc41ca): the stem was placed by
- * another source (StemAutoCategory from the model or the mask, in the other
- * app; an older app's guess doesn't count, the model guesses it again),
+ * another source (a placed StemAutoCategory row, PLACED_AUTO_CATEGORY_SQL,
+ * e.g. the other app's; an older app's guess doesn't count),
  * confirmed by hand (StemCategories), or has neither an embedding nor a
  * feature row left. The classifier calls it once per pending-list rebuild
  * (a launch, a training change, the 10-minute safety wake), so the whole
@@ -164,7 +165,7 @@ export function pruneStemsTriedSlice(
   db.prepare(
     `DELETE FROM StemAutoClassifyTried AS t WHERE t.rowid > ? AND t.rowid <= ? AND (
        EXISTS (SELECT 1 FROM StemAutoCategory a
-               WHERE a.StemCID = t.StemCID AND a.Source IN ('model', 'instrumentMask'))
+               WHERE a.StemCID = t.StemCID AND ${PLACED_AUTO_CATEGORY_SQL})
        OR EXISTS (SELECT 1 FROM StemCategories c
                   WHERE c.StemCID = t.StemCID AND c.ArrangeRole IS NOT NULL)
        OR (NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = t.StemCID)

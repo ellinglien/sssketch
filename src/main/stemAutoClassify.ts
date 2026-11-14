@@ -16,7 +16,11 @@ import {
   readStemsTriedUnder,
   recordStemTried
 } from './stemAutoClassifyTried'
-import { upsertStemAutoCategory, type StemAutoCategorySource } from './stemAutoCategoryStore'
+import {
+  PLACED_AUTO_CATEGORY_SQL,
+  upsertStemAutoCategory,
+  type StemAutoCategorySource
+} from './stemAutoCategoryStore'
 import { countWork } from './workCounters'
 import { whenTableCountsSettled } from './tableChangeSignal'
 import {
@@ -183,13 +187,12 @@ interface EmbeddingCandidateRow {
 
 // Shared by both the count and fetch queries below -- a stem is eligible
 // for either pass when it isn't already human-confirmed (ANY role) and
-// has no StemAutoCategory row from the model or the mask. A row from an
-// older app's guessers (embedding, centroid, zero-shot; the dev and packaged
-// apps share this db) is guessed again (2026-11-14). `e`/`f` is the outer
+// has no placed StemAutoCategory row (PLACED_AUTO_CATEGORY_SQL): an older
+// app's guess is guessed again (2026-11-14). `e`/`f` is the outer
 // table's own alias (StemEmbeddingCache or StemFeatureCache).
 const BASE_ELIGIBILITY_WHERE = (alias: string): string => `
   NOT EXISTS (SELECT 1 FROM StemCategories c WHERE c.StemCID = ${alias}.StemCID AND c.ArrangeRole IS NOT NULL)
-  AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = ${alias}.StemCID AND a.Source IN ('model', 'instrumentMask'))
+  AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = ${alias}.StemCID AND ${PLACED_AUTO_CATEGORY_SQL})
 `
 
 // Same as above, PLUS excludes any stem that has an embedding at all: the

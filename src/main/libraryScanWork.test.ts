@@ -180,7 +180,8 @@ function fixture(): { own: Database.Database; jams: Jams; src1: Database.Databas
   // a 0-byte file with a stale feature row: analysed before, never stat-ed
   analyse(own, 'b5zerostale', { features: V1 })
   putFile('jamA', 'b5zerostale', 0)
-  // zero-shot pending: every row current, own Stems row, never attempted
+  // once zero-shot pending (every row current, own Stems row, never attempted):
+  // no work since 2026-11-14, the model places every embedded stem
   analyse(own, 'c1zeroshot', {})
   own.prepare(`INSERT INTO Stems VALUES ('c1zeroshot', 'jamA', NULL)`).run()
   putFile('jamA', 'c1zeroshot')
@@ -247,7 +248,7 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
 
     const withModel = asMap((await listLibraryScanWork(jams, own)).work)
     expect(withModel.has('f1noembed')).toBe(true)
-    expect(withModel.has('c1zeroshot')).toBe(true)
+    expect(withModel.has('c1zeroshot')).toBe(false)
 
     const result = await listLibraryScanWork(jams, own, { yamnetAvailable: false })
     const work = asMap(result.work)
@@ -273,7 +274,6 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
         'b1peaks',
         'b2never',
         'b5zerostale',
-        'c1zeroshot',
         'c2twojams',
         'd2laterdb',
         'd3src2only'

@@ -130,20 +130,15 @@ function currentFeatureStemCIDs(db: Database.Database, stemCIDs: string[]): Feat
 const REWORK_PAGE_SIZE = 2000
 
 /** Every StemCID whose feature row exists but still needs work -- malformed, older than
- * STEM_FEATURE_VERSION, or current without the level pass -- plus every stem whose zero-shot
- * step is pending (zeroShotPendingStemCIDs' rule, over the whole table): the analysed half of
+ * STEM_FEATURE_VERSION, or current without the level pass: the analysed half of
  * the library scan's preselect (background scan audit 3). With a peaks, embedding and feature
  * row, a stem needs work exactly when it is in this set (for a library stem name), so the
  * scan never asks needs for, or touches the disk for, anything else that is analysed.
  *
  * Read from the trait value table while it accounts for every row (no SQL, no parse); else
- * one JSON pass over StemFeatureCache in keyset pages with a yield after each. The zero-shot
- * half reads StemEmbeddingCache in key windows of REWORK_PAGE_SIZE (bounded statements, a yield
- * between). Never `.iterate()`. */
-export async function stemCIDsNeedingRework(
-  db: Database.Database,
-  options: YamnetAvailability = {}
-): Promise<Set<string>> {
+ * one JSON pass over StemFeatureCache in keyset pages with a yield after each. Never
+ * `.iterate()`. No zero-shot half since 2026-11-14 (see getStemAnalysisNeeds). */
+export async function stemCIDsNeedingRework(db: Database.Database): Promise<Set<string>> {
   const out = new Set<string>()
   const table = getTraitValueTable(db)
   if (table) {
@@ -175,82 +170,7 @@ export async function stemCIDsNeedingRework(
       await yieldToEventLoop()
     }
   }
-  if (options.yamnetAvailable === false) return out
-  for (const stemCID of await allZeroShotPendingStemCIDs(db)) out.add(stemCID)
   return out
-}
-
-/** zeroShotPendingStemCIDs' join over the whole of StemEmbeddingCache, in key windows: each
- * statement covers the next REWORK_PAGE_SIZE embedding rows (its upper key from one LIMIT 1
- * OFFSET probe on the primary key), so no one statement runs long. None when a table is
- * missing. */
-async function allZeroShotPendingStemCIDs(db: Database.Database): Promise<string[]> {
-  const out: string[] = []
-  let bound: Database.Statement
-  let windowed: Database.Statement
-  let last: Database.Statement
-  const pending = `JOIN Stems s ON s.StemCID = e.StemCID
-     WHERE NOT EXISTS (SELECT 1 FROM StemYamnetZeroShotAttempted t WHERE t.StemCID = e.StemCID)
-     AND NOT EXISTS (
-       SELECT 1 FROM StemCategories c WHERE c.StemCID = e.StemCID AND c.ArrangeRole IS NOT NULL
-     )
-     AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = e.StemCID)`
-  try {
-    bound = db.prepare(
-      `SELECT StemCID FROM StemEmbeddingCache WHERE StemCID > ? ORDER BY StemCID
-       LIMIT 1 OFFSET ${REWORK_PAGE_SIZE - 1}`
-    )
-    windowed = db.prepare(
-      `SELECT e.StemCID AS StemCID FROM StemEmbeddingCache e ${pending}
-       AND e.StemCID > ? AND e.StemCID <= ?`
-    )
-    last = db.prepare(
-      `SELECT e.StemCID AS StemCID FROM StemEmbeddingCache e ${pending} AND e.StemCID > ?`
-    )
-  } catch {
-    return out
-  }
-  let after = ''
-  for (;;) {
-    countWork('sql:stem-analysis-needs.zeroShot-window')
-    const upper = bound.get(after) as { StemCID: string } | undefined
-    const rows = (upper ? windowed.all(after, upper.StemCID) : last.all(after)) as {
-      StemCID: string
-    }[]
-    for (const row of rows) out.push(row.StemCID)
-    if (!upper) return out
-    after = upper.StemCID
-    await yieldToEventLoop()
-  }
-}
-
-/** StemCIDs (of these) that still need the YAMNet zero-shot step
- * (background efficiency B5): an embedding row exists, no attempt is
- * recorded, the stem has its own Stems row here, and it isn't confirmed or
- * auto-categorized by anything -- exactly the eligibility the old
- * per-session retroactive scan (listYamnetZeroShotRetroactiveTargets)
- * enumerated, now asked only for the paths being checked. A db missing one
- * of these tables answers "none". */
-function zeroShotPendingStemCIDs(db: Database.Database, stemCIDs: string[]): Set<string> {
-  countWork('sql:stem-analysis-needs.zeroShot')
-  const placeholders = stemCIDs.map(() => '?').join(',')
-  try {
-    const rows = db
-      .prepare(
-        `SELECT e.StemCID AS StemCID FROM StemEmbeddingCache e
-         JOIN Stems s ON s.StemCID = e.StemCID
-         WHERE e.StemCID IN (${placeholders})
-         AND NOT EXISTS (SELECT 1 FROM StemYamnetZeroShotAttempted t WHERE t.StemCID = e.StemCID)
-         AND NOT EXISTS (
-           SELECT 1 FROM StemCategories c WHERE c.StemCID = e.StemCID AND c.ArrangeRole IS NOT NULL
-         )
-         AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = e.StemCID)`
-      )
-      .all(...stemCIDs) as { StemCID: string }[]
-    return new Set(rows.map((r) => r.StemCID))
-  } catch {
-    return new Set()
-  }
 }
 
 /**
@@ -281,7 +201,6 @@ export async function getStemAnalysisNeeds(
     const peaks = presentStemCIDs(db, 'StemPeaksCache', stemCIDs)
     const embeddings = presentStemCIDs(db, 'StemEmbeddingCache', stemCIDs)
     const features = currentFeatureStemCIDs(db, stemCIDs)
-    const zeroShot = zeroShotPendingStemCIDs(db, stemCIDs)
     for (const path of chunkPaths) {
       const stemCID = basename(path)
       // Not a library stem name (a drag-imported, baked or loop-folder file):
@@ -292,7 +211,10 @@ export async function getStemAnalysisNeeds(
         peaks: !peaks.has(stemCID),
         features: !features.current.has(stemCID),
         embedding: library && !embeddings.has(stemCID),
-        zeroShot: library && zeroShot.has(stemCID),
+        // The one model places every embedded stem (2026-11-14), so zero-shot is never
+        // needed, and the old guesses the four-categories migration deletes make no work.
+        // shortcut: the field stays false until Task 17 removes it
+        zeroShot: false,
         // only when it is needed: an answer without it reads as no level work
         ...(features.needsLevel.has(stemCID) && { level: true })
       })

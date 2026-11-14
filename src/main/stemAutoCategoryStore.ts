@@ -6,6 +6,12 @@ import { bumpStemClassificationVersion } from './stemClassificationVersion'
 
 export type StemAutoCategorySource = 'model' | 'instrumentMask'
 
+/** SQL: a StemAutoCategory row, aliased `a`, that counts as placed -- the
+ * model's, or Endlesss's drums/bass bit (the four-categories migration's own
+ * rule, riffLibrarySchema.ts). Anything else (an older app's guess, or its
+ * notes-bit 'lead' mask row; dev and packaged share this db) is guessed again. */
+export const PLACED_AUTO_CATEGORY_SQL = `(a.Source = 'model' OR (a.Source = 'instrumentMask' AND a.ArrangeRole IN ('drums', 'bass')))`
+
 /** Every StemCID, on `ownDb` only (StemAutoCategory, like StemCategories/
  * StemEmbeddingCache/StemFeatureCache, only ever lives there -- see
  * discoverCandidates.ts's own repeated notes on why an external LORE
@@ -69,7 +75,7 @@ export async function getStemAutoClassifyProgress(
       `SELECT candidates.StemCID AS StemCID,
          EXISTS (SELECT 1 FROM StemAutoCategory a
                  WHERE a.StemCID = candidates.StemCID
-                   AND a.Source IN ('model', 'instrumentMask')) AS Categorized
+                   AND ${PLACED_AUTO_CATEGORY_SQL}) AS Categorized
        FROM (
          SELECT StemCID FROM StemEmbeddingCache
          UNION

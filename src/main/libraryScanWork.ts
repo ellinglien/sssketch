@@ -276,7 +276,7 @@ export async function listLibraryScanWork(
   await awaitTraitQuantileBuild(ownDb)
   const yamnetAvailable = options.yamnetAvailable !== false
   const missingARow = yamnetAvailable ? MISSING_A_ROW : MISSING_A_ROW_NO_YAMNET
-  const rework = await stemCIDsNeedingRework(ownDb, { yamnetAvailable })
+  const rework = await stemCIDsNeedingRework(ownDb)
   // ...only those with all three rows: a stem missing one is the anti-join's.
   const maybeYield = async (): Promise<void> => {
     if (sliceSpent()) await yieldSlice()

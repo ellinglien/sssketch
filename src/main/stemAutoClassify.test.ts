@@ -958,20 +958,26 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
 
       // An older app's guess doesn't count as placed (the model guesses it
       // again), so its record must stay, or every rebuild would re-try it.
-      it("keeps the record of a stem whose only row is an older app's guess", async () => {
-        const db = freshDb()
-        seedEmbedding(db, 'old-guess', UNPLACEABLE)
-        db.prepare(
-          `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt)
-           VALUES ('old-guess', 'drums', 'embedding', 1)`
-        ).run()
-        await classify(db)
-        expect(tried(db)).toEqual(['old-guess'])
-        const fetches = embeddingFetches(db)
-        expect(await classify(db)).toEqual({ processed: 0, remaining: 0 }) // the safety rebuild
-        expect(tried(db)).toEqual(['old-guess'])
-        expect(fetches()).toEqual([])
-      })
+      it.each([
+        ['embedding', 'drums'],
+        ['instrumentMask', 'lead']
+      ])(
+        "keeps the record of a stem whose only row is an older app's guess (%s, %s)",
+        async (source, role) => {
+          const db = freshDb()
+          seedEmbedding(db, 'old-guess', UNPLACEABLE)
+          db.prepare(
+            `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt)
+             VALUES ('old-guess', ?, ?, 1)`
+          ).run(role, source)
+          await classify(db)
+          expect(tried(db)).toEqual(['old-guess'])
+          const fetches = embeddingFetches(db)
+          expect(await classify(db)).toEqual({ processed: 0, remaining: 0 }) // the safety rebuild
+          expect(tried(db)).toEqual(['old-guess'])
+          expect(fetches()).toEqual([])
+        }
+      )
 
       it('looks at a bounded slice of rows per call, carrying on where it left off', () => {
         const db = freshDb()
@@ -1223,6 +1229,18 @@ describe('classifyAutoCategoryBatch (the one model)', () => {
     expect(row.ArrangeRole).toBe('lead')
     expect(row.Source).toBe('model')
     expect(row.FrontScore).toBeGreaterThan(0.5)
+  })
+
+  it("the packaged 1.6.1 app's notes-bit row ('lead', 'instrumentMask') is guessed again by the model", async () => {
+    const db = freshDb()
+    seedEmbedding(db, 'notes', [0, 0, 0])
+    seedInstrument(db, 'notes', NOTES_BIT)
+    db.prepare(
+      `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt)
+       VALUES ('notes', 'lead', 'instrumentMask', 1)`
+    ).run()
+    expect((await classify(db)).processed).toBe(1)
+    expect(autoRow(db, 'notes')).toMatchObject({ ArrangeRole: 'backing', Source: 'model' })
   })
 
   it('a stem with features but no embedding and no reliable mask is tried, not placed', async () => {

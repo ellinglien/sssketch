@@ -134,7 +134,8 @@ describe('getStemAnalysisNeeds', () => {
       db,
       stems.map((cid) => `/lib/jam/${cid}`)
     )
-    expect(needs.map((n) => n.zeroShot)).toEqual([true, false, false, false, false, false])
+    // Never since 2026-11-14: the model places every embedded stem.
+    expect(needs.map((n) => n.zeroShot)).toEqual([false, false, false, false, false, false])
     // The one without an embedding needs the embedding (which runs the
     // zero-shot step itself), not a separate zero-shot pass.
     expect(needs[5].embedding).toBe(true)
@@ -300,15 +301,7 @@ describe('getStemAnalysisNeeds', () => {
     ).toEqual([])
     expect(fromTable).toEqual(fromJson)
     expect([...fromTable].sort()).toEqual(
-      [
-        'corrupt',
-        'feature-only-v1',
-        'json-null',
-        'json-number',
-        'no-level',
-        'v1',
-        'zero-shot'
-      ].sort()
+      ['corrupt', 'feature-only-v1', 'json-null', 'json-number', 'no-level', 'v1'].sort()
     )
     const fullyRowed = rows.map(([cid]) => cid)
     const needs = await getStemAnalysisNeeds(
@@ -318,19 +311,6 @@ describe('getStemAnalysisNeeds', () => {
     fullyRowed.forEach((cid, i) => {
       expect(fromTable.has(cid), cid).toBe(needsAnyAnalysis(needs[i]))
     })
-  })
-
-  it('stemCIDsNeedingRework: zero-shot windows span more than one window', async () => {
-    const db = freshDb()
-    for (let i = 0; i < 2005; i++) {
-      const cid = `z${String(i).padStart(5, '0')}`
-      addEmbedding(db, cid)
-      if (i % 2 === 0) db.prepare(`INSERT INTO Stems VALUES (?, 'jam', NULL)`).run(cid)
-    }
-    const pending = await stemCIDsNeedingRework(db)
-    expect(pending.size).toBe(1003)
-    expect(pending.has('z02004')).toBe(true)
-    expect(pending.has('z01999')).toBe(false)
   })
 
   it('with no YAMNet model, nothing needs the embedding or zero-shot step (audit B3)', async () => {
@@ -348,7 +328,7 @@ describe('getStemAnalysisNeeds', () => {
     const withModel = await getStemAnalysisNeeds(db, paths)
     expect(withModel.map((n) => [n.embedding, n.zeroShot])).toEqual([
       [true, false],
-      [false, true],
+      [false, false],
       [true, false]
     ])
     const needs = await getStemAnalysisNeeds(db, paths, undefined, { yamnetAvailable: false })
@@ -361,14 +341,19 @@ describe('getStemAnalysisNeeds', () => {
     expect(needsAnyAnalysis(needs[1])).toBe(false)
   })
 
-  it('stemCIDsNeedingRework: no zero-shot half with no YAMNet model', async () => {
+  // 2026-11-14: the model places every embedded stem, so the old guesses the
+  // four-categories migration deletes must not turn into zero-shot work (a
+  // disk decode per stem on a USB library).
+  it('an embedded stem with no attempt and no auto row needs no zero-shot step', async () => {
     const db = freshDb()
-    addFeatures(db, 'zs', current)
-    addEmbedding(db, 'zs')
-    db.prepare(`INSERT INTO Stems VALUES ('zs', 'jam', NULL)`).run()
-    addFeatures(db, 'stale', v1)
-    expect([...(await stemCIDsNeedingRework(db))].sort()).toEqual(['stale', 'zs'])
-    expect([...(await stemCIDsNeedingRework(db, { yamnetAvailable: false }))]).toEqual(['stale'])
+    addFeatures(db, 'cleared', current)
+    addPeaks(db, 'cleared')
+    addEmbedding(db, 'cleared')
+    db.prepare(`INSERT INTO Stems VALUES ('cleared', 'jam', NULL)`).run()
+    const [needs] = await getStemAnalysisNeeds(db, ['/lib/j/cleared'])
+    expect(needs.zeroShot).toBe(false)
+    expect(needsAnyAnalysis(needs)).toBe(false)
+    expect([...(await stemCIDsNeedingRework(db))]).toEqual([])
   })
 
   it('returns an empty list for no paths without querying', async () => {
