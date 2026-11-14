@@ -55,7 +55,7 @@ function freshDb(path = ':memory:'): Database.Database {
     );
     CREATE TABLE IF NOT EXISTS StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
-      ComputedAt INTEGER NOT NULL
+      ComputedAt INTEGER NOT NULL, FrontScore REAL
     );
     CREATE TABLE IF NOT EXISTS Stems (
       StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, Instrument INTEGER

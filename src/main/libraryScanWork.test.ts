@@ -99,7 +99,7 @@ function ownDb(): Database.Database {
     CREATE TABLE StemCategories (StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, UpdatedAt INTEGER);
     CREATE TABLE StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
-      ComputedAt INTEGER NOT NULL
+      ComputedAt INTEGER NOT NULL, FrontScore REAL
     );
   `)
   return db

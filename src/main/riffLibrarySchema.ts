@@ -4,6 +4,7 @@ import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { LOOP_FOLDERS_DDL } from './loopFolders'
+import { bumpStemClassificationVersion } from './stemClassificationVersion'
 import {
   STEM_AUTO_CLASSIFY_TRIED_DDL,
   ensureStemAutoClassifyTriedSchema
@@ -160,7 +161,8 @@ CREATE TABLE IF NOT EXISTS StemAutoCategory (
   StemCID TEXT PRIMARY KEY,
   ArrangeRole TEXT NOT NULL,
   Source TEXT NOT NULL,
-  ComputedAt INTEGER NOT NULL
+  ComputedAt INTEGER NOT NULL,
+  FrontScore REAL
 );
 
 -- One row per stem once a YAMNet zero-shot classification has been
@@ -390,6 +392,28 @@ function ensureStemCategoriesHasSubcategoryNote(db: Database.Database): void {
   db.exec(`ALTER TABLE StemCategories ADD COLUMN SubcategoryNote TEXT`)
 }
 
+/** 2026-11-14 (four categories): the dial column, added once. Adding it is the moment the
+ * old guessers' rows go, so every stem is guessed again by the one model. A duplicate-column
+ * error means the other app (dev vs packaged share this db) added it first: nothing to do. */
+function ensureStemAutoCategoryHasFrontScore(db: Database.Database): void {
+  const columns = db.prepare(`PRAGMA table_info(StemAutoCategory)`).all() as { name: string }[]
+  if (columns.length === 0 || columns.some((c) => c.name === 'FrontScore')) return
+  try {
+    db.transaction(() => {
+      db.exec(`ALTER TABLE StemAutoCategory ADD COLUMN FrontScore REAL`)
+      db.exec(
+        `DELETE FROM StemAutoCategory
+         WHERE NOT (Source = 'instrumentMask' AND ArrangeRole IN ('drums', 'bass'))`
+      )
+    })()
+  } catch (err) {
+    if (!String(err).includes('duplicate column')) throw err
+    return
+  }
+  // Discover's guess layer reads this table.
+  bumpStemClassificationVersion(db, 'auto')
+}
+
 /** Opens (creating the file/directories if needed) sssketch's own writable
  * riff-library connection and ensures the schema exists -- CREATE
  * TABLE/INDEX IF NOT EXISTS make re-running the DDL on every open a cheap
@@ -406,6 +430,7 @@ export function openOwnRiffLibraryDb(): Database.Database {
   db.pragma('journal_mode = WAL')
   ensureDiscoverRiffIndexCacheHasCreationTime(db)
   ensureStemCategoriesHasSubcategoryNote(db)
+  ensureStemAutoCategoryHasFrontScore(db)
   ensureStemAutoClassifyTriedSchema(db)
   db.exec(SCHEMA_SQL)
   cachedDb = db

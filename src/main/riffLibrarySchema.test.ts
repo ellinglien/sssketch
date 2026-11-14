@@ -223,6 +223,72 @@ describe('riffLibrarySchema', () => {
     expect(row.SubcategoryNote).toBeNull()
   })
 
+  function seedOldStemAutoCategory(path: string, withFrontScore: boolean): void {
+    mkdirSync(dirname(path), { recursive: true })
+    const raw = new Database(path)
+    raw.exec(`
+      CREATE TABLE StemAutoCategory (
+        StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
+        ComputedAt INTEGER NOT NULL${withFrontScore ? ', FrontScore REAL' : ''}
+      );
+      CREATE TABLE StemCategories (
+        StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
+        Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL
+      );
+    `)
+    const insert = raw.prepare(
+      `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt) VALUES (?, ?, ?, 1)`
+    )
+    insert.run('maskDrums', 'drums', 'instrumentMask')
+    insert.run('maskBass', 'bass', 'instrumentMask')
+    insert.run('maskLead', 'lead', 'instrumentMask')
+    insert.run('emb', 'drums', 'embedding')
+    insert.run('cent', 'backing', 'centroid')
+    insert.run('zero', 'lead', 'yamnet-zeroshot')
+    raw
+      .prepare(
+        `INSERT INTO StemCategories (StemCID, ArrangeRole, DrumSubRole, BusId, Source, SourceProject, UpdatedAt)
+         VALUES ('label', 'lead', NULL, NULL, 'tidyup', NULL, 1)`
+      )
+      .run()
+    raw.close()
+  }
+
+  function autoRows(db: Database.Database): string[] {
+    return (
+      db.prepare(`SELECT StemCID FROM StemAutoCategory ORDER BY StemCID`).all() as {
+        StemCID: string
+      }[]
+    ).map((r) => r.StemCID)
+  }
+
+  it('opening a db whose StemAutoCategory lacks FrontScore adds it and clears every old guess except mask drums/bass, once', async () => {
+    const { openOwnRiffLibraryDb, closeOwnRiffLibraryDb, ownRiffLibraryDbPath } =
+      await import('./riffLibrarySchema')
+    seedOldStemAutoCategory(ownRiffLibraryDbPath(), false)
+    const db = openOwnRiffLibraryDb()
+    const columns = db.prepare(`PRAGMA table_info(StemAutoCategory)`).all() as { name: string }[]
+    expect(columns.some((c) => c.name === 'FrontScore')).toBe(true)
+    expect(autoRows(db)).toEqual(['maskBass', 'maskDrums'])
+    // Labels are never touched.
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM StemCategories`).get()).toEqual({ n: 1 })
+
+    db.prepare(
+      `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt, FrontScore)
+       VALUES ('model1', 'backing', 'model', 2, 0.3), ('old', 'lead', 'embedding', 2, NULL)`
+    ).run()
+    closeOwnRiffLibraryDb()
+    const reopened = openOwnRiffLibraryDb()
+    expect(autoRows(reopened)).toEqual(['maskBass', 'maskDrums', 'model1', 'old'])
+  })
+
+  it('a StemAutoCategory that already has FrontScore (the other app migrated first) is left alone', async () => {
+    const { openOwnRiffLibraryDb, ownRiffLibraryDbPath } = await import('./riffLibrarySchema')
+    seedOldStemAutoCategory(ownRiffLibraryDbPath(), true)
+    const db = openOwnRiffLibraryDb()
+    expect(autoRows(db)).toEqual(['cent', 'emb', 'maskBass', 'maskDrums', 'maskLead', 'zero'])
+  })
+
   it('opening the own db creates RiffStemsExtra, and doing it twice is a no-op', async () => {
     const { openOwnRiffLibraryDb, closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
     const db = openOwnRiffLibraryDb()

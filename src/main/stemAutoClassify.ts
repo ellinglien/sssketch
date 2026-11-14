@@ -824,7 +824,9 @@ export async function classifyAutoCategoryBatch(
       return settle(
         row.StemCID,
         instrument,
-        guessed ? { role: guessed as ArrangeRole, source: 'embedding' } : null
+        guessed
+          ? { role: guessed as ArrangeRole, source: 'embedding' as StemAutoCategorySource }
+          : null // shortcut: replaced in Task 14
       )
     })
   }
@@ -859,7 +861,9 @@ export async function classifyAutoCategoryBatch(
       return settle(
         row.StemCID,
         instrument,
-        guessed ? { role: guessed as ArrangeRole, source: 'centroid' } : null
+        guessed
+          ? { role: guessed as ArrangeRole, source: 'centroid' as StemAutoCategorySource }
+          : null // shortcut: replaced in Task 14
       )
     })
   }

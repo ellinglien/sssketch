@@ -8,7 +8,7 @@ function freshDb(): Database.Database {
   db.exec(`
     CREATE TABLE StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
-      ComputedAt INTEGER NOT NULL
+      ComputedAt INTEGER NOT NULL, FrontScore REAL
     );
     CREATE TABLE StemCategories (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,

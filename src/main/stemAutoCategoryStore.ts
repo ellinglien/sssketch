@@ -4,7 +4,7 @@ import type { ArrangeRole } from '@shared/stemRole'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { bumpStemClassificationVersion } from './stemClassificationVersion'
 
-export type StemAutoCategorySource = 'embedding' | 'centroid' | 'yamnet-zeroshot' | 'instrumentMask'
+export type StemAutoCategorySource = 'model' | 'instrumentMask'
 
 /** Every StemCID, on `ownDb` only (StemAutoCategory, like StemCategories/
  * StemEmbeddingCache/StemFeatureCache, only ever lives there -- see
@@ -188,7 +188,14 @@ export function applyYamnetZeroShotCategory(
   const arrangeRole = arrangeRoleForAudiosetClass(audiosetClassIndex)
   if (!arrangeRole) return
   if (!isStemEligibleForAutoCategory(ownDb, stemCID)) return
-  upsertStemAutoCategory(ownDb, stemCID, arrangeRole, 'yamnet-zeroshot', computedAt)
+  // shortcut: removed in Task 17 (the zero-shot writer goes with the old guessers)
+  upsertStemAutoCategory(
+    ownDb,
+    stemCID,
+    arrangeRole,
+    'yamnet-zeroshot' as StemAutoCategorySource,
+    computedAt
+  )
 }
 
 export function upsertStemAutoCategory(
@@ -196,18 +203,20 @@ export function upsertStemAutoCategory(
   stemCID: string,
   arrangeRole: ArrangeRole,
   source: StemAutoCategorySource,
-  computedAt: number
+  computedAt: number,
+  frontScore: number | null = null
 ): void {
   ownDb
     .prepare(
-      `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt)
-       VALUES (@stemCID, @arrangeRole, @source, @computedAt)
+      `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt, FrontScore)
+       VALUES (@stemCID, @arrangeRole, @source, @computedAt, @frontScore)
        ON CONFLICT(StemCID) DO UPDATE SET
          ArrangeRole = excluded.ArrangeRole,
          Source = excluded.Source,
-         ComputedAt = excluded.ComputedAt`
+         ComputedAt = excluded.ComputedAt,
+         FrontScore = excluded.FrontScore`
     )
-    .run({ stemCID, arrangeRole, source, computedAt })
+    .run({ stemCID, arrangeRole, source, computedAt, frontScore })
   // Discover's precomputed per-kind stem lists read this table.
   bumpStemClassificationVersion(ownDb, 'auto')
 }

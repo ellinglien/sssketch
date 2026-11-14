@@ -71,7 +71,7 @@ function freshDb(): Database.Database {
     );
     CREATE TABLE StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
-      ComputedAt INTEGER NOT NULL
+      ComputedAt INTEGER NOT NULL, FrontScore REAL
     );
     CREATE TABLE DiscoverRiffIndexCache (
       SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL, RiffCID TEXT NOT NULL,
@@ -2473,7 +2473,7 @@ describe('background efficiency B3: change detection instead of a TTL', () => {
     seedRiff(own, 'r1', 'jam1', 128, ['s1'])
     const first = await getRiffIndexForDb(own)
     for (let i = 0; i < 50; i += 1) {
-      upsertStemAutoCategory(own, `other-stem-${i}`, 'drums', 'embedding', 2000 + i)
+      upsertStemAutoCategory(own, `other-stem-${i}`, 'drums', 'model', 2000 + i)
     }
     advance(31_000 + 10 * 60_000)
     expect(await getRiffIndexForDb(own)).toBe(first)
@@ -3821,7 +3821,7 @@ describe('kind index layers (scan plan Task 10)', () => {
     expect(await pool(own, 'drums')).toEqual(new Map([['d1', 'tag']]))
     expect(count('scan:discover.kind-index-rows')).toBe(1)
 
-    upsertStemAutoCategory(own, 'mic1', 'drums', 'embedding', 5)
+    upsertStemAutoCategory(own, 'mic1', 'drums', 'model', 5)
     now += 1_000
     expect(await pool(own, 'drums')).toEqual(new Map([['d1', 'tag']])) // up to 10 s stale
     now += 9_500
@@ -3837,14 +3837,14 @@ describe('kind index layers (scan plan Task 10)', () => {
 
   it('a confirmation rebuilds both layers at once', async () => {
     const own = library()
-    upsertStemAutoCategory(own, 'mic1', 'drums', 'embedding', 5)
+    upsertStemAutoCategory(own, 'mic1', 'drums', 'model', 5)
     expect(await pool(own, 'drums')).toEqual(
       new Map([
         ['d1', 'tag'],
         ['mic1', 'guess']
       ])
     )
-    upsertStemAutoCategory(own, 'mic2', 'drums', 'embedding', 6)
+    upsertStemAutoCategory(own, 'mic2', 'drums', 'model', 6)
     upsertStemCategoryRole(own, [{ path: 'mic1', arrangeRole: 'bass' }], 'discover', null, 7)
     expect(await pool(own, 'drums')).toEqual(
       new Map([
@@ -3866,13 +3866,13 @@ describe('kind index layers (scan plan Task 10)', () => {
     const kinds = ['drums', 'bass', 'back', 'front'] as const
     for (const kind of kinds) await pool(own, kind)
     const writes: (() => void)[] = [
-      () => upsertStemAutoCategory(own, 'mic1', 'lead', 'embedding', 10),
-      () => upsertStemAutoCategory(own, 'mic2', 'bass', 'yamnet-zeroshot', 11),
-      () => upsertStemAutoCategory(own, 'c1', 'drums', 'embedding', 12), // confirmed wins
-      () => upsertStemAutoCategory(own, 'd1', 'bass', 'embedding', 13), // the tag wins
+      () => upsertStemAutoCategory(own, 'mic1', 'lead', 'model', 10),
+      () => upsertStemAutoCategory(own, 'mic2', 'bass', 'model', 11),
+      () => upsertStemAutoCategory(own, 'c1', 'drums', 'model', 12), // confirmed wins
+      () => upsertStemAutoCategory(own, 'd1', 'bass', 'model', 13), // the tag wins
       () =>
         upsertStemCategoryRole(own, [{ path: 'mic2', arrangeRole: 'drums' }], 'discover', null, 14),
-      () => upsertStemAutoCategory(own, 'mic1', 'drums', 'centroid', 15)
+      () => upsertStemAutoCategory(own, 'mic1', 'drums', 'model', 15)
     ]
     for (const write of writes) {
       write()

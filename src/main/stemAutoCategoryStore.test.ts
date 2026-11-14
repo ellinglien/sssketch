@@ -14,7 +14,7 @@ function freshDb(): Database.Database {
   db.exec(`
     CREATE TABLE StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
-      ComputedAt INTEGER NOT NULL
+      ComputedAt INTEGER NOT NULL, FrontScore REAL
     );
     CREATE TABLE StemEmbeddingCache (
       StemCID TEXT PRIMARY KEY, EmbeddingJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
@@ -60,15 +60,15 @@ function seedConfirmed(db: Database.Database, stemCID: string, arrangeRole: stri
 describe('upsertStemAutoCategory / getAutoCategorizedStemCIDs', () => {
   it('inserts a new row, readable by role', () => {
     const db = freshDb()
-    upsertStemAutoCategory(db, 's1', 'drums', 'embedding', 1000)
+    upsertStemAutoCategory(db, 's1', 'drums', 'model', 1000)
     expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['s1']))
     expect(getAutoCategorizedStemCIDs(db, 'bass')).toEqual(new Set())
   })
 
   it('overwrites an existing row on conflict rather than throwing', () => {
     const db = freshDb()
-    upsertStemAutoCategory(db, 's1', 'drums', 'embedding', 1000)
-    upsertStemAutoCategory(db, 's1', 'bass', 'centroid', 2000)
+    upsertStemAutoCategory(db, 's1', 'drums', 'model', 1000)
+    upsertStemAutoCategory(db, 's1', 'bass', 'instrumentMask', 2000)
 
     expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set())
     expect(getAutoCategorizedStemCIDs(db, 'bass')).toEqual(new Set(['s1']))
@@ -79,7 +79,29 @@ describe('upsertStemAutoCategory / getAutoCategorizedStemCIDs', () => {
       Source: string
       ComputedAt: number
     }
-    expect(row).toEqual({ Source: 'centroid', ComputedAt: 2000 })
+    expect(row).toEqual({ Source: 'instrumentMask', ComputedAt: 2000 })
+  })
+})
+
+describe('upsertStemAutoCategory FrontScore', () => {
+  const frontScore = (db: Database.Database): unknown =>
+    (
+      db.prepare(`SELECT FrontScore FROM StemAutoCategory WHERE StemCID = 'S1'`).get() as {
+        FrontScore: number | null
+      }
+    ).FrontScore
+
+  it('writes the dial when given one', () => {
+    const db = freshDb()
+    upsertStemAutoCategory(db, 'S1', 'backing', 'model', 123, 0.25)
+    expect(frontScore(db)).toBe(0.25)
+  })
+
+  it('writes NULL without one, and an overwrite clears an old dial', () => {
+    const db = freshDb()
+    upsertStemAutoCategory(db, 'S1', 'backing', 'model', 123, 0.25)
+    upsertStemAutoCategory(db, 'S1', 'drums', 'instrumentMask', 124)
+    expect(frontScore(db)).toBeNull()
   })
 })
 
@@ -101,7 +123,7 @@ describe('getStemAutoClassifyProgress', () => {
     seedFeatures(db, 's2')
     seedEmbedding(db, 's3')
     seedFeatures(db, 's3') // both -- counted once, not twice
-    upsertStemAutoCategory(db, 's1', 'drums', 'embedding', 1000)
+    upsertStemAutoCategory(db, 's1', 'drums', 'model', 1000)
 
     expect(await getStemAutoClassifyProgress(db)).toEqual({
       categorized: 1,
@@ -168,7 +190,7 @@ describe('isStemEligibleForAutoCategory', () => {
     expect(isStemEligibleForAutoCategory(db, 's1')).toBe(false)
   })
 
-  it.each(['embedding', 'centroid', 'yamnet-zeroshot'] as const)(
+  it.each(['model', 'instrumentMask'] as const)(
     'returns false for a stem that already has a StemAutoCategory row (source: %s)',
     (source) => {
       const db = freshDb()
