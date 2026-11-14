@@ -18,13 +18,19 @@ import {
   type CategoryCentroidStore
 } from '@shared/categoryCentroids'
 import {
-  ARRANGE_ROLE_OPTIONS,
   ARRANGE_ROLE_TO_BUS,
   DRUM_SUB_ROLE_OPTIONS,
   DRUM_SUB_ROLE_LABELS,
   type ArrangeRole,
   type DrumSubRole
 } from '@shared/stemRole'
+import {
+  CATEGORY_BUS,
+  CATEGORY_ROLE,
+  STEM_CATEGORY_OPTIONS,
+  categoryOfBus,
+  categoryOfRole
+} from '@shared/stemCategory'
 import { stemTileGeometryFromFields } from '../state/selectors'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
@@ -62,7 +68,8 @@ const LIBRARY_PAGE = 200
 export type TidyUpPopulation = 'sketch' | 'library'
 
 const DEFAULT_CLUSTER_COUNT = 8
-const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
+// One suggested group per category, keyed by the bus a pick of it stores.
+const BUS_IDS: BusId[] = STEM_CATEGORY_OPTIONS.map((c) => CATEGORY_BUS[c])
 
 // Shared across every unsplit suggested group so `.get(busId) ?? EMPTY_NODE_ID_SET`
 // doesn't allocate a fresh empty Set on every render.
@@ -619,7 +626,9 @@ export function ClusterStemsBrowser({
       // own 8 buttons.
       const presetGuess = guessArrangeRoleFromPresetName(stem.presetName)
       const presetSuggestedBus = presetGuess ? ARRANGE_ROLE_TO_BUS[presetGuess.arrangeRole] : null
-      const suggestedBus = embeddingSuggestedBus ?? centroidSuggestedBus ?? presetSuggestedBus
+      const rawSuggestedBus = embeddingSuggestedBus ?? centroidSuggestedBus ?? presetSuggestedBus
+      // aux reads as back, so a stored aux guess joins the back group.
+      const suggestedBus = rawSuggestedBus ? CATEGORY_BUS[categoryOfBus(rawSuggestedBus)] : null
       if (suggestedBus) {
         const list = suggestions.get(suggestedBus) ?? []
         list.push(stem)
@@ -990,10 +999,8 @@ export function ClusterStemsBrowser({
     })
   }
 
-  // Arrow keys move focus between rows; number keys 1-8 assign the focused
-  // row's cluster to the corresponding category (ARRANGE_ROLE_OPTIONS[0..7],
-  // extended from the original 1-5/BUS_IDS[0..4] range when the picker grew
-  // to 8 categories, 2026-09-14). Escape closes the modal, matching this
+  // Arrow keys move focus between rows; number keys 1-4 assign the focused
+  // row's cluster to the corresponding category (STEM_CATEGORY_OPTIONS). Escape closes the modal, matching this
   // app's existing modal-dismiss convention.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
@@ -1011,12 +1018,12 @@ export function ClusterStemsBrowser({
         setFocusedId(clusters[prev]?.id ?? null)
       } else if (e.key === 'Escape') {
         handleClose()
-      } else if (e.key >= '1' && e.key <= '8') {
+      } else if (e.key >= '1' && e.key <= '4') {
         const categoryIndex = Number(e.key) - 1
-        const category = ARRANGE_ROLE_OPTIONS[categoryIndex]
+        const category = STEM_CATEGORY_OPTIONS[categoryIndex]
         const activeCluster = clusters[clampedFocusedIndex]
         if (category && activeCluster) {
-          assignCluster(activeCluster.id, activeCluster.members, category)
+          assignCluster(activeCluster.id, activeCluster.members, CATEGORY_ROLE[category])
         }
       }
     }
@@ -1262,9 +1269,8 @@ function ClusterRow({
   population
 }: {
   members: ClusterableStem[]
-  /** One of ARRANGE_ROLE_OPTIONS' 8 values -- see ARRANGE_ROLE_TO_BUS's own
-   * doc comment (shared/stemRole.ts) for how the 3 without a real bus
-   * (textureFx/fill/vocal) still resolve to a concrete BusId assignment. */
+  /** The stored role of the picked category (CATEGORY_ROLE); its bus is
+   * ARRANGE_ROLE_TO_BUS of it. */
   onAssign: (category: ArrangeRole) => void
   /** Only ever fires for 'kick'/'snare'/'hihat'/'clap'/'perc' -- write-only,
    * same as onAssign for the 3 bus-less categories: there's no persisted
@@ -1417,14 +1423,15 @@ function ClusterRow({
           </button>
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {ARRANGE_ROLE_OPTIONS.map((category, i) => (
+          {STEM_CATEGORY_OPTIONS.map((category, i) => (
             <button
               key={category}
-              onClick={() => onAssign(category)}
+              onClick={() => onAssign(CATEGORY_ROLE[category])}
               style={buttonStyle(
-                assignedRole === category || assignedBus === ARRANGE_ROLE_TO_BUS[category]
+                (assignedRole && categoryOfRole(assignedRole) === category) ||
+                  (assignedBus && categoryOfBus(assignedBus) === category)
                   ? 'confirmed'
-                  : suggestedBus === category
+                  : suggestedBus && categoryOfBus(suggestedBus) === category
                     ? 'suggested'
                     : undefined
               )}

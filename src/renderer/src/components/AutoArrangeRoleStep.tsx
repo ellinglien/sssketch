@@ -845,11 +845,10 @@ export function AutoArrangeRoleStep({
       </div>
       {/* Rendered ONCE, outside the row loop -- it is position: fixed and
           positions itself off the clicked button's rect, so one instance
-          serves every row. DISCOVER_RECLASSIFY_ROLES is all eight
-          ArrangeRole values (the three mask-kind roles plus every
-          ARRANGE_ROLE_OPTIONS entry without a mask kind), so no role is
-          lost with the two selects. There is no drum sub-role here, by
-          design: the picker is not extended, and a sub-role is set in Tidy
+          serves every row. DISCOVER_RECLASSIFY_ROLES is the four
+          categories (each stored as its CATEGORY_ROLE). There is no drum
+          sub-role here, by design: the picker is not extended, and a
+          sub-role is set in Tidy
           Up (this step still READS one back through engineRoleFor). */}
       {picker !== null && (
         <DiscoverReclassifyPicker

@@ -16,7 +16,6 @@ import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { DiscoverKindPicker } from './DiscoverKindPicker'
 import { DiscoverReclassifyPicker } from './DiscoverReclassifyPicker'
-import { ROLE_LABELS } from '@shared/autoArrangeLabels'
 import { stemColorVar } from '../theme/typeColor'
 import {
   discoverSlotKindToArrangeRole,
@@ -698,7 +697,7 @@ export function DiscoverSlotRow({
       barUsed: fromRoll ? (slot.pickBar?.barUsed ?? null) : null,
       barRequested: slot.pickBar?.barRequested,
       reclassified: reclassified
-        ? { role: reclassified.role, label: discoverRoleLabel(reclassified.role, ROLE_LABELS) }
+        ? { role: reclassified.role, label: discoverRoleLabel(reclassified.role) }
         : undefined
     }).filter((entry) => entry.type === 'mask' || fromRoll)
   }, [slot.candidate, slot.kinds, slot.pickBar, slot.reclassified])

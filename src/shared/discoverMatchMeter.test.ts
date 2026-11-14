@@ -213,25 +213,14 @@ describe('reclassifyKindSources', () => {
 })
 
 describe('reclassify roles', () => {
-  it("lists Discover's mask kinds first, then the other Tidy Up roles", () => {
-    expect(DISCOVER_RECLASSIFY_ROLES).toEqual([
-      'drums',
-      'bass',
-      'lead',
-      'backing',
-      'aux',
-      'textureFx',
-      'fill',
-      'vocal'
-    ])
+  it('offers the four categories to reclassify, as stored roles', () => {
+    expect(DISCOVER_RECLASSIFY_ROLES).toEqual(['drums', 'bass', 'backing', 'lead'])
   })
 
-  it('labels mask roles with their Discover label, others from the given table', () => {
-    const labels = { textureFx: 'texture/fx' }
-    expect(discoverRoleLabel('drums', labels)).toBe('drummy')
-    expect(discoverRoleLabel('lead', labels)).toBe('leadesque')
-    expect(discoverRoleLabel('textureFx', labels)).toBe('texture/fx')
-    expect(discoverRoleLabel('vocal', labels)).toBe('vocal')
+  it('labels a role by its category', () => {
+    expect(discoverRoleLabel('textureFx')).toBe('back')
+    expect(discoverRoleLabel('vocal')).toBe('front')
+    expect(discoverRoleLabel('fill')).toBe('drums')
   })
 })
 

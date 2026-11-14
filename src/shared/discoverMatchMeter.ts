@@ -4,9 +4,9 @@
 // promise-vs-delivery-design.md, Phase 2. Pure formatting only: which
 // entries a slot row shows for its picked stem, their text, and their hover
 // text. DiscoverPanel's DiscoverSlotRow renders the result.
-import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from './stemRole'
+import type { ArrangeRole } from './stemRole'
+import { CATEGORY_ROLE, STEM_CATEGORY_OPTIONS, categoryOfRole } from './stemCategory'
 import {
-  DISCOVER_MASK_SLOT_KINDS,
   DISCOVER_SLOT_KIND_LABEL,
   discoverSlotKindToArrangeRole,
   isMaskSlotKind,
@@ -181,24 +181,12 @@ export function reclassifyKindSources(
   return out
 }
 
-function maskKindForRole(role: ArrangeRole): DiscoverSlotKind | undefined {
-  return DISCOVER_MASK_SLOT_KINDS.find((k) => discoverSlotKindToArrangeRole(k) === role)
-}
+/** The reclassify picker's roles: one per category, as the stored role a pick writes. */
+export const DISCOVER_RECLASSIFY_ROLES: ArrangeRole[] = STEM_CATEGORY_OPTIONS.map(
+  (c) => CATEGORY_ROLE[c]
+)
 
-/** The reclassify picker's roles: Discover's own three mask kinds first
- * (drummy, bassish, leadesque), then every other Tidy Up role in
- * ARRANGE_ROLE_OPTIONS order. */
-export const DISCOVER_RECLASSIFY_ROLES: ArrangeRole[] = [
-  ...DISCOVER_MASK_SLOT_KINDS.map(discoverSlotKindToArrangeRole),
-  ...ARRANGE_ROLE_OPTIONS.filter((r) => maskKindForRole(r) === undefined)
-]
-
-/** Display text for a role in Discover: a mask kind's playful label
- * (drums -> drummy) where one exists, else the caller's own label table
- * (the renderer's ROLE_LABELS -- textureFx -> texture/fx), else the raw
- * value. */
-export function discoverRoleLabel(role: ArrangeRole, otherLabels: Record<string, string>): string {
-  const kind = maskKindForRole(role)
-  if (kind) return DISCOVER_SLOT_KIND_LABEL[kind]
-  return otherLabels[role] ?? role
+/** Display text for a role in Discover: its category word. */
+export function discoverRoleLabel(role: ArrangeRole): string {
+  return categoryOfRole(role)
 }
