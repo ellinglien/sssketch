@@ -1050,7 +1050,7 @@ async function buildInstrumentRows(
  * clause -- the role filter only ever happens in JS, after the fetch) used
  * to be re-run from scratch for EVERY ArrangeRole not yet cached, even
  * though every role reads the exact same rows -- only the JS-side bitmask
- * check differs. Rolling 'drums' then 'bass' then 'lead' in the same
+ * check differs. Rolling 'drums' then 'bass' then 'front' in the same
  * session each independently paid a real ~6.5s cold scan against the
  * external archive for identical data. Caching the raw rows here (fast
  * per-role JS filtering happens fresh every call in
@@ -1468,7 +1468,7 @@ async function buildMaskKindIndex(
       const soundType = row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
       if (soundType === 'drums') admit('drums', row, 'tag')
       else if (soundType === 'bass') admit('bass', row, 'tag')
-      else if (soundType === 'notes') admit('lead', row, 'tag')
+      else if (soundType === 'notes') admit('front', row, 'tag')
       else residue.push(row)
     }
     sinceYield += 1

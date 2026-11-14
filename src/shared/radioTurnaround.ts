@@ -460,7 +460,7 @@ const isMelodic = (r: TurnaroundRow): boolean => !isLow(r)
 export function turnaroundStopKeeper(audible: readonly TurnaroundRow[]): TurnaroundRow | null {
   return (
     audible.find((r) => r.hooked && isMelodic(r)) ??
-    audible.find((r) => isMelodic(r) && r.kinds.includes('lead')) ??
+    audible.find((r) => isMelodic(r) && r.kinds.includes('front')) ??
     audible.find(isMelodic) ??
     null
   )

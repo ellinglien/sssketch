@@ -159,7 +159,8 @@ export const INTENSITY_ROLE_WEIGHT: Readonly<Record<DiscoverSlotKind, number>> =
   bass: 1,
   bassHeavy: 0.8,
   rhythmic: 0.8,
-  lead: 0.35,
+  front: 0.35,
+  back: 0.25,
   bright: 0.35,
   warm: 0.25
 }

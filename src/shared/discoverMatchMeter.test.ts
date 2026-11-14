@@ -49,17 +49,17 @@ describe('buildMatchMeter', () => {
       {
         type: 'mask',
         kind: 'drums',
-        label: 'drummy',
+        label: 'drums',
         source: 'tag',
-        text: 'drummy: tag',
+        text: 'drums: tag',
         tooltip: 'endlesss instrument tag'
       },
       {
         type: 'mask',
         kind: 'bass',
-        label: 'bassish',
+        label: 'bass',
         source: 'guess',
-        text: 'bassish: guess',
+        text: 'bass: guess',
         tooltip: "classifier's guess"
       }
     ])
@@ -67,12 +67,12 @@ describe('buildMatchMeter', () => {
 
   it('omits a mask kind with no source (another mask kind of the set admitted the stem)', () => {
     const entries = buildMatchMeter({
-      kinds: ['drums', 'lead'],
-      kindSources: { lead: 'confirmed' },
+      kinds: ['drums', 'front'],
+      kindSources: { front: 'confirmed' },
       traitPercentiles: {},
       barUsed: null
     })
-    expect(entries.map((e) => e.text)).toEqual(['leadesque: confirmed'])
+    expect(entries.map((e) => e.text)).toEqual(['front: confirmed'])
     expect(entries[0].tooltip).toBe('confirmed by you')
   })
 
@@ -155,7 +155,7 @@ describe('buildMatchMeter', () => {
       barUsed: 0.6,
       barRequested: 0.6
     })
-    expect(entries.map((e) => e.text)).toEqual(['drummy: tag', 'sparkly ▮▮▮▮▮'])
+    expect(entries.map((e) => e.text)).toEqual(['drums: tag', 'sparkly ▮▮▮▮▮'])
   })
 
   it('a reclassified role no slot kind covers shows as its own confirmed entry', () => {
@@ -184,9 +184,9 @@ describe('buildMatchMeter', () => {
       kindSources: { drums: 'confirmed' },
       traitPercentiles: {},
       barUsed: null,
-      reclassified: { role: 'drums', label: 'drummy' }
+      reclassified: { role: 'drums', label: 'drums' }
     })
-    expect(entries.map((e) => e.text)).toEqual(['drummy: confirmed'])
+    expect(entries.map((e) => e.text)).toEqual(['drums: confirmed'])
   })
 })
 
@@ -297,10 +297,10 @@ describe('compactRadioMeter', () => {
   const mask: MatchMeterEntry = {
     type: 'mask',
     kind: 'drums',
-    label: 'drummy',
+    label: 'drums',
     source: 'tag',
-    text: 'drummy: tag',
-    tooltip: 'drummy: tag'
+    text: 'drums: tag',
+    tooltip: 'drums: tag'
   }
   const trait: MatchMeterEntry = {
     type: 'trait',

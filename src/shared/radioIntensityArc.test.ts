@@ -313,7 +313,7 @@ describe('the clock', () => {
 
   it('decides one wrap ahead (binding), and prepares a phrase ahead of the decision', () => {
     const bed = (): SimRow[] =>
-      (['drums', 'bass', 'lead', 'warm'] as const).map((k, i) => ({
+      (['drums', 'bass', 'front', 'warm'] as const).map((k, i) => ({
         id: `b${i}`,
         kinds: [k],
         score: 0.5,
@@ -524,7 +524,7 @@ describe('the breakdown', () => {
       R('d1', ['drums'], { score: 0.9 }),
       R('d2', ['drums'], { score: 0.2 }),
       R('b', ['bass']),
-      R('l', ['lead']),
+      R('l', ['front']),
       R('w', ['warm'])
     ]
     expect(radioBreakdownRests(bed, 'swell', false).rest).toEqual([])
@@ -550,10 +550,10 @@ describe('the breakdown', () => {
     const bed = [
       R('a', ['drums'], { score: null, staleness: 1 }),
       R('b', ['drums'], { score: 0.5, staleness: 9 }),
-      R('l', ['lead'])
+      R('l', ['front'])
     ]
     expect(radioBreakdownRests(bed, 'thin', false).rest).toEqual(['a'])
-    const locked = [R('a', ['drums'], { restable: false }), R('b', ['drums']), R('l', ['lead'])]
+    const locked = [R('a', ['drums'], { restable: false }), R('b', ['drums']), R('l', ['front'])]
     expect(radioBreakdownRests(locked, 'thin', false).rest).toEqual(['b'])
   })
 
@@ -561,13 +561,13 @@ describe('the breakdown', () => {
     const bed = [R('d', ['drums']), R('b', ['bass'])]
     expect(radioBreakdownRests(bed, 'full', true)).toMatchObject({ rest: ['d', 'b'], carry: true })
     expect(radioBreakdownRests(bed, 'full', false)).toMatchObject({ depth: 'thin', rest: ['b'] })
-    expect(radioCarryKind([{ kinds: ['drums'] }])).toBe('lead')
-    expect(radioCarryKind([{ kinds: ['lead'] }])).toBe('warm')
+    expect(radioCarryKind([{ kinds: ['drums'] }])).toBe('front')
+    expect(radioCarryKind([{ kinds: ['front'] }])).toBe('warm')
   })
 
   it('never silence: something always sounds (10k random beds)', () => {
     const r = seededRandom('never-silence')
-    const kinds: DiscoverSlotKind[] = ['drums', 'bass', 'lead', 'warm', 'bright', 'rhythmic']
+    const kinds: DiscoverSlotKind[] = ['drums', 'bass', 'front', 'warm', 'bright', 'rhythmic']
     for (let i = 0; i < 10000; i++) {
       const n = 1 + Math.floor(r() * 6)
       const bed: RadioIntensityRow[] = Array.from({ length: n }, (_, j) => {
@@ -685,7 +685,7 @@ describe('the drop', () => {
       rows: [
         { id: 'd', kinds: ['drums'], score: 0.5, staleness: 0, sounding: false, restable: false },
         { id: 'b', kinds: ['bass'], score: 0.5, staleness: 0, sounding: false, restable: false },
-        { id: 'l', kinds: ['lead'], score: 0.5, staleness: 0, sounding: true, restable: true }
+        { id: 'l', kinds: ['front'], score: 0.5, staleness: 0, sounding: true, restable: true }
       ],
       canAdd: false,
       canStrip: false,
@@ -1131,7 +1131,7 @@ describe('draws (section 3.5)', () => {
       rows: [
         { id: 'd', kinds: ['drums'], score: 0.5, staleness: 0, sounding: true, restable: true },
         { id: 'b', kinds: ['bass'], score: 0.5, staleness: 0, sounding: true, restable: true },
-        { id: 'l', kinds: ['lead'], score: 0.5, staleness: 0, sounding: true, restable: true }
+        { id: 'l', kinds: ['front'], score: 0.5, staleness: 0, sounding: true, restable: true }
       ],
       canAdd: false,
       canStrip: false,
@@ -1356,7 +1356,7 @@ describe('radioBuildLightenRows: the heavy drums and bass a build starts without
       lowRow('d1', ['drums'], 0.6),
       lowRow('d2', ['drums'], 0.9),
       lowRow('b', ['bass'], 0.7),
-      lowRow('lead', ['lead'], 0.95)
+      lowRow('front', ['front'], 0.95)
     ]
     expect(radioBuildLightenRows(rows, 0.38)).toEqual(['d2', 'b'])
     // at or under target + margin: kept
@@ -1397,7 +1397,7 @@ describe('the ride prepares the next build low, and its cycle renews the heavy d
   const rows = [
     lowRow('d', ['drums'], 0.85),
     lowRow('b', ['bass'], 0.8),
-    lowRow('l', ['lead'], 0.4),
+    lowRow('l', ['front'], 0.4),
     lowRow('w', ['warm'], 0.3)
   ]
   const input = (o: Partial<RadioIntensityStepInput>): RadioIntensityStepInput => ({
@@ -1507,7 +1507,7 @@ describe('the ride prepares the next build low, and its cycle renews the heavy d
       lowRow('d1', ['drums'], 0.9),
       lowRow('d2', ['drums'], 0.7),
       lowRow('b', ['bass'], 0.8),
-      lowRow('l', ['lead'], 0.4)
+      lowRow('l', ['front'], 0.4)
     ]
     expect(radioBuildLightenRows(two, 0.14)).toEqual(['d1', 'b'])
     expect(radioBuildLightenRows(two, 0.14, 'd1')).toEqual(['d2', 'b'])
@@ -1534,7 +1534,7 @@ describe('the ride prepares the next build low, and its cycle renews the heavy d
     const rested = [
       lowRow('d', ['drums'], 0.3, { sounding: false, restable: false }),
       lowRow('b', ['bass'], 0.8, { sounding: false, restable: false }),
-      lowRow('l', ['lead'], 0.4),
+      lowRow('l', ['front'], 0.4),
       lowRow('w', ['warm'], 0.3)
     ]
     const bd: RadioIntensityArc = {
@@ -1601,7 +1601,7 @@ describe('radioRowsAfterDrop: the rows as a drop leaves them (option C prepare)'
     lowRow('d', ['drums'], 0.2, { sounding: false, restable: false }),
     lowRow('b', ['bass'], 0.6, { sounding: false, restable: false }),
     lowRow('p', ['drums'], 0.3),
-    lowRow('l', ['lead'], 0.5)
+    lowRow('l', ['front'], 0.5)
   ]
   it('decided: the returning rows sound, the renewed rows read hi', () => {
     expect(radioRowsAfterDrop(rows, d, 0.8, false)).toEqual([

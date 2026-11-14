@@ -49,7 +49,7 @@ function row(
 const BED: TurnaroundRow[] = [
   row('d', ['drums']),
   row('b', ['bass']),
-  row('l', ['lead']),
+  row('l', ['front']),
   row('w', ['warm'])
 ]
 
@@ -196,10 +196,10 @@ describe('the guards (turnaroundDraw)', () => {
   })
 
   it('a drum drop needs a drums row; a low drop a drums or a bass row', () => {
-    const melodic = [row('l', ['lead']), row('w', ['warm'])]
+    const melodic = [row('l', ['front']), row('w', ['warm'])]
     // the stop is still in: it drops the warm row and keeps the lead
     expect(draw({ rows: melodic })).toEqual(['stop', 'wash', 'lift', 'dip', 'riser'])
-    const bassAndLead = [row('b', ['bass']), row('l', ['lead'])]
+    const bassAndLead = [row('b', ['bass']), row('l', ['front'])]
     expect(draw({ rows: bassAndLead })).toEqual([
       'low drop',
       'stop',
@@ -211,7 +211,7 @@ describe('the guards (turnaroundDraw)', () => {
   })
 
   it('drops and the stop need two audible rows; a row not heard does not count', () => {
-    const lonely = [row('d', ['drums']), row('l', ['lead'], { audible: false })]
+    const lonely = [row('d', ['drums']), row('l', ['front'], { audible: false })]
     expect(draw({ rows: lonely })).toEqual(['riser'])
   })
 
@@ -263,11 +263,11 @@ describe('which rows', () => {
       turnaroundStopKeeper([
         row('d', ['drums'], { hooked: true }),
         row('w', ['warm']),
-        row('l', ['lead'])
+        row('l', ['front'])
       ])?.id
     ).toBe('l')
     expect(
-      turnaroundStopKeeper([row('l', ['lead']), row('w', ['warm'], { hooked: true })])?.id
+      turnaroundStopKeeper([row('l', ['front']), row('w', ['warm'], { hooked: true })])?.id
     ).toBe('w')
     expect(turnaroundStopKeeper([row('b', ['bass']), row('w', ['warm'])])?.id).toBe('w')
     expect(turnaroundStopKeeper([row('d', ['drums']), row('b', ['bass', 'warm'])])).toBeNull()
@@ -275,7 +275,7 @@ describe('which rows', () => {
   })
 
   it("the stop is never longer than the kept row's own loop", () => {
-    const rows = [row('d', ['drums']), row('l', ['lead'], { barLength: 0.25 })]
+    const rows = [row('d', ['drums']), row('l', ['front'], { barLength: 0.25 })]
     const plan = rollTurnaround(input({ rows, random: seq([0, 0.45, 0.9]) }))
     expect(plan?.move).toBe('stop')
     expect(plan?.beats).toBe(1)

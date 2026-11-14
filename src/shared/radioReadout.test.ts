@@ -29,7 +29,7 @@ const input = (over: Partial<RadioReadoutInput> = {}): RadioReadoutInput => ({
   nextChange: null,
   armedTurnaround: null,
   arc: { state: 'off', count: 3, target: 3 },
-  rows: [row('a'), row('b', { kinds: ['bass'] }), row('c', { kinds: ['lead'] })],
+  rows: [row('a'), row('b', { kinds: ['bass'] }), row('c', { kinds: ['front'] })],
   ...over
 })
 
@@ -175,7 +175,7 @@ describe('radioReadoutArc', () => {
 describe('radioRowLabel', () => {
   it('the first mask kind and the trait it was picked for', () => {
     expect(radioRowLabel(row('a', { kinds: ['bright', 'drums'] }))).toBe('drums · bright')
-    expect(radioRowLabel(row('a', { kinds: ['lead', 'bass', 'warm'] }))).toBe('bass · warm')
+    expect(radioRowLabel(row('a', { kinds: ['front', 'bass', 'warm'] }))).toBe('bass · warm')
     expect(radioRowLabel(row('a', { kinds: ['drums', 'bassHeavy'] }))).toBe('drums · heavy')
   })
 
@@ -206,7 +206,7 @@ describe('radioRowLabel', () => {
       'drums · bright — elling'
     )
     expect(radioRowLabel(row('a', { kinds: [], author: 'elling' }))).toBe('elling')
-    expect(radioRowLabel(row('a', { kinds: ['lead'], author: '  ' }))).toBe('lead')
+    expect(radioRowLabel(row('a', { kinds: ['front'], author: '  ' }))).toBe('front')
   })
 })
 

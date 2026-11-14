@@ -91,7 +91,7 @@ const MELODIC: { subtle: WeightTable; bold: WeightTable } = {
  * and fall to PADDY, which is where a sweep and a bloom belong. */
 function tableFor(temperament: 'subtle' | 'bold', kinds: readonly DiscoverSlotKind[]): WeightTable {
   if (kinds.includes('drums')) return DRUMMY[temperament]
-  if (kinds.includes('bass') || kinds.includes('lead')) return MELODIC[temperament]
+  if (kinds.includes('bass') || kinds.includes('front')) return MELODIC[temperament]
   if (kinds.length > 0) return PADDY[temperament]
   return { cut: 1 }
 }

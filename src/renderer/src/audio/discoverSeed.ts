@@ -21,7 +21,7 @@ import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
 export function discoverSlotKindForSoundType(soundType: SoundType): DiscoverSlotKind {
   if (soundType === 'drums') return 'drums'
   if (soundType === 'bass') return 'bass'
-  if (soundType === 'notes') return 'lead'
+  if (soundType === 'notes') return 'front'
   return 'bright'
 }
 

@@ -278,7 +278,7 @@ export function radioBreakdownCarrier(r: RadioIntensityRow): boolean {
 export function radioCarryKind(
   rows: readonly { kinds: readonly DiscoverSlotKind[] }[]
 ): DiscoverSlotKind {
-  return rows.some((r) => r.kinds.includes('lead')) ? 'warm' : 'lead'
+  return rows.some((r) => r.kinds.includes('front')) ? 'warm' : 'front'
 }
 
 /**

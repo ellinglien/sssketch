@@ -1646,12 +1646,12 @@ describe('getDiscoverCandidates (kind sets)', () => {
     const micOnly = await getDiscoverCandidates({
       ownDb: own,
       jams,
-      kinds: ['lead'],
+      kinds: ['front'],
       soundSource: endlesssOff
     })
     expect(micOnly.map((c) => c.stemCID)).toEqual(['mic'])
     expect(
-      await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'], soundSource: audioInOff })
+      await getDiscoverCandidates({ ownDb: own, jams, kinds: ['front'], soundSource: audioInOff })
     ).toEqual([])
   })
 
@@ -2093,7 +2093,7 @@ describe('background efficiency B1: trait values from the in-memory table', () =
 describe('background efficiency B2: per-kind stem lists', () => {
   const MASKS = [null, 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, (1 << 4) | (1 << 1), 1 << 6]
   const ROLES = ['drums', 'bass', 'lead', 'aux']
-  type Kind = 'drums' | 'bass' | 'lead'
+  type Kind = 'drums' | 'bass' | 'front'
 
   /** The pre-B2 walk (getMaskKindStemMasks + getMaskDiscoverCandidates's
    * confirmed/sound-source steps), written out plainly -- the reference the
@@ -2142,7 +2142,7 @@ describe('background efficiency B2: per-kind stem lists', () => {
         const ok = placed
           ? (t === 'drums' && kind === 'drums') ||
             (t === 'bass' && kind === 'bass') ||
-            (t === 'notes' && kind === 'lead')
+            (t === 'notes' && kind === 'front')
           : auto.get(row.StemCID) === kind
         if (ok)
           admitted.set(row.StemCID, {
@@ -2287,13 +2287,13 @@ describe('background efficiency B2: per-kind stem lists', () => {
     seedRiff(own, 'r1', 'jam1', 120, ['mic'])
     seedStem(own, 'mic', 'jam1', { instrument: 1 << 4 })
     const jams = [{ jamCID: 'jam1', dbForJam: own }]
-    expect(await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'] })).toEqual([])
+    expect(await getDiscoverCandidates({ ownDb: own, jams, kinds: ['front'] })).toEqual([])
     seedAutoCategory(own, 'mic', 'lead')
     // The guess layer rebuilds at most every GUESS_LAYER_MIN_MS (scan plan
     // Task 10): the signal still sees the write, on the next rebuild.
     now += 10_000
-    const lead = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'] })
-    expect(lead.map((c) => [c.stemCID, c.kindSources.lead])).toEqual([['mic', 'guess']])
+    const lead = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['front'] })
+    expect(lead.map((c) => [c.stemCID, c.kindSources.front])).toEqual([['mic', 'guess']])
     vi.restoreAllMocks()
   })
 })
@@ -3745,7 +3745,7 @@ describe('kind index layers (scan plan Task 10)', () => {
 
   async function pool(
     own: Database.Database,
-    kind: 'drums' | 'bass' | 'lead'
+    kind: 'drums' | 'bass' | 'front'
   ): Promise<Map<string, string | undefined>> {
     const got = await getDiscoverCandidates({ ownDb: own, jams: jamsOf(own), kinds: [kind] })
     return new Map(got.map((c) => [c.stemCID, c.kindSources[kind]]))
@@ -3754,7 +3754,7 @@ describe('kind index layers (scan plan Task 10)', () => {
   /** The same library, indexed from scratch (a fresh connection). */
   async function fromScratch(
     own: Database.Database,
-    kind: 'drums' | 'bass' | 'lead'
+    kind: 'drums' | 'bass' | 'front'
   ): Promise<Map<string, string | undefined>> {
     return pool(new Database(own.serialize()), kind)
   }

@@ -35,9 +35,9 @@ const climax: LockedClimax = {
   barLength: 4,
   lockedAt: 0,
   stems: [
-    stem('/hook.wav', ['lead', 'bright'], 'lead'),
+    stem('/hook.wav', ['front', 'bright'], 'lead'),
     stem('/kick.wav', ['drums'], 'drums'),
-    stem('/lead.wav', ['lead', 'warm'], 'lead'),
+    stem('/lead.wav', ['front', 'warm'], 'lead'),
     stem('/bass.wav', ['bass'], 'bass')
   ]
 }

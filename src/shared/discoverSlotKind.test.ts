@@ -12,17 +12,20 @@ import {
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
+  parseSlotKind,
+  rankKindsOf,
   toggleSlotKind,
   slotKindsLabel,
   slotKindsKey
 } from './discoverSlotKind'
 
 describe('DISCOVER_SLOT_KIND_OPTIONS', () => {
-  it('lists exactly the 7 kinds, mask kinds first', () => {
+  it('lists exactly the 8 kinds, mask kinds first', () => {
     expect(DISCOVER_SLOT_KIND_OPTIONS).toEqual([
       'drums',
       'bass',
-      'lead',
+      'back',
+      'front',
       'bassHeavy',
       'rhythmic',
       'bright',
@@ -41,17 +44,18 @@ describe('DISCOVER_SLOT_KIND_OPTIONS', () => {
 })
 
 describe('discoverSlotKindToArrangeRole', () => {
-  it('is identity for the 3 mask kinds', () => {
+  it('maps the 4 mask kinds to a stored role', () => {
     expect(discoverSlotKindToArrangeRole('drums')).toBe('drums')
     expect(discoverSlotKindToArrangeRole('bass')).toBe('bass')
-    expect(discoverSlotKindToArrangeRole('lead')).toBe('lead')
+    expect(discoverSlotKindToArrangeRole('back')).toBe('backing')
+    expect(discoverSlotKindToArrangeRole('front')).toBe('lead')
   })
 
   it('maps the 4 trait kinds to a fixed approximation', () => {
     expect(discoverSlotKindToArrangeRole('bassHeavy')).toBe('bass')
     expect(discoverSlotKindToArrangeRole('rhythmic')).toBe('drums')
     expect(discoverSlotKindToArrangeRole('bright')).toBe('lead')
-    expect(discoverSlotKindToArrangeRole('warm')).toBe('aux')
+    expect(discoverSlotKindToArrangeRole('warm')).toBe('backing')
   })
 
   it('covers every DiscoverSlotKind with no missing entry', () => {
@@ -62,8 +66,8 @@ describe('discoverSlotKindToArrangeRole', () => {
 })
 
 describe('isMaskSlotKind / isTraitSlotKind', () => {
-  it('splits the 7 kinds into 3 mask + 4 trait', () => {
-    expect(['drums', 'bass', 'lead'].every((k) => isMaskSlotKind(k as never))).toBe(true)
+  it('splits the 8 kinds into 4 mask + 4 trait', () => {
+    expect(['drums', 'bass', 'back', 'front'].every((k) => isMaskSlotKind(k as never))).toBe(true)
     expect(
       ['bassHeavy', 'rhythmic', 'bright', 'warm'].every((k) => isTraitSlotKind(k as never))
     ).toBe(true)
@@ -117,7 +121,7 @@ describe('toggleSlotKind', () => {
 
 describe('slotKindsLabel / slotKindsKey', () => {
   it('joins display labels with a middle dot, canonical order', () => {
-    expect(slotKindsLabel(['warm', 'bassHeavy', 'drums'])).toBe('drummy · chonky · buttery')
+    expect(slotKindsLabel(['warm', 'bassHeavy', 'drums'])).toBe('drums · chonky · buttery')
   })
 
   it('key is order-independent', () => {
@@ -125,11 +129,12 @@ describe('slotKindsLabel / slotKindsKey', () => {
     expect(slotKindsKey(['warm', 'drums'])).toBe('drums+warm')
   })
 
-  it('DISCOVER_SLOT_KIND_LABEL uses the playful display names', () => {
+  it('DISCOVER_SLOT_KIND_LABEL: plain words for categories, playful for traits', () => {
     expect(DISCOVER_SLOT_KIND_LABEL).toEqual({
-      drums: 'drummy',
-      bass: 'bassish',
-      lead: 'leadesque',
+      drums: 'drums',
+      bass: 'bass',
+      back: 'back',
+      front: 'front',
       bassHeavy: 'chonky',
       rhythmic: 'rhythmic',
       bright: 'sparkly',
@@ -139,29 +144,47 @@ describe('slotKindsLabel / slotKindsKey', () => {
 })
 
 describe('arrangeRoleToSlotKinds', () => {
-  it('is the identity for the three mask roles', () => {
-    expect(arrangeRoleToSlotKinds('drums')).toEqual(['drums'])
-    expect(arrangeRoleToSlotKinds('bass')).toEqual(['bass'])
-    expect(arrangeRoleToSlotKinds('lead')).toEqual(['lead'])
-  })
-
-  it('calls a backing part the harmony, which is what an intro loses', () => {
-    expect(arrangeRoleToSlotKinds('backing')).toEqual(['lead', 'warm'])
+  it('gives each stored role its category kind', () => {
+    expect(arrangeRoleToSlotKinds('lead')).toEqual(['front'])
+    expect(arrangeRoleToSlotKinds('vocal')).toEqual(['front'])
+    expect(arrangeRoleToSlotKinds('backing')).toEqual(['back'])
+    expect(arrangeRoleToSlotKinds('aux')).toEqual(['back'])
+    expect(arrangeRoleToSlotKinds('textureFx')).toEqual(['back', 'warm'])
+    expect(arrangeRoleToSlotKinds('fill')).toEqual(['drums', 'rhythmic'])
   })
 
   it('never calls anything the hook -- the app cannot tell a hook apart', () => {
     for (const role of ARRANGE_ROLE_OPTIONS) {
-      expect(kindsCoverSet(arrangeRoleToSlotKinds(role), ['lead', 'bright'])).toBe(false)
+      expect(kindsCoverSet(arrangeRoleToSlotKinds(role), ['front', 'bright'])).toBe(false)
     }
-  })
-
-  it('gives the generic catch-all nothing, so it is never a suggested drop', () => {
-    expect(arrangeRoleToSlotKinds('aux')).toEqual([])
   })
 
   it('answers for every role the dropdown can produce', () => {
     for (const role of ARRANGE_ROLE_OPTIONS) {
       expect(ARRANGE_ROLE_SLOT_KINDS[role]).toBeDefined()
     }
+  })
+})
+
+describe('four categories', () => {
+  it('has the four categories as mask kinds', () => {
+    expect(DISCOVER_MASK_SLOT_KINDS).toEqual(['drums', 'bass', 'back', 'front'])
+    expect(DISCOVER_SLOT_KIND_LABEL.bright).toBe('sparkly')
+  })
+
+  it('reads a saved lead as front', () => {
+    expect(parseSlotKind('lead')).toBe('front')
+    expect(parseSlotKind('back')).toBe('back')
+    expect(parseSlotKind('nope')).toBeNull()
+    expect(parseSlotKind(3)).toBeNull()
+  })
+
+  it('ranks by traits and the dial', () => {
+    expect(rankKindsOf(['front', 'bright', 'drums'])).toEqual(['front', 'bright'])
+    expect(rankKindsOf(['drums'])).toEqual([])
+  })
+
+  it('orders mask kinds first', () => {
+    expect(normalizeSlotKinds(['warm', 'front', 'back'])).toEqual(['back', 'front', 'warm'])
   })
 })

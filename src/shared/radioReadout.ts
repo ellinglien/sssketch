@@ -175,7 +175,8 @@ export const RADIO_TRAIT_DOMINANT = 0.6
 export const RADIO_KIND_WORD: Readonly<Record<DiscoverSlotKind, string>> = {
   drums: 'drums',
   bass: 'bass',
-  lead: 'lead',
+  back: 'back',
+  front: 'front',
   bassHeavy: 'heavy',
   rhythmic: 'rhythmic',
   bright: 'bright',

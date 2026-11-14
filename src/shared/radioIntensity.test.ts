@@ -130,10 +130,10 @@ describe('the role weight', () => {
     expect(radioIntensityRoleWeight(['bass'])).toBe(1)
     expect(radioIntensityRoleWeight(['bassHeavy'])).toBe(0.8)
     expect(radioIntensityRoleWeight(['rhythmic'])).toBe(0.8)
-    expect(radioIntensityRoleWeight(['lead'])).toBe(0.35)
+    expect(radioIntensityRoleWeight(['front'])).toBe(0.35)
     expect(radioIntensityRoleWeight(['bright'])).toBe(0.35)
     expect(radioIntensityRoleWeight(['warm'])).toBe(0.25)
-    expect(radioIntensityRoleWeight(['warm', 'lead', 'rhythmic'])).toBe(0.8)
+    expect(radioIntensityRoleWeight(['warm', 'front', 'rhythmic'])).toBe(0.8)
   })
 
   it('scales the term by 0.4 + 0.6 drama', () => {
@@ -208,17 +208,17 @@ describe('the band draw', () => {
       return v
     }
     const half = 0.35 * (0.4 + 0.6 * 0.6)
-    expect(radioIntensityLeanWeight(['lead'], 60)).toBeCloseTo(half, 12)
+    expect(radioIntensityLeanWeight(['front'], 60)).toBeCloseTo(half, 12)
     expect(
       applyIntensityBand(big, {
         target: 0.5,
-        kinds: ['lead'],
+        kinds: ['front'],
         drama: 60,
         random: counting(half - 1e-6)
       }).banded
     ).toBe(true)
     expect(
-      applyIntensityBand(big, { target: 0.5, kinds: ['lead'], drama: 60, random: counting(half) })
+      applyIntensityBand(big, { target: 0.5, kinds: ['front'], drama: 60, random: counting(half) })
         .banded
     ).toBe(false)
     expect(n).toBe(2)
@@ -378,7 +378,7 @@ describe('the bed intensity', () => {
       radioBedIntensity([
         { kinds: ['drums'], score: 0.8 },
         { kinds: ['warm'], score: 0.2 },
-        { kinds: ['lead'], score: null }
+        { kinds: ['front'], score: null }
       ])
     ).toBeCloseTo((0.8 + 0.25 * 0.2) / 1.25, 9)
     expect(radioBedIntensity([{ kinds: ['drums'], score: null }])).toBeNull()

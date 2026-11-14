@@ -98,9 +98,9 @@ export function isCoachSectionType(value: unknown): value is CoachSectionType {
  *
  * - intro/outro drop BOTH harmony and hook, and both of those are leadesque
  *   slots (phase one arms {leadesque, buttery} for harmony and {leadesque,
- *   sparkly} for the hook), so ONE set -- ['lead'] -- says it exactly, and
+ *   sparkly} for the hook), so ONE set -- ['front'] -- says it exactly, and
  *   also catches a plain leadesque stem that is one or the other.
- * - build drops the hook ONLY, so it names the hook's full set, ['lead',
+ * - build drops the hook ONLY, so it names the hook's full set, ['front',
  *   'bright']. A plain leadesque stem is NOT flagged there: the app cannot
  *   tell a bare lead apart from the hook, and the honest thing to do with
  *   something it cannot tell is to say nothing. Under-flagging costs the
@@ -115,15 +115,15 @@ export const COACH_SECTION_DROP_SETS: Record<
   CoachSectionType,
   readonly (readonly DiscoverSlotKind[])[]
 > = {
-  intro: [['lead']],
+  intro: [['front']],
   // The hook only. "the verse should hint at the drop without giving it
   // away" is the spec's own example of a good line; this is that line as
   // data. Harmony stays -- a verse with no chords is a build.
-  verse: [['lead', 'bright']],
-  build: [['lead', 'bright']],
+  verse: [['front', 'bright']],
+  build: [['front', 'bright']],
   drop: [],
   breakdown: [['drums'], ['bass']],
-  outro: [['lead']]
+  outro: [['front']]
 }
 
 /** True when this section type usually loses this stem. A MARK, which the

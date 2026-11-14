@@ -169,7 +169,7 @@ export interface RadioFoldRow {
 }
 
 const FOLDABLE_KINDS: readonly DiscoverSlotKind[] = ['drums', 'rhythmic', 'bright']
-const NEVER_FOLDS: readonly DiscoverSlotKind[] = ['lead', 'bass']
+const NEVER_FOLDS: readonly DiscoverSlotKind[] = ['front', 'bass']
 
 /** The anchor: the longest audible drums or bass row, or, with none, the longest audible row.
  * Ties go to the first in `rows`' order. */

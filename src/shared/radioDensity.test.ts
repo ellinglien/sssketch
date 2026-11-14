@@ -121,32 +121,32 @@ describe('advanceDensityLeg', () => {
 })
 
 describe('nextArcKind', () => {
-  it('follows the starter order: drums, bass, lead, warm, a second drums', () => {
+  it('follows the starter order: drums, bass, front, back, a second drums', () => {
     expect(nextArcKind([])).toBe('drums')
-    expect(nextArcKind([['drums'], ['bass']])).toBe('lead')
-    expect(nextArcKind([['drums'], ['bass'], ['lead']])).toBe('warm')
-    expect(nextArcKind([['drums'], ['bass'], ['lead'], ['warm']])).toBe('drums')
+    expect(nextArcKind([['drums'], ['bass']])).toBe('front')
+    expect(nextArcKind([['drums'], ['bass'], ['front']])).toBe('back')
+    expect(nextArcKind([['drums'], ['bass'], ['front'], ['back']])).toBe('drums')
   })
 
   it("fills the first gap, whoever's rows they are", () => {
-    expect(nextArcKind([['lead'], ['bass']])).toBe('drums')
-    expect(nextArcKind([['drums'], ['lead']])).toBe('bass')
+    expect(nextArcKind([['front'], ['bass']])).toBe('drums')
+    expect(nextArcKind([['drums'], ['front']])).toBe('bass')
   })
 
   it('counts a combination row for each of its kinds', () => {
-    expect(nextArcKind([['drums', 'bass']])).toBe('lead')
+    expect(nextArcKind([['drums', 'bass']])).toBe('front')
   })
 
   it('is null once the first DENSITY_MAX of the order are all on the bed', () => {
     expect(DENSITY_MAX).toBe(5)
-    expect(nextArcKind([['drums'], ['bass'], ['lead'], ['warm'], ['drums']])).toBeNull()
+    expect(nextArcKind([['drums'], ['bass'], ['front'], ['back'], ['drums']])).toBeNull()
   })
 })
 
 describe('pickArcRemoval', () => {
   const row = (id: string, over: Partial<ArcRow> = {}): ArcRow => ({
     id,
-    kinds: ['lead'],
+    kinds: ['front'],
     radioAdded: true,
     locked: false,
     soloed: false,
@@ -215,7 +215,7 @@ describe('densityArrival', () => {
   it('is always filter in or bloom, even with transitions off', () => {
     for (const r of [0, 0.3, 0.6, 0.99]) {
       for (const t of ['off', 'subtle', 'bold'] as const) {
-        const a = densityArrival(t, ['lead'], fixed(r))
+        const a = densityArrival(t, ['front'], fixed(r))
         expect(['filter in', 'bloom']).toContain(a.kind)
         expect(a.beats).toBe(4)
       }

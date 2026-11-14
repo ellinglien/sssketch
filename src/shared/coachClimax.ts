@@ -21,6 +21,7 @@ import {
   arrangeRoleToSlotKinds,
   discoverSlotKindToArrangeRole,
   normalizeSlotKinds,
+  parseSlotKind,
   type DiscoverSlotKind
 } from './discoverSlotKind'
 import type { ArrangeRole } from './stemRole'
@@ -217,7 +218,9 @@ function loadedStem(value: unknown): LockedClimaxStem | null {
   const loose = value as Record<string, unknown>
   if (typeof loose.path !== 'string' || loose.path === '') return null
   const kinds = normalizeSlotKinds(
-    (Array.isArray(loose.kinds) ? loose.kinds : []).filter(isDiscoverSlotKind)
+    (Array.isArray(loose.kinds) ? loose.kinds : [])
+      .map(parseSlotKind)
+      .filter((k): k is DiscoverSlotKind => k !== null)
   )
   return {
     path: loose.path,

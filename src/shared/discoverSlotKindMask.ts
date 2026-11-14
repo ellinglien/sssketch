@@ -16,8 +16,8 @@ import {
  * then "toggles" by a single array lookup, so its picker is the desktop's
  * picker by construction.
  *
- * A selection is a bitmask over DISCOVER_SLOT_KIND_OPTIONS -- 7 kinds, so
- * 128 selections and 896 transitions, about 3KB of JSON next to the 5KB of
+ * A selection is a bitmask over DISCOVER_SLOT_KIND_OPTIONS -- 8 kinds, so
+ * 256 selections and 2048 transitions, about 7KB of JSON next to the 5KB of
  * embedded font already in that page.
  */
 export const SLOT_KIND_MASK_COUNT = 1 << DISCOVER_SLOT_KIND_OPTIONS.length
@@ -30,7 +30,7 @@ export function slotKindsToMask(kinds: readonly DiscoverSlotKind[]): number {
   return mask
 }
 
-/** Always a normalized, canonically ordered set -- bits outside the seven
+/** Always a normalized, canonically ordered set -- bits outside the eight
  * kinds are ignored, and a mask carrying both bright and warm (which no
  * transition in the table can produce) resolves the same way
  * `normalizeSlotKinds` resolves it rather than being rejected. */

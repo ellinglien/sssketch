@@ -144,7 +144,7 @@ export function stemMatchesSlotKinds(
       (k) =>
         (k === 'drums' && soundType === 'drums') ||
         (k === 'bass' && soundType === 'bass') ||
-        (k === 'lead' && soundType === 'notes')
+        (k === 'front' && soundType === 'notes')
     )
   }
   return autoRole !== null && autoRole !== undefined && roles.includes(autoRole)
