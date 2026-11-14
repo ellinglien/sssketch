@@ -21,6 +21,12 @@ import {
 import { DEFAULT_METRONOME_VOLUME, clampMetronomeVolume } from '../components/metronomeVolume'
 import { appSoundDefaultsNow } from './appSoundDefaults'
 import { newProjectSeed } from '@shared/seededRandom'
+import {
+  CATEGORY_BUS,
+  STEM_CATEGORY_OPTIONS,
+  categoryOfBus,
+  type StemCategory
+} from '@shared/stemCategory'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 import { buildCoachMapSections, resizeCoachMapToPhrase } from '@shared/coachMapTemplate'
 import type { CoachPhrase, LoopPhraseReading } from '@shared/coachPhrase'
@@ -943,12 +949,6 @@ export type Action =
   | { type: 'COACH_MARK_V1_EXPORTED'; now: number }
   | { type: 'LOAD_STATE'; state: AppState }
 
-// Hand-synced copy of selectors.ts's own TIDIED_BUS_ORDER -- store.ts can't
-// import from selectors.ts (selectors.ts already imports Action/AppState
-// FROM this file, so the reverse import would be circular). Only used for
-// the same majority-bus tie-break selectors.ts's busForRifff does, below.
-const BUS_ORDER: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
-
 /** After a bus assignment, renames every newly-affected rifff to "{bus}
  * {n}" -- e.g. "drums 1" -- so a tidied project reads at a glance. Per
  * Elling's own explicit call (2026-08-22): unconditional, not just for
@@ -959,7 +959,7 @@ const BUS_ORDER: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
  * reacting to (the reducer cases below build it first, then pass it in
  * here) so the majority-bus tie-break sees the new assignment, not the
  * stale one. Mirrors busForRifff's own tie-break exactly, duplicated
- * rather than imported (see BUS_ORDER above) -- a rifff with stems split
+ * rather than imported (selectors.ts imports this file) -- a rifff with stems split
  * across buses gets named for whichever bus most of its stems are
  * actually on, same as tidied view's own row-grouping logic. */
 function renameRifffsForBusAssignment(
@@ -979,18 +979,18 @@ function renameRifffsForBusAssignment(
   const result = { ...rifffs }
   for (const groupId of affectedGroupIds) {
     const rifff = result[groupId]
-    const counts: Partial<Record<BusId, number>> = {}
+    const counts: Partial<Record<StemCategory, number>> = {}
     for (const stem of rifff.stems) {
-      const bus = busOf[stemKey(groupId, stem.slot)] ?? 'aux'
-      counts[bus] = (counts[bus] ?? 0) + 1
+      const category = categoryOfBus(busOf[stemKey(groupId, stem.slot)] ?? 'aux')
+      counts[category] = (counts[category] ?? 0) + 1
     }
-    let bestBus: BusId = 'aux'
+    let bestBus: BusId = CATEGORY_BUS.back
     let bestCount = -1
-    for (const bus of BUS_ORDER) {
-      const count = counts[bus] ?? 0
+    for (const category of STEM_CATEGORY_OPTIONS) {
+      const count = counts[category] ?? 0
       if (count > bestCount) {
         bestCount = count
-        bestBus = bus
+        bestBus = CATEGORY_BUS[category]
       }
     }
     // Reads Object.values(result) (not the original `rifffs`) so multiple

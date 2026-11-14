@@ -1,3 +1,4 @@
+import { categoryOfBus, type StemCategory } from '@shared/stemCategory'
 import { TYPE_CSS_VAR, type BusId, type SoundType, type Stem } from '@shared/types'
 
 /**
@@ -93,6 +94,14 @@ const BUS_COLOR_HEX: Record<BusId, string> = {
   aux: '#a3937a'
 }
 
+// Colour goes by category (stemCategory.ts): aux reads as back, so the taupe aux swatch is retired.
+const CATEGORY_COLOR_HEX: Record<StemCategory, string> = {
+  drums: BUS_COLOR_HEX.drums,
+  bass: BUS_COLOR_HEX.bass,
+  back: BUS_COLOR_HEX.backing,
+  front: BUS_COLOR_HEX.lead
+}
+
 export function busColorHex(bus: BusId): string {
-  return BUS_COLOR_HEX[bus]
+  return CATEGORY_COLOR_HEX[categoryOfBus(bus)]
 }

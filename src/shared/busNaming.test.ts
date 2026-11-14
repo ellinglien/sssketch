@@ -33,7 +33,7 @@ describe('summarizeSoundTypes', () => {
 
 describe('busGroupName', () => {
   it('appends a sound-type summary when it differs from the bare bus id', () => {
-    expect(busGroupName('aux', [{ soundType: 'fx' }, { soundType: 'fx' }])).toBe('AUX — FX')
+    expect(busGroupName('aux', [{ soundType: 'fx' }, { soundType: 'fx' }])).toBe('BACK — FX')
   })
 
   it('omits the summary when it would just repeat the bus id verbatim', () => {
@@ -92,5 +92,20 @@ describe('nextBusClipName', () => {
 
   it('strips a prior bus-name prefix off the original name, so re-tidying never nests', () => {
     expect(nextBusClipName([], 'bass', 'drums 1 — Highpass')).toBe('bass 1 — Highpass')
+  })
+})
+
+describe('category naming', () => {
+  it('names a clip by its category and numbers across the category', () => {
+    const names = ['back 1 — pad', 'backing 4 — old pad']
+    expect(nextBusClipName(names, 'aux', 'Choir')).toBe('back 2 — Choir')
+    expect(nextBusClipName([], 'lead', 'Synth')).toBe('front 1 — Synth')
+  })
+
+  it('strips old and new prefixes', () => {
+    expect(originalNameFromBusName('aux 3 — Choir')).toBe('Choir')
+    expect(originalNameFromBusName('lead 2 — Synth')).toBe('Synth')
+    expect(originalNameFromBusName('back 1 — Pad')).toBe('Pad')
+    expect(originalNameFromBusName('front 7 — Hook')).toBe('Hook')
   })
 })

@@ -562,7 +562,7 @@ describe('channelsInOrder', () => {
       expect(channels[1].channelId).toBe('tidied:drums:1')
     })
 
-    it('groups rifffs into separate rows per bus, unassigned stems falling back to aux', () => {
+    it('groups rifffs into separate rows per bus, unassigned stems falling back to back', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: { ...rifff, startBar: undefined }
@@ -574,13 +574,32 @@ describe('channelsInOrder', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 0 })
       state = reducer(state, { type: 'ASSIGN_STEMS_TO_BUS', stemKeys: ['r1:1'], busId: 'bass' })
-      // r2 gets no bus assignment at all -- falls back to aux.
+      // r2 gets no bus assignment at all -- falls back to aux, which reads as back.
       state = { ...state, tidiedView: true }
 
       const channels = channelsInOrder(state)
-      expect(channels.map((c) => c.channelId)).toEqual(['tidied:bass:0', 'tidied:aux:0'])
+      expect(channels.map((c) => c.channelId)).toEqual(['tidied:bass:0', 'tidied:back:0'])
       expect(channels[0].rifffs.map((r) => r.groupId)).toEqual(['r1'])
       expect(channels[1].rifffs.map((r) => r.groupId)).toEqual(['r2'])
+    })
+
+    it('groups aux and backing rifffs into one back row group', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: { ...rifff, startBar: undefined }
+      })
+      state = reducer(state, {
+        type: 'ADD_TO_SHELF',
+        rifff: { ...rifff, groupId: 'r2', startBar: undefined }
+      })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 0 })
+      state = reducer(state, { type: 'ASSIGN_STEMS_TO_BUS', stemKeys: ['r1:1'], busId: 'aux' })
+      state = reducer(state, { type: 'ASSIGN_STEMS_TO_BUS', stemKeys: ['r2:1'], busId: 'backing' })
+      state = { ...state, tidiedView: true }
+
+      const ids = channelsInOrder(state).map((c) => c.channelId)
+      expect(ids).toEqual(['tidied:back:0', 'tidied:back:1'])
     })
 
     it('excludes unplaced rifffs and recording channels from the tidied layout', () => {

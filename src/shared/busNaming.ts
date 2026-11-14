@@ -1,4 +1,5 @@
 import type { BusId, SoundType } from './types'
+import { categoryOfBus, STEM_CATEGORY_OPTIONS } from './stemCategory'
 
 /** 'extInst' -> 'ext inst', 'audioIn' -> 'audio in' -- this app's own design
  * system calls for lowercase UI copy everywhere (see CLAUDE.md); SoundType's
@@ -34,12 +35,16 @@ export function summarizeSoundTypes(types: SoundType[]): string {
  * Reaper builder's own per-stem result type satisfy this structurally,
  * without either file importing the other's types. */
 export function busGroupName(busId: BusId, entries: { soundType: SoundType }[]): string {
+  const category = categoryOfBus(busId)
   const summary = summarizeSoundTypes(entries.map((e) => e.soundType))
-  const name = summary === busId ? busId : `${busId} — ${summary}`
+  const name = summary === category ? category : `${category} — ${summary}`
   return name.toUpperCase()
 }
 
-const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
+// Old bus names (before 2026-11-14) and the category names, so re-tidying never nests prefixes.
+const PREFIX_WORDS = [
+  ...new Set(['drums', 'bass', 'lead', 'backing', 'aux', ...STEM_CATEGORY_OPTIONS])
+]
 
 /** If `name` already carries a "{bus} {n} — " prefix this same naming
  * convention would have added, strips it and returns just the original
@@ -48,7 +53,7 @@ const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
  * UNGROUP) doesn't nest prefixes ("bass 2 — drums 1 — Highpass"); the
  * genuinely original name is always what ends up after the last " — ". */
 export function originalNameFromBusName(name: string): string {
-  const pattern = new RegExp(`^(?:${BUS_IDS.join('|')}) \\d+ — (.+)$`)
+  const pattern = new RegExp(`^(?:${PREFIX_WORDS.join('|')}) \\d+ — (.+)$`)
   const match = pattern.exec(name.trim())
   return match ? match[1] : name
 }
@@ -68,11 +73,12 @@ export function nextBusClipName(
   busId: BusId,
   originalName: string
 ): string {
-  const pattern = new RegExp(`^${busId} (\\d+) — `, 'i')
+  const category = categoryOfBus(busId)
+  const pattern = new RegExp(`^${category} (\\d+) — `, 'i')
   let max = 0
   for (const name of existingNames) {
     const match = pattern.exec(name.trim())
     if (match) max = Math.max(max, parseInt(match[1], 10))
   }
-  return `${busId} ${max + 1} — ${originalNameFromBusName(originalName)}`
+  return `${category} ${max + 1} — ${originalNameFromBusName(originalName)}`
 }
