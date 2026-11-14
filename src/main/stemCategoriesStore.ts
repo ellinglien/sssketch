@@ -5,6 +5,7 @@ import type { BusId, ProjectRef } from '@shared/types'
 import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import { sketchProjectPath } from './projectLibrary'
 import { countWork } from './workCounters'
+import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 import { bumpStemClassificationVersion } from './stemClassificationVersion'
 import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 
@@ -288,6 +289,63 @@ export function getStemCategoryRolesForPaths(
   extraCandidateDbs: Database.Database[] = []
 ): Record<string, StemRoleLookup> {
   const out: Record<string, StemRoleLookup> = {}
+  forEachPathRow(
+    db,
+    paths,
+    extraCandidateDbs,
+    'sql:stem-category-roles',
+    (placeholders) =>
+      `SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories
+       WHERE ArrangeRole IS NOT NULL AND StemCID IN (${placeholders})`,
+    (path, row: { ArrangeRole: string; DrumSubRole: string | null }) => {
+      out[path] = {
+        arrangeRole: row.ArrangeRole as ArrangeRole,
+        drumSubRole: row.DrumSubRole as DrumSubRole | null
+      }
+    }
+  )
+  return out
+}
+
+export interface StemGuessLookup {
+  arrangeRole: ArrangeRole
+  frontScore: number | null
+}
+
+/** The overnight classifier's stored guess (StemAutoCategory) for each path, keyed by path like
+ * getStemCategoryRolesForPaths: Tidy Up's and auto-arrange's suggestions read it. Only placed rows
+ * (PLACED_AUTO_CATEGORY_SQL), so an older app's leftover guess sharing the db is never suggested. */
+export function getStemCategoryGuessesForPaths(
+  db: Database.Database,
+  paths: string[],
+  extraCandidateDbs: Database.Database[] = []
+): Record<string, StemGuessLookup> {
+  const out: Record<string, StemGuessLookup> = {}
+  forEachPathRow(
+    db,
+    paths,
+    extraCandidateDbs,
+    'sql:stem-category-guesses',
+    (placeholders) =>
+      `SELECT a.StemCID, a.ArrangeRole, a.FrontScore FROM StemAutoCategory a
+       WHERE a.StemCID IN (${placeholders}) AND ${PLACED_AUTO_CATEGORY_SQL}`,
+    (path, row: { ArrangeRole: string; FrontScore: number | null }) => {
+      out[path] = { arrangeRole: row.ArrangeRole as ArrangeRole, frontScore: row.FrontScore }
+    }
+  )
+  return out
+}
+
+/** Resolves paths to StemCIDs, then runs `sql` (an IN-list over `placeholders`) per chunk and
+ * hands each row to `onRow` once per path that asked for its stem. */
+function forEachPathRow<Row>(
+  db: Database.Database,
+  paths: string[],
+  extraCandidateDbs: Database.Database[],
+  workKind: string,
+  sql: (placeholders: string) => string,
+  onRow: (path: string, row: Row) => void
+): void {
   const pathsByStemCID = new Map<string, string[]>()
   for (const path of paths) {
     const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
@@ -299,22 +357,12 @@ export function getStemCategoryRolesForPaths(
   const stemCIDs = [...pathsByStemCID.keys()]
   for (let start = 0; start < stemCIDs.length; start += ROLE_LOOKUP_CHUNK_SIZE) {
     const chunk = stemCIDs.slice(start, start + ROLE_LOOKUP_CHUNK_SIZE)
-    countWork('sql:stem-category-roles')
-    const placeholders = chunk.map(() => '?').join(',')
-    const rows = db
-      .prepare(
-        `SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories
-         WHERE ArrangeRole IS NOT NULL AND StemCID IN (${placeholders})`
-      )
-      .all(...chunk) as { StemCID: string; ArrangeRole: string; DrumSubRole: string | null }[]
+    countWork(workKind)
+    const rows = db.prepare(sql(chunk.map(() => '?').join(','))).all(...chunk) as (Row & {
+      StemCID: string
+    })[]
     for (const row of rows) {
-      for (const path of pathsByStemCID.get(row.StemCID) ?? []) {
-        out[path] = {
-          arrangeRole: row.ArrangeRole as ArrangeRole,
-          drumSubRole: row.DrumSubRole as DrumSubRole | null
-        }
-      }
+      for (const path of pathsByStemCID.get(row.StemCID) ?? []) onRow(path, row)
     }
   }
-  return out
 }

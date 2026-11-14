@@ -7,6 +7,7 @@ import { buildDensityMap, computeDensityScore, densityLabel } from '@shared/stem
 import {
   resolveStemRole,
   engineRoleFor,
+  type ArrangeRole,
   type StemFrequency,
   type StemRoleInfo
 } from '@shared/stemRole'
@@ -20,11 +21,6 @@ import { startPointerDrag } from './dragUtils'
 import { elapsedLabel } from '@shared/visuals'
 import { ARRANGE_STEP_BARS, DRAW_ARRANGE_SECTIONS } from '@shared/autoArrangeApply'
 import { minSectionsForShape, type ArrangeShape } from '@shared/autoArrangeAutomation'
-import { emptyCategoryCentroidStore, type CategoryCentroidStore } from '@shared/categoryCentroids'
-import { toFeatureArray } from '@shared/stemFeatures'
-import { useCachedStemEmbeddings } from '../audio/useCachedStemEmbeddings'
-import { refineRoleWithEmbeddingOrCentroidSuggestion } from '@shared/roleEmbeddingRefinement'
-import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 import { DiscoverReclassifyPicker } from './DiscoverReclassifyPicker'
 import { ROLE_LABELS } from '@shared/autoArrangeLabels'
 import { useConfirmedStemRoles } from '../state/useConfirmedStemRoles'
@@ -242,45 +238,11 @@ export function AutoArrangeRoleStep({
     )
   }
 
-  // Loaded once on mount, same "frozen for this session" pattern as
-  // ClusterStemsBrowser.tsx's own centroidStoreSnapshot -- there's no
-  // equivalent "jolting suggestions mid-session" concern here (this
-  // component shows one role per stem, not a reshuffling suggested-groups
-  // list), but loading once and never refetching is still the simplest
-  // correct choice, and keeps this consistent with the established
-  // pattern rather than inventing a second one.
-  const [centroidStore, setCentroidStore] = useState<CategoryCentroidStore>(
-    emptyCategoryCentroidStore
-  )
-  useEffect(() => {
-    void window.rifffApi.getCategoryCentroids().then(setCentroidStore)
-  }, [])
-
-  // Same frozen-once-per-mount pattern as centroidStore above -- confirmed
-  // embeddings for both role axes (arrangeRole, drumSubRole), fetched once
-  // and read by the role-resolution effect below via
-  // refineRoleWithEmbeddingOrCentroidSuggestion.
-  const [confirmedArrangeRoleEmbeddings, setConfirmedArrangeRoleEmbeddings] = useState<
-    ConfirmedEmbedding[]
-  >([])
-  const [confirmedDrumSubRoleEmbeddings, setConfirmedDrumSubRoleEmbeddings] = useState<
-    ConfirmedEmbedding[]
-  >([])
-  useEffect(() => {
-    void window.rifffApi
-      .getConfirmedEmbeddings('arrangeRole')
-      .then(setConfirmedArrangeRoleEmbeddings)
-    void window.rifffApi
-      .getConfirmedEmbeddings('drumSubRole')
-      .then(setConfirmedDrumSubRoleEmbeddings)
-  }, [])
-
   const scanItems = useMemo(
     () => flatStems.map(({ stem, stemKey: key }) => ({ key, path: stem.path })),
     [flatStems]
   )
   const { loading: scanLoading, featuresByKey } = useStemFeatureScan(scanItems)
-  const embeddingByKey = useCachedStemEmbeddings(scanItems)
 
   // What somebody already SAID these stems are, out of the global
   // StemCategories table -- the same read the arrangement map's row labels
@@ -289,6 +251,26 @@ export function AutoArrangeRoleStep({
   // answer and opens the reclassify picker on click.
   const rolePaths = useMemo(() => flatStems.map((fs) => fs.stem.path), [flatStems])
   const confirmedRoles = useConfirmedStemRoles(rolePaths)
+
+  // The overnight classifier's stored guess (StemAutoCategory, placed rows only) per path, keyed
+  // on the SET of paths like useConfirmedStemRoles, so a rebuilt array doesn't refetch.
+  const guessKey = useMemo(() => [...new Set(rolePaths)].sort().join('\n'), [rolePaths])
+  const [guessByPath, setGuessByPath] = useState<Record<string, { arrangeRole: ArrangeRole }>>({})
+  useEffect(() => {
+    let cancelled = false
+    window.rifffApi
+      .getStemCategoryGuesses(guessKey === '' ? [] : guessKey.split('\n'))
+      .then((guesses) => {
+        if (!cancelled) setGuessByPath(guesses)
+      })
+      .catch((err: unknown) => {
+        // A failed read leaves the preset-name/sound-type role, as with no guess at all.
+        console.error('AutoArrangeRoleStep: failed to read the stored guesses:', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [guessKey])
 
   // The reclassify picker, opened from a row's role readout. One at a time,
   // positioned off the clicked button's own rect, exactly as the Discover
@@ -319,27 +301,21 @@ export function AutoArrangeRoleStep({
     if (flatStems.length === 0) return
     if (scanLoading) return
     // Role resolution itself is synchronous and can't fail -- resolve it
-    // for every stem once the shared scan hook has settled, then let
-    // refineRoleWithEmbeddingOrCentroidSuggestion refine any stem with no
-    // confirmed busId: an embedding-nearest-neighbor match when confident,
-    // falling back to the centroid classifier otherwise (see that
-    // function's own doc comment, roleEmbeddingRefinement.ts, and
-    // roleCentroidRefinement.ts's for the full priority order and why this
-    // ranks above a PresetName match too).
+    // for every stem once the shared scan hook has settled. A stem with no
+    // confirmed busId then takes the overnight classifier's stored guess
+    // (guessByPath) over its preset-name/sound-type role. The drum sub-role
+    // is never guessed: kick/snare/hat stays a manual pick.
     const resolved: StemRoleInfo[] = flatStems.map(({ stem, stemKey: key }) => {
       const base = resolveStemRole(stem, key, busOf[key] ?? null)
-      const features = featuresByKey.get(key)
-      const raw = features ? toFeatureArray(features) : null
-      const refined = refineRoleWithEmbeddingOrCentroidSuggestion(
-        base,
-        raw,
-        centroidStore,
-        {
-          arrangeRoles: confirmedArrangeRoleEmbeddings,
-          drumSubRoles: confirmedDrumSubRoleEmbeddings
-        },
-        embeddingByKey.get(key) ?? null
-      )
+      const guess = base.busId === null ? guessByPath[stem.path] : undefined
+      const refined: StemRoleInfo = guess
+        ? {
+            ...base,
+            arrangeRole: guess.arrangeRole,
+            drumSubRole: guess.arrangeRole === 'drums' ? base.drumSubRole : undefined,
+            uncertain: false
+          }
+        : base
       // A human already answered this question about this FILE, in Tidy Up
       // or in the reclassify picker, and a confirmation always beats a
       // machine guess -- the same rule resolveStemRole already applies to a
@@ -373,19 +349,7 @@ export function AutoArrangeRoleStep({
     return () => {
       cancelled = true
     }
-  }, [
-    flatStems,
-    placedRifffs,
-    busOf,
-    scanLoading,
-    densityResults,
-    centroidStore,
-    featuresByKey,
-    embeddingByKey,
-    confirmedArrangeRoleEmbeddings,
-    confirmedDrumSubRoleEmbeddings,
-    confirmedRoles
-  ])
+  }, [flatStems, placedRifffs, busOf, scanLoading, densityResults, guessByPath, confirmedRoles])
 
   if (placedRifffs.length === 0) {
     return (

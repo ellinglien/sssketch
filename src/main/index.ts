@@ -252,10 +252,12 @@ import {
 import { listStemFavourites, toggleStemFavourite } from './stemFavouriteStore'
 import { listTidyUpLibraryStems, type TidyUpLibraryStem } from './tidyUpLibraryStems'
 import {
+  getStemCategoryGuessesForPaths,
   getStemCategoryRolesForPaths,
   resolveSourceProjectPath,
   stemCIDForPath,
   type StemBusCategoryEntry,
+  type StemGuessLookup,
   type StemRoleCategoryEntry,
   type StemRoleLookup
 } from './stemCategoriesStore'
@@ -2198,6 +2200,14 @@ app.whenReady().then(async () => {
     'get-stem-category-roles',
     (_event, paths: string[]): Record<string, StemRoleLookup> =>
       getStemCategoryRolesForPaths(openOwnRiffLibraryDb(), paths, candidateDbsForRiff())
+  )
+
+  // The overnight classifier's stored guess per path (placed rows only): Tidy Up's sketch
+  // suggestions and auto-arrange's role step.
+  ipcMain.handle(
+    'get-stem-category-guesses',
+    (_event, paths: string[]): Record<string, StemGuessLookup> =>
+      getStemCategoryGuessesForPaths(openOwnRiffLibraryDb(), paths, candidateDbsForRiff())
   )
 
   // Tidy Up's LIBRARY population -- unconfirmed first, then most-recently-

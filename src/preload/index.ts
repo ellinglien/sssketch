@@ -610,6 +610,11 @@ const api = {
     paths: string[]
   ): Promise<Record<string, { arrangeRole: ArrangeRole; drumSubRole: DrumSubRole | null }>> =>
     ipcRenderer.invoke('get-stem-category-roles', paths),
+  /** The overnight classifier's stored guess per path (placed rows only). */
+  getStemCategoryGuesses: (
+    paths: string[]
+  ): Promise<Record<string, { arrangeRole: ArrangeRole; frontScore: number | null }>> =>
+    ipcRenderer.invoke('get-stem-category-guesses', paths),
   getStemAnalysisNeeds: (paths: string[]): Promise<StemAnalysisNeeds[]> =>
     ipcRenderer.invoke('get-stem-analysis-needs', paths),
   getStemFeatureCache: (path: string): Promise<StemFeatures | null> =>

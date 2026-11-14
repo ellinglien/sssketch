@@ -13,11 +13,6 @@ import {
 } from '@shared/agglomerativeCluster'
 import { clusterProvenance, type BusProvenance } from '@shared/busProvenance'
 import {
-  emptyCategoryCentroidStore,
-  suggestCategory,
-  type CategoryCentroidStore
-} from '@shared/categoryCentroids'
-import {
   ARRANGE_ROLE_TO_BUS,
   DRUM_SUB_ROLE_OPTIONS,
   DRUM_SUB_ROLE_LABELS,
@@ -37,8 +32,6 @@ import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
 import { stemColorVar } from '../theme/typeColor'
 import type { ProjectRef } from '@shared/types'
-import { useCachedStemEmbeddings } from '../audio/useCachedStemEmbeddings'
-import { suggestCategoryFromEmbedding, type ConfirmedEmbedding } from '@shared/embeddingMatch'
 import { guessArrangeRoleFromPresetName } from '@shared/presetNames'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import { useThrowawayStemPreview } from '../state/useThrowawayStemPreview'
@@ -255,7 +248,7 @@ interface ClusterGroup {
 //
 // state 'confirmed' matches the original boolean `active` meaning exactly
 // (this row's own busOf already agrees). 'suggested' is new -- a lighter,
-// dashed-border hint for a bus the centroid classifier proposed but the
+// dashed-border hint for a bus the stored guess proposed but the
 // user hasn't clicked yet, distinguishable from both "confirmed" and "just
 // one of the other four options."
 function buttonStyle(state?: 'confirmed' | 'suggested'): React.CSSProperties {
@@ -336,7 +329,7 @@ export function ClusterStemsBrowser({
   // Frozen the moment this component mounts (useState's lazy initializer
   // runs exactly once, and busOf is already-available store state, not an
   // async fetch -- no separate mount-effect needed, unlike
-  // centroidStoreSnapshot below). `partitioned` reads THIS, not live busOf,
+  // guessByPath below). `partitioned` reads THIS, not live busOf,
   // to decide which row/section a stem belongs to (2026-09-15, real bug
   // reported twice during Elling's own live testing: first as rows "jumping
   // to another location" when confirming one, then -- after an earlier fix
@@ -350,42 +343,6 @@ export function ClusterStemsBrowser({
   // live busOf independently), never which row it's in.
   const [busOfSnapshot] = useState(() => busOf)
 
-  // Global, cross-project classifier state (see categoryCentroids.ts) --
-  // loaded once on mount. Starts empty (every suggestCategory() call returns
-  // null, i.e. no suggestions at all) until enough real confirmations have
-  // trained it server-side, which is the correct cold-start behavior: this
-  // modal falls straight back to its original all-DSP-clustering flow
-  // rather than ever blocking on the fetch.
-  //
-  // Frozen the first time the real store loads, never again -- `partitioned`
-  // below reads suggestions from this frozen snapshot, not a live,
-  // continuously-retraining store (training itself is now entirely
-  // server-side, see categoryCentroidTraining.ts, triggered by the
-  // upsert-stem-category-bus IPC handler that recordBusCategories below
-  // calls). Without freezing this snapshot, confirming ANY bus mid-tidy-up
-  // would retrain the suggestion set shown here, which can immediately flip
-  // an unrelated, already-visible DSP-cluster stem into "suggested" and yank
-  // it out of the list the user is actively working through -- reported as
-  // the suggestion UI feeling "jolting"/like it "took over." Freezing the
-  // snapshot means the suggested/DSP split for this session is decided
-  // once, at open time, and stays put no matter how much training happens
-  // server-side while the user works.
-  const [centroidStoreSnapshot, setCentroidStoreSnapshot] = useState<CategoryCentroidStore>(
-    emptyCategoryCentroidStore
-  )
-  useEffect(() => {
-    void window.rifffApi.getCategoryCentroids().then(setCentroidStoreSnapshot)
-  }, [])
-
-  // Same frozen-once-per-mount pattern as centroidStoreSnapshot above --
-  // confirmed bus-axis embeddings, fetched once and read by `partitioned`
-  // below via suggestCategoryFromEmbedding, which ranks above the centroid
-  // classifier when confident.
-  const [confirmedBusEmbeddings, setConfirmedBusEmbeddings] = useState<ConfirmedEmbedding[]>([])
-  useEffect(() => {
-    void window.rifffApi.getConfirmedEmbeddings('bus').then(setConfirmedBusEmbeddings)
-  }, [])
-
   // Restoring the pre-solo mute snapshot and pausing playback now happens
   // automatically via useStemPreviewPlayback's own unmount-cleanup effect,
   // the moment onClose's state flip (App.tsx) unmounts this component --
@@ -396,8 +353,7 @@ export function ClusterStemsBrowser({
   }
 
   // Fetched once per modal session, like every other frozen-at-mount input
-  // in this file (busOfSnapshot, centroidStoreSnapshot,
-  // confirmedBusEmbeddings) and for the same reason: a list that reshuffles
+  // in this file (busOfSnapshot, guessByPath) and for the same reason: a list that reshuffles
   // under the user mid-pass was reported as "jolting"/like it "took over".
   // null means "not fetched yet", which the loading branch below reads.
   const [libraryStems, setLibraryStems] = useState<TidyUpLibraryStem[] | null>(null)
@@ -498,15 +454,39 @@ export function ClusterStemsBrowser({
   const [clusterCount, setClusterCount] = useState(DEFAULT_CLUSTER_COUNT)
 
   const scanItems = useMemo(() => stems.map((s) => ({ key: s.key, path: s.path })), [stems])
-  const { loading, featuresByKey } = useStemFeatureScan(scanItems)
-  const embeddingByKey = useCachedStemEmbeddings(scanItems)
+  const { loading: featuresLoading, featuresByKey } = useStemFeatureScan(scanItems)
+
+  // The overnight classifier's stored guess (StemAutoCategory, placed rows only) for the sketch's
+  // stems, keyed by path. Fetched once per population of stems, like every other frozen input here:
+  // a guess written mid-session never moves a row. The library population carries its guess
+  // through listTidyUpLibraryStems instead (libraryRoleGuessByKey below). null = not fetched yet,
+  // which reads as loading, so the rows aren't laid out twice.
+  const [guessByPath, setGuessByPath] = useState<Record<
+    string,
+    { arrangeRole: ArrangeRole }
+  > | null>(null)
+  useEffect(() => {
+    if (population !== 'sketch') return
+    let cancelled = false
+    window.rifffApi
+      .getStemCategoryGuesses(scanItems.map((s) => s.path))
+      .then((guesses) => {
+        if (!cancelled) setGuessByPath(guesses)
+      })
+      .catch((err: unknown) => {
+        console.error('ClusterStemsBrowser: failed to read the stored guesses:', err)
+        if (!cancelled) setGuessByPath({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [population, scanItems])
+  const loading = featuresLoading || (population === 'sketch' && guessByPath === null)
 
   // Mirrors the old `computed` shape's own two derived pieces exactly --
   // analyzedStems (only the stems that scanned successfully) and
-  // rawVectorsByKey (toFeatureArray-flattened, raw/unstandardized, since
-  // suggestCategory below needs raw space -- see categoryCentroids.ts's own
-  // doc comment) -- so every downstream consumer needs zero further changes
-  // beyond what Step 2 below updates.
+  // rawVectorsByKey (toFeatureArray-flattened, raw/unstandardized; the
+  // clustering below standardizes them itself).
   const computed = useMemo(() => {
     if (loading) return null
     const analyzedStems = stems.filter((s) => featuresByKey.has(s.key))
@@ -549,16 +529,10 @@ export function ClusterStemsBrowser({
   // since ClusterRow's `assignedBus` reads live busOf independently of
   // this partitioning decision.
   //
-  // A suggestion prefers an embedding-nearest-neighbor match
-  // (suggestCategoryFromEmbedding, confirmedBusEmbeddings) when this stem's
-  // embedding has been extracted and one is confident, falling back to the
-  // centroid classifier (suggestCategory, centroidStoreSnapshot) otherwise
-  // -- same embedding-preferred, centroid-fallback shape as
-  // roleEmbeddingRefinement.ts's own refineRoleWithEmbeddingOrCentroidSuggestion.
-  // centroidStoreSnapshot/confirmedBusEmbeddings are themselves frozen once
-  // per modal session for the exact same "don't jolt the user mid-session"
-  // reason busOfSnapshot now is (see centroidStoreSnapshot's own doc
-  // comment above). mergeSequence -- the expensive O(n^3) part -- only ever
+  // A suggestion is the overnight classifier's stored guess (guessByPath),
+  // falling back to a real Endlesss preset-name match. guessByPath is
+  // fetched once per population for the same "don't jolt the user
+  // mid-session" reason busOfSnapshot is frozen. mergeSequence -- the expensive O(n^3) part -- only ever
   // re-runs when the actual DSP population changes, not on every keystroke
   // elsewhere in the modal.
   const partitioned = useMemo(() => {
@@ -568,8 +542,7 @@ export function ClusterStemsBrowser({
     const dspStems: ClusterableStem[] = []
 
     // THE LIBRARY IS NOT CLUSTERED, AND CANNOT BE. computeMergeSequence is
-    // O(n^3) and categoryCentroids.ts records testing against a real
-    // ~45,000-stem backlog -- that is arithmetic, not a performance
+    // O(n^3), and a real library is a ~45,000-stem backlog -- that is arithmetic, not a performance
     // problem. Tidy Up already has two halves, and the library gets the
     // SUGGESTED one: every stem lands in a suggested group from what is
     // already known about it, and `dspStems` stays empty so the DSP half
@@ -606,18 +579,12 @@ export function ClusterStemsBrowser({
         dspStems.push(stem)
         continue
       }
-      const raw = rawVectorsByKey.get(stem.key)
-      const embedding = embeddingByKey.get(stem.key)
-      const embeddingSuggestedBus = embedding
-        ? (suggestCategoryFromEmbedding(confirmedBusEmbeddings, embedding) as BusId | null)
-        : null
-      const centroidSuggestedBus = raw
-        ? (suggestCategory(centroidStoreSnapshot, 'bus', raw) as BusId | null)
-        : null
+      const guess = guessByPath?.[stem.path]
+      const guessedBus = guess ? ARRANGE_ROLE_TO_BUS[guess.arrangeRole] : null
       // Falls back to a real Endlesss preset-name match (same
       // guessArrangeRoleFromPresetName lookup resolveStemRole.ts's own
       // priority chain already uses for AutoArrangeRoleStep.tsx) when
-      // neither the embedding nor the centroid classifier has anything --
+      // the stored guess has nothing --
       // added 2026-09-15, closing a real gap reported directly by Elling:
       // Arrange mode's suggestions felt meaningfully better than Tidy Up's
       // because AutoArrangeRoleStep.tsx already consulted preset names via
@@ -627,7 +594,7 @@ export function ClusterStemsBrowser({
       // own 8 buttons.
       const presetGuess = guessArrangeRoleFromPresetName(stem.presetName)
       const presetSuggestedBus = presetGuess ? ARRANGE_ROLE_TO_BUS[presetGuess.arrangeRole] : null
-      const rawSuggestedBus = embeddingSuggestedBus ?? centroidSuggestedBus ?? presetSuggestedBus
+      const rawSuggestedBus = guessedBus ?? presetSuggestedBus
       // aux reads as back, so a stored aux guess joins the back group.
       const suggestedBus = rawSuggestedBus ? CATEGORY_BUS[categoryOfBus(rawSuggestedBus)] : null
       if (suggestedBus) {
@@ -645,15 +612,7 @@ export function ClusterStemsBrowser({
       rawVectorsByKey,
       mergeSequence: computeMergeSequence(standardizeFeatures(dspVectors))
     }
-  }, [
-    computed,
-    population,
-    libraryRoleGuessByKey,
-    busOfSnapshot,
-    centroidStoreSnapshot,
-    embeddingByKey,
-    confirmedBusEmbeddings
-  ])
+  }, [computed, population, libraryRoleGuessByKey, busOfSnapshot, guessByPath])
 
   // Node ids the user has manually split a SUGGESTED group further into,
   // keyed by that group's own bus -- same idea as splitNodeIds below (for
@@ -1293,7 +1252,7 @@ function ClusterRow({
   /** False for a suggestion row -- there's no dendrogram behind it, so
    * "split into closest sub-groups" has nothing to operate on. */
   splittable?: boolean
-  /** The centroid classifier's own proposed bus for a suggestion row --
+  /** The stored guess's (or preset name's) proposed bus for a suggestion row --
    * drawn with buttonStyle's 'suggested' state until/unless the user
    * clicks a bus (any bus, including this one) to actually confirm it. */
   suggestedBus?: BusId
@@ -1341,7 +1300,7 @@ function ClusterRow({
   //
   // KNOWN LIMIT, accepted: a confirmation made DURING this session does not
   // re-highlight, because the fetched list is frozen at open (the same
-  // freeze busOfSnapshot/centroidStoreSnapshot have, for the same
+  // freeze busOfSnapshot/guessByPath have, for the same
   // "don't jolt the user mid-pass" reason). The celebration pulse already
   // acknowledges the click, which is exactly what it was added for.
   const assignedRole = useMemo<ArrangeRole | null>(() => {

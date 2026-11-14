@@ -316,6 +316,39 @@ describe('stemCategoriesStore', () => {
     })
   })
 
+  describe('getStemCategoryGuessesForPaths', () => {
+    function withGuesses(): Database.Database {
+      const db = freshDb()
+      db.exec(`CREATE TABLE StemAutoCategory (
+        StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
+        ComputedAt INTEGER NOT NULL, FrontScore REAL
+      )`)
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES ('a'), ('b'), ('c')`).run()
+      return db
+    }
+
+    it('answers each path with its placed guess, and nothing for a stem with no row', async () => {
+      const { getStemCategoryGuessesForPaths } = await import('./stemCategoriesStore')
+      const db = withGuesses()
+      db.prepare(
+        `INSERT INTO StemAutoCategory VALUES ('a', 'backing', 'model', 1, 0.3), ('c', 'drums', 'instrumentMask', 1, NULL)`
+      ).run()
+      expect(getStemCategoryGuessesForPaths(db, ['/w/a', '/w/b', '/w/c'])).toEqual({
+        '/w/a': { arrangeRole: 'backing', frontScore: 0.3 },
+        '/w/c': { arrangeRole: 'drums', frontScore: null }
+      })
+    })
+
+    it("never suggests an older app's leftover guess", async () => {
+      const { getStemCategoryGuessesForPaths } = await import('./stemCategoriesStore')
+      const db = withGuesses()
+      db.prepare(
+        `INSERT INTO StemAutoCategory VALUES ('a', 'lead', 'centroid', 1, NULL), ('b', 'lead', 'instrumentMask', 1, NULL)`
+      ).run()
+      expect(getStemCategoryGuessesForPaths(db, ['/w/a', '/w/b'])).toEqual({})
+    })
+  })
+
   describe('getStemCategoryRolesForPaths', () => {
     it('answers by the PATH it was given, not by StemCID', async () => {
       const { getStemCategoryRolesForPaths, upsertStemCategoryRole } =
