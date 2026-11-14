@@ -29,7 +29,8 @@ import {
   CATEGORY_ROLE,
   STEM_CATEGORY_OPTIONS,
   categoryOfBus,
-  categoryOfRole
+  categoryOfRole,
+  groupBusFor
 } from '@shared/stemCategory'
 import { stemTileGeometryFromFields } from '../state/selectors'
 import { Waveform } from './Waveform'
@@ -592,7 +593,7 @@ export function ClusterStemsBrowser({
           libraryRoleGuessByKey.get(stem.key) ??
           guessArrangeRoleFromPresetName(stem.presetName)?.arrangeRole ??
           null
-        const busId = known === null ? 'aux' : ARRANGE_ROLE_TO_BUS[known]
+        const busId = groupBusFor(known)
         const list = suggestions.get(busId) ?? []
         list.push(stem)
         suggestions.set(busId, list)
@@ -874,11 +875,9 @@ export function ClusterStemsBrowser({
   const [celebratingId, setCelebratingId] = useState<number | null>(null)
 
   // `category` is a stored role (CATEGORY_ROLE of the picked category), not a BusId --
-  // the 3 without a bus of their own (textureFx/fill/vocal) route to 'aux'
-  // (see ARRANGE_ROLE_TO_BUS's own doc comment, shared/stemRole.ts) while
-  // still recording the finer category via recordRoles. For the 5 shared
-  // categories the bus assignment is unchanged; recordRoles runs either
-  // way (see its own doc comment above).
+  // the bus is its category's (ARRANGE_ROLE_TO_BUS, shared/stemRole.ts)
+  // and recordRoles records the stored role either way (see its own doc
+  // comment above).
   function assignCluster(id: number, members: ClusterableStem[], category: ArrangeRole): void {
     // BUS WRITES STOP AT THE SKETCH BOUNDARY -- see TidyUpPopulation.
     if (population === 'sketch') {
@@ -1322,11 +1321,16 @@ function ClusterRow({
   // and this exact membership recurs. Only shown as "assigned" when EVERY
   // member of this cluster already carries the same busId; a mixed
   // cluster shows no highlight rather than a misleading single answer.
+  // Compared by category: aux+backing or vocal+lead rows are one category.
   const assignedBus = useMemo<BusId | null>(() => {
     if (members.length === 0) return null
     const first = busOf[members[0].key]
     if (!first) return null
-    const allMatch = members.every((m) => busOf[m.key] === first)
+    const category = categoryOfBus(first)
+    const allMatch = members.every((m) => {
+      const bus = busOf[m.key]
+      return bus !== undefined && categoryOfBus(bus) === category
+    })
     return allMatch ? first : null
   }, [members, busOf])
 
@@ -1344,7 +1348,13 @@ function ClusterRow({
     if (population !== 'library' || members.length === 0) return null
     const first = members[0].confirmedRole ?? null
     if (first === null) return null
-    return members.every((m) => (m.confirmedRole ?? null) === first) ? first : null
+    const category = categoryOfRole(first)
+    return members.every((m) => {
+      const role = m.confirmedRole ?? null
+      return role !== null && categoryOfRole(role) === category
+    })
+      ? first
+      : null
   }, [members, population])
 
   // True while ANY of this row's own members is the current preview
@@ -1447,7 +1457,8 @@ function ClusterRow({
           'drums') -- see onAssignDrumSubRole's own doc comment above for why
           this is write-only and always starts back at "drums (generic)"
           rather than remembering a prior pick. */}
-      {(assignedBus === 'drums' || assignedRole === 'drums') && (
+      {((assignedBus && categoryOfBus(assignedBus) === 'drums') ||
+        (assignedRole && categoryOfRole(assignedRole) === 'drums')) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
           <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>kit piece</span>
           <select

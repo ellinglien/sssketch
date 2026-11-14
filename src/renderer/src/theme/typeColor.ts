@@ -37,18 +37,18 @@ export function stemColorVar(stem: Stem | undefined): string {
  * override as stemColorVar above (a recorded take stays its own distinct
  * category regardless of bus/type). Falls back to stemColorVar (the raw
  * Endlesss-derived SoundType color) when `bus` is undefined, rather than
- * always resolving to the aux bus color -- per direct feedback
+ * always resolving to one neutral bus color -- per direct feedback
  * (2026-09-01): most people are looking at freshly-imported, never-tidied
  * content most of the time, and that content already carries real
  * category information (drum/note/bass/mic flags) from Endlesss itself,
  * which a flat neutral color was throwing away for no benefit. Once a
- * stem genuinely goes through Tidy Up -- including landing in aux on
+ * stem genuinely goes through Tidy Up -- including landing in back on
  * purpose -- it switches over to the bus palette, which is the whole
  * visual payoff of having tidied it. Use this instead of stemColorVar at
  * every call site that decides a CLIP'S OWN rendered color
  * (CollapsedRifffRow.tsx, StemWaveformRow.tsx, RifffBlockRow.tsx) -- NOT
  * at selectors.ts's categoryForRifff, which needs a bus that's always resolved
- * (defaulting unassigned stems to aux) for its own row-grouping tie-break.
+ * (defaulting unassigned stems to back) for its own row-grouping tie-break.
  */
 export function stemDisplayColorVar(stem: Stem | undefined, bus: BusId | undefined): string {
   if (stem?.recordedInApp) return 'var(--ra-recording-live)'

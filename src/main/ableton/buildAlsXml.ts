@@ -103,7 +103,7 @@ function applyFade(
 }
 
 // Ableton's own fixed palette index (0-69ish) per category (back takes backing's, front lead's), applied to every
-// group/track/clip that bus produces -- per direct feedback ("can we color
+// group/track/clip that category produces -- per direct feedback ("can we color
 // code the groups and clips"). bass/lead/backing are NOT guesses: extracted
 // directly from a real project the user hand-recolored in Ableton itself as
 // a reference (2026-08-05-plush-nectar3234 project) -- bass's group, track,
@@ -123,13 +123,8 @@ function applyFade(
 // as 0 (drums's unverified guess); neither index is what that bus showed
 // in the reference project anymore.
 //
-// aux was originally 16 (a cool neutral grey) -- changed 2026-09-01 to 22
-// (an unverified guess at a warm tan/khaki swatch), matching the same
-// grey-reads-as-muted-clip fix made to busColorHex in theme/typeColor.ts
-// (see that file's own longer comment for the full reasoning). Same
-// "adjust by hand in Ableton if this index isn't actually the tan it's
-// assumed to be" caveat as drums above -- unlike drums/bass/lead/backing,
-// this one was never checked against a real opened project.
+// Index 22 (an unverified tan guess, from the retired aux bus) is now only the riser colour;
+// "adjust by hand in Ableton" applies to it as to drums above.
 const ABLETON_CATEGORY_COLORS: Record<StemCategory, number> = {
   drums: 65,
   bass: 0,

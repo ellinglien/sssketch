@@ -856,10 +856,10 @@ function ProjectMenu({
   /**
    * `derivedBusOf` is the "it should use that information" half of the
    * tidy-up fix (see handleExportProject below). Every exporter reads
-   * `state.busOf[key] ?? 'aux'` -- buildAlsXml.ts, buildRppProject.ts,
+   * `state.busOf[key]` (no entry reads as back) -- buildAlsXml.ts, buildRppProject.ts,
    * nativeExport.ts -- so a project whose stems were only ever ROLE-
    * confirmed (the auto-arrange route, which never writes busOf) would pile
-   * every stem onto the aux bus. Merging the role-derived buses in here,
+   * every stem into the back category. Merging the role-derived buses in here,
    * rather than dispatching ASSIGN_STEMS_TO_BUS, keeps exporting a
    * read-only act: no clip renames (renameRifffsForBusAssignment), no
    * unsaved-changes flag, nothing about the project moves because a file

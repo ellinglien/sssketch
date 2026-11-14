@@ -346,6 +346,27 @@ describe('buildRppProject', () => {
     expect(findChild(tracks[2], 'PEAKCOL')?.params).toEqual([String(rgb(0xc7a4d2))]) // lead's
   })
 
+  it('labels a second shared track BACK (shared) for aux and backing stems', () => {
+    // a/b overlap (two tracks); c/d follow them, so each track holds two stems.
+    const starts: Record<string, number> = { a: 0, b: 0, c: 4, d: 4 }
+    const rifffs = Object.entries(starts).map(([id, startBar]) => ({
+      ...drumsRifff(),
+      groupId: id,
+      startBar
+    }))
+    const state = emptyAppState({
+      rifffs: Object.fromEntries(rifffs.map((r) => [r.groupId, r])),
+      busOf: { 'a:0': 'aux', 'b:0': 'backing', 'c:0': 'aux', 'd:0': 'backing' }
+    })
+    const rppText = buildRppProject(
+      state,
+      new Map(['a', 'b', 'c', 'd'].map((id) => [`${id}:0`, `${id}.wav`]))
+    )
+    const names = tracksOf(rppText).tracks.map((t) => findChild(t, 'NAME')?.params[0])
+
+    expect(names).toEqual(['"BACK — DRUMS"', '"BACK (shared)"'])
+  })
+
   it('keeps tracks for the same bus adjacent when packIntoTracks opens more than one', () => {
     // Two non-overlapping same-bus stems that DO overlap in time (forcing
     // packIntoTracks to open two physical tracks for this one bus).

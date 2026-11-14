@@ -53,6 +53,11 @@ export function categoryOfBus(bus: BusId): StemCategory {
   return BUS_CATEGORY[bus]
 }
 
+/** The bus a Tidy Up group files a stem under: its role's category, back when nothing is known. */
+export function groupBusFor(role: ArrangeRole | null): BusId {
+  return CATEGORY_BUS[role === null ? 'back' : categoryOfRole(role)]
+}
+
 /** Every stored role that reads as `category`, in ROLE_CATEGORY's order. */
 export function rolesInCategory(category: StemCategory): ArrangeRole[] {
   return (Object.keys(ROLE_CATEGORY) as ArrangeRole[]).filter((r) => ROLE_CATEGORY[r] === category)

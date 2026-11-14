@@ -275,7 +275,7 @@ export interface AppState {
    * keyed by stemKey(groupId, slot) -- mirrors channelOf's own shape, just
    * per-stem instead of per-rifff (two stems in the same rifff can belong
    * to different buses). A stem absent from this map has no assignment
-   * yet -- buildAlsXml.ts falls back to the 'aux' bus for those, so export
+   * yet -- buildAlsXml.ts falls back to the back category for those, so export
    * is useful immediately, before any labelling UI exists. Export-time
    * grouping only; never reaches EngineProject or the native engine. See
    * docs/superpowers/specs/2026-08-05-stem-bus-clustering-design.md. */

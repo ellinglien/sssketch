@@ -984,6 +984,42 @@ describe('exportStemTracksToLibrary / exportStemTracksNextToSource', () => {
     }
   }, 30000)
 
+  it('exportStemTracksNextToSource files a stem with no bus as <project> - back 1.wav', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-src-'))
+    const projectDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-project-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.3, 4410)
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'untidied',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'a',
+            type: 'fx',
+            path: stemPath,
+            durationSec: 0.1,
+            barLength: 1
+          }
+        ]
+      }
+      const state: AppState = { ...initialState, bpm: 60, rifffs: { r1: rifff }, busOf: {} }
+
+      await exportStemTracksNextToSource(state, join(projectDir, 'my-proj.sssketchproj'))
+
+      expect(existsSync(join(projectDir, 'Stems', 'my-proj', 'my-proj - back 1.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
   it('exportStemTracksNextToSource derives the project name from the source filename', async () => {
     const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-src-'))
     const projectDir = mkdtempSync(join(tmpdir(), 'sssketch-tracks-project-'))

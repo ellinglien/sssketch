@@ -5,6 +5,7 @@ import {
   STEM_CATEGORY_OPTIONS,
   categoryOfBus,
   categoryOfRole,
+  groupBusFor,
   rolesInCategory
 } from './stemCategory'
 import { ARRANGE_ROLE_OPTIONS, ARRANGE_ROLE_TO_BUS } from './stemRole'
@@ -40,6 +41,13 @@ describe('stemCategory', () => {
     }
     expect(CATEGORY_ROLE.back).toBe('backing')
     expect(CATEGORY_ROLE.front).toBe('lead')
+  })
+
+  it('files a stem under its category bus, back when no role is known', () => {
+    expect(groupBusFor(null)).toBe('backing')
+    expect(groupBusFor('aux')).toBe('backing')
+    expect(groupBusFor('vocal')).toBe('lead')
+    expect(groupBusFor('fill')).toBe('drums')
   })
 
   it('lists the roles of a category', () => {
