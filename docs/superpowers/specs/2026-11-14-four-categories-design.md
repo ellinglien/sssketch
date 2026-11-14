@@ -58,27 +58,49 @@ front** (lowercase, that order). Stored values don't change:
   into one "back" bus mixdown; `lead` exports as "front". The Ableton/REAPER track names follow.
 - **Colours don't change.** They are Endlesss's sound types (facts, not guesses).
 - **Known cost:** a new pick can no longer say "fill" or "vocal". Stems already labelled keep
-  their stored role, so auto-arrange still treats them as before; new ones are drums or front.
+  their stored role; new ones are drums or front.
+- **Everywhere, not only the pickers** (Elling, 2026-11-14: "implement this division across the
+  board"): auto-arrange's role labels and its role variety (`engineRoleFor` compares categories,
+  drum sub-roles still count apart), the arrangement map's row labels, Tidy Up's groups and its
+  "{group} N — " clip names, the tidied view's row groups and colours, and every export.
+- **Role → bus for new tidies** (`ARRANGE_ROLE_TO_BUS`): fill → drums, vocal → lead, textureFx →
+  backing, so a role's bus always has the role's category. A stem tidied before this as vocal or
+  fill was stored with bus `aux`, so it shows as back until it's tidied again (the bus is what
+  Tidy Up stored; nothing is rewritten).
+- **Colours of the groups:** back takes backing's colour, front takes lead's.
 
 ### 2. Discover and radio
 
-- The `lead` mask kind becomes **front**, and a new **back** kind joins it. Both draw from stems
-  that aren't drums or bass (confirmed, mask, or confident guess) and **rank by the dial**, the way
-  the trait kinds rank: front by high score, back by low. They respect the trait-match bar like the
-  trait kinds do (`traitBar.ts`, `traitQuantiles.ts`: the dial gets its own percentile table).
-- Saved slots and settings that say `lead` read as `front`.
-- Labels in the kind picker: drums, bass, back, front, then bright, warm, rhythmic, bass-heavy
-  (the trait kinds stay, as dials inside any category).
-- Radio's per-kind weights and readouts that key on `lead` key on `front`; `back` gets the
-  weight `aux`/backing material has today.
+- The `lead` mask kind becomes **front**, and a new **back** kind joins it. Both draw from the
+  same pool: stems that aren't drums or bass and have a guess (the model placed them as back or
+  front), plus stems you labelled (a labelled front stem only in front, a labelled back stem only
+  in back). Both **rank by the dial**, the way the trait kinds rank: front by high score, back by
+  low. They respect the trait-match bar like the trait kinds do (`traitBar.ts`; the dial gets its
+  own percentile table, built from the stored `FrontScore`s). Endlesss's "notes" tag no longer
+  places a stem by itself (it says "melodic", not front or back); the model does.
+- Saved slots and settings that say `lead` read as `front`: the arrangement map's locked climax
+  (`coachClimax.ts`) and the phone's add-slot request (a phone page loaded before the update).
+  Discover's and EEEDIT's slots live only in memory.
+- Labels in the kind picker: **drums, bass, back, front** (plain: one vocabulary across the app,
+  replacing drummy/bassish/leadesque), then the trait kinds with their names as today (chonky,
+  rhythmic, sparkly, buttery). A rifff named "discover: drummy+leadesque" before keeps its name.
+- Radio: what keyed on `lead` keys on `front` (intensity weight, never-folds, the melodic move
+  table, the turnaround's kept row, the carry kind). `back` gets `warm`'s intensity weight (0.25)
+  and the pad move table, and replaces `warm` as the starter bed's fourth layer.
+- The arrangement map's intro and outro still drop the front; back parts now stay in them (before,
+  `backing` counted as harmony and was dropped too).
+- **The web radio** (ell.ing/radio) imports this repo's `src/shared` directly, so it changes in
+  the same work to keep compiling: its front and back kinds read the stored role (front = lead or
+  vocal, back = backing, aux or textureFx). No dial on the web yet, and no deploy without Elling.
 
 ### 3. One model
 
 One small linear model replaces the guessers for roles:
 
-- **Input:** the stem's YAMNet embedding (`StemEmbeddingCache`, already computed for every scanned
-  stem), plus the few feature fields that helped (pitch movement, how much of the loop it plays,
-  pitch steadiness, brightness) where cached.
+- **Input:** the stem's YAMNet embedding only (`StemEmbeddingCache.EmbeddingJSON`, 1024 numbers,
+  already computed for every scanned stem). The test's embedding-only model scored about the same
+  as embeddings plus features (~70% vs ~71%), and three of the features aren't stored as such, so
+  features are left out.
 - **Output:** probabilities for drums, bass, back, front.
 - **Weights ship with the app:** `src/shared/stemCategoryModel.json` (4 × ~1030 numbers, tens of
   KB), made by `scripts/train-stem-category-model.mjs` from a copy of a library db: the owner's
@@ -86,7 +108,9 @@ One small linear model replaces the guessers for roles:
   thousands of them against a hundred front/back stems: that is today's bug). Weights are numbers,
   nothing personal. The script prints a cross-validated report (grouped by jam) and refuses to
   write weights that score below the 2026-10-15 baseline. Retraining with new labels is running
-  that script again; there is no on-device training.
+  that script again; there is no on-device training. The floor: front/back accuracy on jams the
+  model didn't train on at least 0.60 (the old centroid scored 0.55, the live guesses 0.24), and
+  drums and bass recall at least 0.60.
 - **Inference** is a dot product in main, inside the existing overnight scheduler
   (`stemAutoClassify.ts`), in its batches. It's far cheaper than today's centroid and
   nearest-neighbour passes, which it removes.
@@ -94,21 +118,34 @@ One small linear model replaces the guessers for roles:
 How a stem's category and dial are decided:
 
 1. **Your label** (`StemCategories`) wins. A confirmed lead/vocal sets the dial to 1, a confirmed
-   backing/aux/textureFx to 0.
-2. **Endlesss's instrument bits:** drums or bass bit alone → that category.
+   backing/aux/textureFx to 0 (at read time; nothing is stored). Rows the startup backfill copied
+   from Endlesss's drums/bass tags (`Source = 'instrumentMask'`) count here as today, but are never
+   used as human labels for training.
+2. **Endlesss's instrument bits:** drums or bass (`instrumentMaskToSoundType`, as today) → that
+   category. The notes bit no longer decides.
 3. **The model:** drums or bass if that probability is ≥ 0.8; otherwise the stem is back-or-front
    and its dial is `p(front) / (p(front) + p(back))`.
 4. **No embedding yet:** no guess and no dial; the stem still appears for the trait kinds, as today.
 
 Stored: `StemAutoCategory` keeps its row (`ArrangeRole` = the category's stored role, `Source` =
 `model`), plus a new nullable `FrontScore REAL` column (an `ALTER TABLE ... ADD COLUMN` in
-`riffLibrarySchema.ts`, the usual pattern). `CLASSIFIER_VERSION` is bumped, so every stem is
-re-guessed once. The `ComputedAt` seconds/milliseconds mix the test found is normalised to
-milliseconds on write.
+`riffLibrarySchema.ts`, the usual pattern). When that column is added, every old guess is deleted
+(`StemAutoCategory` rows except mask drums/bass), so every stem is re-guessed once, and the
+classifier only skips stems whose row came from the model or the mask (an older app sharing the db
+can't block a re-guess). The deleted rows include the old zero-shot rows stamped in seconds, so
+`ComputedAt` is milliseconds throughout. `CLASSIFIER_VERSION` is bumped.
+
+Tidy Up's suggestions for a sketch's stems and auto-arrange's role step read the stored guess too
+(one path lookup, like `get-stem-category-roles`), instead of running their own guessers in the
+window. Auto-arrange's drum sub-role guess goes with them: kick/snare/hat stays a manual pick.
 
 **Removed:** the arrange-role and bus axes of the feature centroids (`categoryCentroids.ts`,
 `busCentroids.json`, their training and backfills), the embedding nearest-neighbour role
-suggestion (`embeddingMatch.ts`), and the YAMNet AudioSet zero-shot role (`audiosetClasses.ts`).
+suggestion (`embeddingMatch.ts`, main and shared, and the window-side refinements
+`roleCentroidRefinement.ts`/`roleEmbeddingRefinement.ts`), the YAMNet AudioSet zero-shot role
+(`audiosetClasses.ts`, its IPC, its "needs" entry and its writer fields), the already-unused
+`resolveStemArrangeRole.ts`, and the "centroid store unreadable" startup dialog. Labels are still
+written exactly as before (`upsertStemCategoryBus`/`Role`), just without retraining anything.
 YAMNet itself stays: it makes the embeddings. Delete each only once nothing else reads it; Tidy Up
 suggestions and Discover read the one model's result instead. The drum sub-role axis (manual only)
 is untouched.
