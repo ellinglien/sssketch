@@ -4,10 +4,12 @@ import type Database from 'better-sqlite3'
 import { instrumentMaskToSoundType, type DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import type { SoundType } from '@shared/types'
 import type { ArrangeRole } from '@shared/stemRole'
+import { categoryOfRole } from '@shared/stemCategory'
 import {
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
+  type DiscoverKindSources,
   type DiscoverSlotKind,
   type DiscoverTraitKind
 } from '@shared/discoverSlotKind'
@@ -281,7 +283,10 @@ export async function getAdjacentDiscoverCandidates(
         // Adjacency stays on pool-relative trait ranking for now (the
         // library-percentile bar is the main roll path only, Phase 1).
         traitPercentiles: {},
-        kindSources: {},
+        // A back/front label sets the dial (attachDiscoverDial); other kinds need no source here.
+        kindSources: confirmedDialKindSources(
+          'confirmedRole' in classification ? classification.confirmedRole : null
+        ),
         riffCreationTime: resolved.creationTime ?? null,
         soundType,
         // Pure string computation (resolveStemPath's own doc comment --
@@ -335,6 +340,14 @@ export async function getAdjacentDiscoverCandidates(
   return { newer: await withIntensity(traited.newer), older: await withIntensity(traited.older) }
 }
 
+/** A stem labelled back or front is 'confirmed' for that kind, so its dial reads 0 or 1. */
+export function confirmedDialKindSources(
+  confirmedRole: ArrangeRole | null | undefined
+): DiscoverKindSources {
+  const category = confirmedRole ? categoryOfRole(confirmedRole) : null
+  return category === 'back' || category === 'front' ? { [category]: 'confirmed' } : {}
+}
+
 /** Trait values and percentiles for `percentileTraits` (plus the slot's own) on both directions,
  * and the front/back dial for a slot with a dial kind (attachDiscoverDial). */
 async function attachAdjacentTraits(
@@ -351,7 +364,6 @@ async function attachAdjacentTraits(
     list: AdjacentDiscoverCandidate[]
   ): Promise<AdjacentDiscoverCandidate[]> => {
     const attached = await attachDiscoverTraits(ownDb, list, valueKinds)
-    // shortcut: labelled stems carry no dial in the dig pool; pass their confirmed category if that ever matters
     const dialed = attachDiscoverDial(ownDb, attached, slotKinds)
     return list.map((c, i) => ({
       ...c,

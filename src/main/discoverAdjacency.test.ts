@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { adjacentWalkSizes, walkAdjacentWindow } from './discoverAdjacency'
+import {
+  adjacentWalkSizes,
+  confirmedDialKindSources,
+  walkAdjacentWindow
+} from './discoverAdjacency'
 
 describe('walkAdjacentWindow', () => {
   it('walks outward from the center in both directions, closest first', async () => {
@@ -84,5 +88,14 @@ describe('adjacentWalkSizes', () => {
     expect(adjacentWalkSizes(Number.NaN).matchesPerDirection).toBe(4)
     expect(adjacentWalkSizes(2.6).matchesPerDirection).toBe(2)
     expect(adjacentWalkSizes(100).matchesPerDirection).toBe(16)
+  })
+})
+
+describe('confirmedDialKindSources', () => {
+  it('a back or front label is confirmed for its kind, so the dig dial reads it', () => {
+    expect(confirmedDialKindSources('vocal')).toEqual({ front: 'confirmed' })
+    expect(confirmedDialKindSources('aux')).toEqual({ back: 'confirmed' })
+    expect(confirmedDialKindSources('drums')).toEqual({})
+    expect(confirmedDialKindSources(null)).toEqual({})
   })
 })

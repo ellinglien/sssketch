@@ -252,9 +252,17 @@ export function AutoArrangeRoleStep({
   const rolePaths = useMemo(() => flatStems.map((fs) => fs.stem.path), [flatStems])
   const confirmedRoles = useConfirmedStemRoles(rolePaths)
 
-  // The overnight classifier's stored guess (StemAutoCategory, placed rows only) per path, keyed
-  // on the SET of paths like useConfirmedStemRoles, so a rebuilt array doesn't refetch.
-  const guessKey = useMemo(() => [...new Set(rolePaths)].sort().join('\n'), [rolePaths])
+  // The overnight classifier's stored guess (StemAutoCategory, placed rows only), looked up by a
+  // re-oned (or Cross/EEEDIT) copy's original, phaseSourcePath, since a `.bakes` copy has no
+  // StemCID of its own. Keyed on the SET of paths like useConfirmedStemRoles, so a rebuilt array
+  // doesn't refetch.
+  const guessKey = useMemo(
+    () =>
+      [...new Set(flatStems.map((fs) => fs.stem.phaseSourcePath ?? fs.stem.path))]
+        .sort()
+        .join('\n'),
+    [flatStems]
+  )
   const [guessByPath, setGuessByPath] = useState<Record<string, { arrangeRole: ArrangeRole }>>({})
   useEffect(() => {
     let cancelled = false
@@ -307,7 +315,7 @@ export function AutoArrangeRoleStep({
     // is never guessed: kick/snare/hat stays a manual pick.
     const resolved: StemRoleInfo[] = flatStems.map(({ stem, stemKey: key }) => {
       const base = resolveStemRole(stem, key, busOf[key] ?? null)
-      const guess = base.busId === null ? guessByPath[stem.path] : undefined
+      const guess = base.busId === null ? guessByPath[stem.phaseSourcePath ?? stem.path] : undefined
       const refined: StemRoleInfo = guess
         ? {
             ...base,

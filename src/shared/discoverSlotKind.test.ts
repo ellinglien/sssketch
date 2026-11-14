@@ -185,6 +185,17 @@ describe('four categories', () => {
   })
 
   it('orders mask kinds first', () => {
-    expect(normalizeSlotKinds(['warm', 'front', 'back'])).toEqual(['back', 'front', 'warm'])
+    expect(normalizeSlotKinds(['warm', 'front', 'drums'])).toEqual(['drums', 'front', 'warm'])
+  })
+
+  // Their dials are complements, so a set with both could only pass undecided stems.
+  it('keeps whichever of back/front comes first, never both', () => {
+    expect(normalizeSlotKinds(['front', 'back'])).toEqual(['front'])
+    expect(normalizeSlotKinds(['back', 'drums', 'front'])).toEqual(['drums', 'back'])
+  })
+
+  it('turning front on turns back off, and vice versa', () => {
+    expect(toggleSlotKind(['drums', 'back'], 'front')).toEqual(['drums', 'front'])
+    expect(toggleSlotKind(['front'], 'back')).toEqual(['back'])
   })
 })

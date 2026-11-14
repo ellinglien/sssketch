@@ -155,14 +155,17 @@ export function isTraitSlotKind(kind: DiscoverSlotKind): kind is DiscoverTraitKi
 
 // bright and warm are opposite ends of ONE field (spectralCentroidHz) --
 // both in one set would cancel out, so a set holds at most one of them.
+// back/front too: their dials are complements, so a set with both would pass only undecided stems.
 const OPPOSITE_KIND: Partial<Record<DiscoverSlotKind, DiscoverSlotKind>> = {
   bright: 'warm',
-  warm: 'bright'
+  warm: 'bright',
+  back: 'front',
+  front: 'back'
 }
 
 /** Combination slots (docs/superpowers/specs/2026-09-21-discover-combo-
- * slot-kinds-design.md): dedupes, drops the later of bright/warm if both
- * appear, and returns canonical order (DISCOVER_SLOT_KIND_OPTIONS -- mask
+ * slot-kinds-design.md): dedupes, drops the later of bright/warm (or of
+ * back/front) if both appear, and returns canonical order (DISCOVER_SLOT_KIND_OPTIONS -- mask
  * kinds first). Every stored/transmitted kind set goes through this so
  * {warm, drums} and {drums, warm} are the same slot. */
 export function normalizeSlotKinds(kinds: readonly DiscoverSlotKind[]): DiscoverSlotKind[] {
@@ -176,7 +179,7 @@ export function normalizeSlotKinds(kinds: readonly DiscoverSlotKind[]): Discover
 }
 
 /** One chip click in the kind picker. Turning a kind on also turns its
- * bright/warm opposite off; turning off the LAST kind is a no-op (a slot
+ * bright/warm or back/front opposite off; turning off the LAST kind is a no-op (a slot
  * always targets at least one kind) unless `allowEmpty` -- the add row's
  * pending selection, which starts empty and may go back to empty. */
 export function toggleSlotKind(

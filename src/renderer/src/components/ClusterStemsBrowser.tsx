@@ -172,6 +172,9 @@ interface ClusterableStem {
    * useStemPreviewPlayback to solo by stemKey. */
   librarySource?: Omit<Stem, 'slot'>
   path: string
+  /** SKETCH POPULATION ONLY. The original a re-oned (or Cross/EEEDIT) copy was made from: the
+   * stored guess is looked up by it, since a `.bakes` copy has no StemCID of its own. */
+  phaseSourcePath?: string
   color: string
   /** The bar this stem's own rifff is placed at on the timeline -- what a
    * thumbnail click scrubs the transport to (see handleThumbnailClick on
@@ -433,6 +436,7 @@ export function ClusterStemsBrowser({
           name: `${rifff.name} - ${stem.name}`,
           presetName: stem.name,
           path: stem.path,
+          phaseSourcePath: stem.phaseSourcePath,
           tileSpanBars: geometry.tileSpanBars,
           color: stemColorVar(stem),
           startBar: geometry.startBar,
@@ -457,10 +461,19 @@ export function ClusterStemsBrowser({
   const { loading: featuresLoading, featuresByKey } = useStemFeatureScan(scanItems)
 
   // The overnight classifier's stored guess (StemAutoCategory, placed rows only) for the sketch's
-  // stems, keyed by path. Fetched once per population of stems, like every other frozen input here:
-  // a guess written mid-session never moves a row. The library population carries its guess
-  // through listTidyUpLibraryStems instead (libraryRoleGuessByKey below). null = not fetched yet,
-  // which reads as loading, so the rows aren't laid out twice.
+  // stems, keyed by the path asked about (a copy's phaseSourcePath, else its path). Keyed on the
+  // SORTED SET of those paths, not on `stems` (a new array on every bus click), so it is fetched
+  // once per population and again only if the stems themselves change: a guess written
+  // mid-session never moves a row. The library population carries its guess through
+  // listTidyUpLibraryStems instead (libraryRoleGuessByKey below). null = not fetched yet, which
+  // reads as loading, so the rows aren't laid out twice.
+  const guessPathsKey = useMemo(
+    () =>
+      population === 'sketch'
+        ? [...new Set(stems.map((s) => s.phaseSourcePath ?? s.path))].sort().join('\n')
+        : '',
+    [population, stems]
+  )
   const [guessByPath, setGuessByPath] = useState<Record<
     string,
     { arrangeRole: ArrangeRole }
@@ -469,7 +482,7 @@ export function ClusterStemsBrowser({
     if (population !== 'sketch') return
     let cancelled = false
     window.rifffApi
-      .getStemCategoryGuesses(scanItems.map((s) => s.path))
+      .getStemCategoryGuesses(guessPathsKey === '' ? [] : guessPathsKey.split('\n'))
       .then((guesses) => {
         if (!cancelled) setGuessByPath(guesses)
       })
@@ -480,7 +493,7 @@ export function ClusterStemsBrowser({
     return () => {
       cancelled = true
     }
-  }, [population, scanItems])
+  }, [population, guessPathsKey])
   const loading = featuresLoading || (population === 'sketch' && guessByPath === null)
 
   // Mirrors the old `computed` shape's own two derived pieces exactly --
@@ -579,7 +592,7 @@ export function ClusterStemsBrowser({
         dspStems.push(stem)
         continue
       }
-      const guess = guessByPath?.[stem.path]
+      const guess = guessByPath?.[stem.phaseSourcePath ?? stem.path]
       const guessedBus = guess ? ARRANGE_ROLE_TO_BUS[guess.arrangeRole] : null
       // Falls back to a real Endlesss preset-name match (same
       // guessArrangeRoleFromPresetName lookup resolveStemRole.ts's own
