@@ -30,7 +30,7 @@ const input = (over: Partial<RadioReadoutInput> = {}): RadioReadoutInput => ({
   nextChange: null,
   armedTurnaround: null,
   arc: { state: 'off', count: 3, target: 3 },
-  rows: [row('a'), row('b', { kinds: ['bass'] }), row('c', { kinds: ['lead'] })],
+  rows: [row('a'), row('b', { kinds: ['bass'] }), row('c', { kinds: ['front'] })],
   ...over
 })
 const line = (o: Partial<RadioReadoutInput>): string => radioReadout(input(o)).statusLine

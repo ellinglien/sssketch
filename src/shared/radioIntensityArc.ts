@@ -273,12 +273,12 @@ export function radioBreakdownCarrier(r: RadioIntensityRow): boolean {
   return r.sounding && !isLow(r.kinds)
 }
 
-/** The kind of a carry row (section 4.1 rule 2): a lead, or a warm row when a lead is already on
- * the bed. */
+/** The kind of a carry row (section 4.1 rule 2): a front row, or a back row when a front row is
+ * already on the bed (back replaced warm here on 2026-11-14, four categories). */
 export function radioCarryKind(
   rows: readonly { kinds: readonly DiscoverSlotKind[] }[]
 ): DiscoverSlotKind {
-  return rows.some((r) => r.kinds.includes('front')) ? 'warm' : 'front'
+  return rows.some((r) => r.kinds.includes('front')) ? 'back' : 'front'
 }
 
 /**

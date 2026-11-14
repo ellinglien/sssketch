@@ -2012,12 +2012,22 @@ describe('getDiscoverCandidates (pools by category)', () => {
     expect(await pool(own, 'back')).toEqual([['n', 'guess']])
   })
 
-  it('a notes stem with no guess is in neither', async () => {
+  it('a notes stem with no guess is in both front and back, by its tag', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['n'])
     seedStem(own, 'n', 'jam1', { instrument: NOTES })
+    expect(await pool(own, 'front')).toEqual([['n', 'tag']])
+    expect(await pool(own, 'back')).toEqual([['n', 'tag']])
+  })
+
+  it('a notes stem guessed drums follows the guess', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['n'])
+    seedStem(own, 'n', 'jam1', { instrument: NOTES })
+    seedAutoCategory(own, 'n', 'drums', 'model')
     expect(await pool(own, 'front')).toEqual([])
-    expect(await pool(own, 'back')).toEqual([])
+    const drums = await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds: ['drums'] })
+    expect(drums.map((c) => [c.stemCID, c.kindSources.drums])).toEqual([['n', 'guess']])
   })
 })
 
@@ -2182,16 +2192,19 @@ describe('background efficiency B2: per-kind stem lists', () => {
           continue
         }
         const t = row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
+        const backOrFront = kind === 'back' || kind === 'front'
         const placed = t === 'drums' || t === 'bass'
+        const notesOnly = t === 'notes' && !auto.has(row.StemCID)
         const guessed = cat(auto.get(row.StemCID))
         const ok = placed
           ? t === kind
-          : guessed === kind ||
-            ((guessed === 'back' || guessed === 'front') && (kind === 'back' || kind === 'front'))
+          : notesOnly
+            ? backOrFront
+            : guessed === kind || ((guessed === 'back' || guessed === 'front') && backOrFront)
         if (ok)
           admitted.set(row.StemCID, {
             instrument: row.Instrument,
-            source: placed ? 'tag' : 'guess'
+            source: placed || notesOnly ? 'tag' : 'guess'
           })
       }
     }

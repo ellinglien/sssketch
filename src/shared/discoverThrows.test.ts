@@ -38,7 +38,7 @@ const SPB = 2
 const rows: DiscoverThrowTick['rows'] = [
   { slot: 'drums', kinds: ['drums'], audible: true },
   { slot: 'bass', kinds: ['bass'], audible: true },
-  { slot: 'lead', kinds: ['lead'], audible: true },
+  { slot: 'lead', kinds: ['front'], audible: true },
   { slot: 'pad', kinds: ['warm'], audible: true }
 ]
 
@@ -496,7 +496,7 @@ describe('discoverThrowSilenced', () => {
 
   it("a combined turnaround's gap: every row it drops but the keeper, and no row it only filters", () => {
     const random = seededRandom(5)
-    const bed = ['drums', 'bass', 'lead', 'warm'] as const
+    const bed = ['drums', 'bass', 'front', 'warm'] as const
     const rows = bed.map((id) => ({
       id,
       kinds: [id] as DiscoverSlotKind[],

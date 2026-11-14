@@ -27,7 +27,7 @@ const c = (o: Partial<DiscoverCandidate>): DiscoverCandidate => ({
   riffCID: 'r',
   presetName: '',
   creatorUserName: 'elling',
-  slotKinds: ['lead'],
+  slotKinds: ['front'],
   drumSubRole: null,
   riffBpm: 120,
   traitValues: {},

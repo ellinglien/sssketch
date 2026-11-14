@@ -149,7 +149,7 @@ describe('radioFoldStepLine', () => {
   })
 
   it('says when nothing qualifies', () => {
-    const rows = [row('bass', ['bass'], 4), row('lead', ['lead'], 4)]
+    const rows = [row('bass', ['bass'], 4), row('lead', ['front'], 4)]
     const s = stepRadioFold(createRadioFold('k3x9pq'), { rows, loopBars: 4, bpm: 120, fold: 100 })
     expect(radioFoldStepLine(s, rows)).toBe(
       `[radio-fold] lap 0 · anchor bass · stretch ${s.stretch} · foldable 0/2 heard · folds none`

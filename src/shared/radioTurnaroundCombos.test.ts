@@ -54,7 +54,7 @@ function row(
 const BED: TurnaroundRow[] = [
   row('d', ['drums']),
   row('b', ['bass']),
-  row('l', ['lead']),
+  row('l', ['front']),
   row('w', ['warm'])
 ]
 
@@ -300,7 +300,7 @@ describe('the gap after a riser', () => {
   })
 
   it('needs two audible rows: one row alone keeps the riser to the one', () => {
-    for (const plan of many({ rows: [row('l', ['lead'])], force: { move: 'riser' } }, 300)) {
+    for (const plan of many({ rows: [row('l', ['front'])], force: { move: 'riser' } }, 300)) {
       expect(plan.gapBeats).toBe(0)
     }
   })
@@ -380,7 +380,7 @@ describe('a wash on a row a drop silences before the one', () => {
 
 describe('a wash starts earlier only for a row it keeps', () => {
   it('is never stretched by a row left out of it (4-bar loop, bold, a wash chip)', () => {
-    const rows = ['r0:bass', 'r1:lead', 'r2:warm', 'r3:lead', 'r4:warm'].map((s) => {
+    const rows = ['r0:bass', 'r1:front', 'r2:warm', 'r3:front', 'r4:warm'].map((s) => {
       const [id, kind] = s.split(':')
       return row(id, [kind as DiscoverSlotKind])
     })

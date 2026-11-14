@@ -15,7 +15,7 @@ import { hashText, seededRandom } from './seededRandom'
 const ROWS: RadioHookRowInput[] = [
   { id: 'd', stemId: 'd-1', kinds: ['drums'], eligible: true, lastLowHeard: true },
   { id: 'b', stemId: 'b-1', kinds: ['bass'], eligible: true, lastLowHeard: true },
-  { id: 'l', stemId: 'l-1', kinds: ['lead'], eligible: true, lastLowHeard: false }
+  { id: 'l', stemId: 'l-1', kinds: ['front'], eligible: true, lastLowHeard: false }
 ]
 
 function withHook(o: Partial<RadioHook>, row = 'd'): RadioHooksState {

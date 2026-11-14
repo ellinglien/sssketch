@@ -45,7 +45,7 @@ function row(id: string, kinds: DiscoverSlotKind[]): TurnaroundRow {
 const BED: TurnaroundRow[] = [
   row('d', ['drums']),
   row('b', ['bass']),
-  row('l', ['lead']),
+  row('l', ['front']),
   row('w', ['warm'])
 ]
 

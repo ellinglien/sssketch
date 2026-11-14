@@ -562,7 +562,7 @@ describe('the breakdown', () => {
     expect(radioBreakdownRests(bed, 'full', true)).toMatchObject({ rest: ['d', 'b'], carry: true })
     expect(radioBreakdownRests(bed, 'full', false)).toMatchObject({ depth: 'thin', rest: ['b'] })
     expect(radioCarryKind([{ kinds: ['drums'] }])).toBe('front')
-    expect(radioCarryKind([{ kinds: ['front'] }])).toBe('warm')
+    expect(radioCarryKind([{ kinds: ['front'] }])).toBe('back')
   })
 
   it('never silence: something always sounds (10k random beds)', () => {

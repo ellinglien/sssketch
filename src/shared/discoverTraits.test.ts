@@ -186,8 +186,17 @@ describe('stemMatchesSlotKinds by category', () => {
   it('a confirmed aux is back', () => {
     expect(stemMatchesSlotKinds(null, ['back'], all, { confirmedRole: 'aux' })).toBe(true)
   })
-  it('the notes tag alone places nothing', () => {
-    expect(stemMatchesSlotKinds(NOTES_MASK, ['front'], all, {})).toBe(false)
+  it('the notes tag alone is in back and front, never drums or bass', () => {
+    expect(stemMatchesSlotKinds(NOTES_MASK, ['front'], all, {})).toBe(true)
+    expect(stemMatchesSlotKinds(NOTES_MASK, ['back'], all, {})).toBe(true)
+    expect(stemMatchesSlotKinds(NOTES_MASK, ['drums', 'bass'], all, {})).toBe(false)
+  })
+  it('a notes stem with a drums guess follows the guess', () => {
+    expect(stemMatchesSlotKinds(NOTES_MASK, ['drums'], all, { autoRole: 'drums' })).toBe(true)
+    expect(stemMatchesSlotKinds(NOTES_MASK, ['front'], all, { autoRole: 'drums' })).toBe(false)
+  })
+  it('an unmasked stem with no guess is in no mask kind', () => {
+    expect(stemMatchesSlotKinds(null, ['front'], all, {})).toBe(false)
   })
   it('a back-or-front guess is in both front and back', () => {
     expect(stemMatchesSlotKinds(NOTES_MASK, ['front'], all, { autoRole: 'backing' })).toBe(true)

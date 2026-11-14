@@ -34,7 +34,7 @@ const BAND: RadioFoldRow[] = [
   row('drums', { kinds: ['drums'], barLength: 4 }),
   row('hats', { kinds: ['drums'], barLength: 1 }),
   row('perc', { kinds: ['rhythmic'], barLength: 2 }),
-  row('lead', { kinds: ['lead'], barLength: 4 }),
+  row('lead', { kinds: ['front'], barLength: 4 }),
   row('pad', { kinds: ['warm'], barLength: 4 })
 ]
 

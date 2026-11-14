@@ -118,10 +118,11 @@ export interface StemSlotClassification {
  *    in order: its human-confirmed role's category (always wins, any mask --
  *    confirmed for a different category excludes it); else its Endlesss
  *    instrument mask when that resolves to drums/bass (ground truth -- an
- *    auto guess never moves it; the notes tag says "melodic", not back or
- *    front, so it places nothing by itself); else the overnight classifier's
- *    guess, where a back or front guess admits the stem to BOTH back and
- *    front (the dial ranks it). Direct request, 2026-09-22: audio-in/mic
+ *    auto guess never moves it); else the overnight classifier's guess,
+ *    where a back or front guess admits the stem to BOTH back and front (the
+ *    dial ranks it); else a notes tag (melodic, side undecided) admits it to
+ *    both back and front too, so a library with no guesses (no scan consent)
+ *    still has them. Direct request, 2026-09-22: audio-in/mic
  *    stems must be able to appear under the mask kinds. */
 export function stemMatchesSlotKinds(
   instrumentMask: number | null | undefined,
@@ -141,10 +142,11 @@ export function stemMatchesSlotKinds(
       ? null
       : instrumentMaskToSoundType(instrumentMask)
   if (soundType === 'drums' || soundType === 'bass') return maskKinds.includes(soundType)
-  if (!autoRole) return false
+  const backOrFront = maskKinds.includes('back') || maskKinds.includes('front')
+  // A notes stem with no guess yet: melodic, side undecided, so both.
+  if (!autoRole) return soundType === 'notes' && backOrFront
   const guessed = categoryOfRole(autoRole)
   // A back-or-front guess sits in both pools; the dial ranks it (stemCategoryDial.ts).
-  if (guessed === 'back' || guessed === 'front')
-    return maskKinds.includes('back') || maskKinds.includes('front')
+  if (guessed === 'back' || guessed === 'front') return backOrFront
   return maskKinds.includes(guessed)
 }

@@ -339,7 +339,7 @@ describe('compactRadioMeter', () => {
 })
 
 describe('buildMatchMeter dial kinds', () => {
-  it('a guessed front shows as bars from its dial value', () => {
+  it('a guessed front keeps its source entry and adds bars from its dial value', () => {
     const entries = buildMatchMeter({
       kinds: ['front'],
       kindSources: { front: 'guess' },
@@ -347,8 +347,8 @@ describe('buildMatchMeter dial kinds', () => {
       barUsed: 0.6,
       barRequested: 0.6
     })
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({ type: 'trait', kind: 'front', label: 'front', filled: 4 })
+    expect(entries.map((e) => e.text)).toEqual(['front: guess', 'front ▮▮▮▮▯'])
+    expect(entries[1]).toMatchObject({ type: 'trait', kind: 'front', label: 'front', filled: 4 })
   })
 
   it('a confirmed front shows its source, not bars', () => {

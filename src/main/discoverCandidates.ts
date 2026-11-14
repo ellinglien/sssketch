@@ -1170,8 +1170,9 @@ function yieldToEventLoop(): Promise<void> {
  *   every synced stem the moment it syncs -- direct request 2026-09-15:
  *   "can't we train it with some basic data before handing it to someone?"
  *   The mask decides alone; an auto guess never moves such a stem to
- *   another kind. The notes tag says "melodic", not back or front, so it
- *   places nothing by itself (2026-11-14, four categories).
+ *   another kind. The notes tag says "melodic", not back or front
+ *   (2026-11-14, four categories): it goes to the guess layer below, and
+ *   with no guess row it admits the stem to both back and front as 'tag'.
  * - A stem the mask CAN'T place (Instrument null, no recognised bit, notes,
  *   or audio-in): admitted if the overnight classify scan's own precomputed
  *   guess (StemAutoCategory, on ownDb) is in `kind`'s category, where a
@@ -1492,7 +1493,11 @@ async function buildMaskKindIndex(
 /** The guess layer: the residue rows with an overnight guess
  * (StemAutoCategory) -- a fresh read of that table and one pass over the
  * residue only. A drums or bass guess admits that kind; a back or front
- * guess admits BOTH back and front (the dial ranks it). */
+ * guess admits BOTH back and front (the dial ranks it). A notes-tagged row
+ * with no guess row admits both back and front as 'tag': melodic, side
+ * undecided, and without it a library with no guesses (no scan consent)
+ * would have no back or front at all. It lives here, not in the base,
+ * because a guess row arriving later replaces it. */
 async function buildGuessLayer(
   residue: InstrumentRow[],
   ownDb: Database.Database,
@@ -1511,13 +1516,24 @@ async function buildGuessLayer(
   let sinceYield = 0
   const slice = newSlice()
   for (const row of residue) {
-    const guessed = categoryOfStoredRole(autoRoleByStemCID.get(row.StemCID))
+    const autoRole = autoRoleByStemCID.get(row.StemCID)
+    const guessed = categoryOfStoredRole(autoRole)
+    // A notes stem with no guess row yet: melodic, side undecided, so both by its tag.
+    const notesOnly =
+      autoRole === undefined &&
+      row.Instrument !== null &&
+      instrumentMaskToSoundType(row.Instrument) === 'notes'
     const kinds: DiscoverMaskKind[] =
-      guessed === 'back' || guessed === 'front' ? ['back', 'front'] : guessed ? [guessed] : []
+      guessed === 'back' || guessed === 'front' || notesOnly
+        ? ['back', 'front']
+        : guessed
+          ? [guessed]
+          : []
+    const source: DiscoverKindSource = notesOnly ? 'tag' : 'guess'
     for (const kind of kinds) {
       const list = byKind.get(kind)!
       list.rows.push(row)
-      list.sources.push('guess')
+      list.sources.push(source)
     }
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
