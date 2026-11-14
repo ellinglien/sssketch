@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { guessFromProbs, predictCategoryProbs, type StemCategoryModel } from './stemCategoryModel'
+import {
+  STEM_CATEGORY_MODEL,
+  guessFromProbs,
+  predictCategoryProbs,
+  type StemCategoryModel
+} from './stemCategoryModel'
 
 const tiny: StemCategoryModel = {
   version: 1,
@@ -44,5 +49,12 @@ describe('guessFromProbs', () => {
     const g = guessFromProbs({ drums: 0.1, bass: 0.1, back: 0.6, front: 0.2 })
     expect(g.category).toBe('back')
     expect(g.frontScore).toBeCloseTo(0.25, 9)
+  })
+})
+
+describe('the shipped model', () => {
+  it('is trained and takes a 1024-d embedding', () => {
+    expect(STEM_CATEGORY_MODEL.version).toBeGreaterThan(0)
+    expect(predictCategoryProbs(STEM_CATEGORY_MODEL, new Array(1024).fill(0))).not.toBeNull()
   })
 })
