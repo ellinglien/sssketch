@@ -1,11 +1,10 @@
-import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { STEM_FEATURE_VERSION, type StemFeatures } from '@shared/stemFeatures'
 import { writeStemAnalysisResults } from './stemAnalysisResultsWriter'
 import { setStemPeaksCache } from './stemPeaksCacheStore'
 import { setStemFeatureCache } from './stemFeatureCacheStore'
 import { setStemEmbeddingCache } from './stemEmbeddingCacheStore'
-import { applyYamnetZeroShotCategory, markYamnetZeroShotAttempted } from './stemAutoCategoryStore'
 import * as traitQuantileCache from './traitQuantileCache'
 import * as wake from './stemAutoClassifyWake'
 
@@ -23,7 +22,6 @@ function freshDb(): Database.Database {
     CREATE TABLE StemEmbeddingCache (
       StemCID TEXT PRIMARY KEY, EmbeddingJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
     );
-    CREATE TABLE StemYamnetZeroShotAttempted (StemCID TEXT PRIMARY KEY, AttemptedAt INTEGER NOT NULL);
     CREATE TABLE StemCategories (StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, UpdatedAt INTEGER);
     CREATE TABLE StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
@@ -50,13 +48,7 @@ function features(seed: number): StemFeatures {
   } as StemFeatures
 }
 
-const TABLES = [
-  'StemPeaksCache',
-  'StemFeatureCache',
-  'StemEmbeddingCache',
-  'StemYamnetZeroShotAttempted',
-  'StemAutoCategory'
-]
+const TABLES = ['StemPeaksCache', 'StemFeatureCache', 'StemEmbeddingCache', 'StemAutoCategory']
 
 function dump(db: Database.Database): Record<string, unknown[]> {
   return Object.fromEntries(
@@ -64,23 +56,8 @@ function dump(db: Database.Database): Record<string, unknown[]> {
   )
 }
 
-// An AudioSet class that maps to an ArrangeRole (see audiosetClasses.ts) --
-// found at runtime so the test doesn't hard-code the table.
-async function mappedClassIndex(): Promise<number> {
-  const { arrangeRoleForAudiosetClass } = await import('@shared/audiosetClasses')
-  for (let i = 0; i < 600; i++) if (arrangeRoleForAudiosetClass(i)) return i
-  throw new Error('no mapped class')
-}
-
 describe('writeStemAnalysisResults (B7)', () => {
   it('writes exactly the rows the single-write IPCs write', async () => {
-    const classIndex = await mappedClassIndex()
-    // Both sides stamp the zero-shot row with Date.now() (milliseconds).
-    vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(1_791_245_617_123)
-    onTestFinished(() => {
-      vi.useRealTimers()
-    })
     const single = freshDb()
     const batched = freshDb()
     for (const db of [single, batched]) {
@@ -92,12 +69,7 @@ describe('writeStemAnalysisResults (B7)', () => {
     setStemPeaksCache(single, '/lib/j/s1', { peaks: [1, 2], brightness: [3, 4] }, 500)
     setStemFeatureCache(single, '/lib/j/s1', features(1), 500)
     setStemEmbeddingCache(single, '/lib/j/s1', [0.1, 0.2], 500)
-    markYamnetZeroShotAttempted(single, 's1', 500)
-    applyYamnetZeroShotCategory(single, 's1', classIndex, Date.now())
     setStemFeatureCache(single, '/lib/j/s2', features(2), 500)
-    markYamnetZeroShotAttempted(single, 's3', 500)
-    markYamnetZeroShotAttempted(single, 'confirmed', 500)
-    applyYamnetZeroShotCategory(single, 'confirmed', classIndex, 500)
 
     await writeStemAnalysisResults(
       batched,
@@ -106,42 +78,15 @@ describe('writeStemAnalysisResults (B7)', () => {
           path: '/lib/j/s1',
           peaks: { peaks: [1, 2], brightness: [3, 4] },
           features: features(1),
-          embedding: [0.1, 0.2],
-          zeroShotAttempted: true,
-          zeroShotClassIndex: classIndex
+          embedding: [0.1, 0.2]
         },
         { path: '/lib/j/s2', features: features(2) },
-        { path: '/lib/j/s3', zeroShotAttempted: true },
-        { path: '/lib/j/confirmed', zeroShotAttempted: true, zeroShotClassIndex: classIndex },
         // Not a library stem -- skipped, like the single writers skip it.
         { path: '/local/one-shot.wav', features: features(3), embedding: [1] }
       ],
       500
     )
     expect(dump(batched)).toEqual(dump(single))
-    expect(
-      (batched.prepare(`SELECT COUNT(*) AS n FROM StemAutoCategory`).get() as { n: number }).n
-    ).toBe(1)
-  })
-
-  it('stamps a zero-shot category in milliseconds, like every other StemAutoCategory row', async () => {
-    const classIndex = await mappedClassIndex()
-    const db = freshDb()
-    addStem(db, 's1')
-    vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(1_791_245_617_123)
-    try {
-      await writeStemAnalysisResults(
-        db,
-        [{ path: '/lib/j/s1', zeroShotAttempted: true, zeroShotClassIndex: classIndex }],
-        1_791_245_617 // the cache rows' ExtractedAt stays in seconds
-      )
-    } finally {
-      vi.useRealTimers()
-    }
-    expect(db.prepare(`SELECT ComputedAt FROM StemAutoCategory`).get()).toEqual({
-      ComputedAt: 1_791_245_617_123
-    })
   })
 
   it('resolves StemCIDs against the extra candidate dbs too, writing into the own db', async () => {

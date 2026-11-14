@@ -22,8 +22,7 @@ export type StemRoleSource = 'tidyup' | 'autoarrange' | 'drawarrange' | 'discove
  *
  * Replaces recordRoleCategorization (the wizards') and
  * recordRoleCategories (Tidy Up's), which were two functions writing the
- * same rows through the same IPC handler into the same table and triggering
- * the same server-side training (categoryCentroidTraining.ts). Two of these
+ * same rows through the same IPC handler into the same table. Two of these
  * is how the suggestion chains drifted apart in the first place, which cost
  * a real user-visible defect ("arrange mode is much better at guessing
  * currently... tidy up doesn't seem to be using it at all", 2026-09-15).

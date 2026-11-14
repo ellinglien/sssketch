@@ -7,7 +7,6 @@ import { sketchProjectPath } from './projectLibrary'
 import { countWork } from './workCounters'
 import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 import { bumpStemClassificationVersion } from './stemClassificationVersion'
-import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 
 /** Resolves a renderer-supplied ProjectRef into the real absolute path
  * StemCategories.SourceProject should carry -- a library-kind sketch is
@@ -110,8 +109,7 @@ function ensureBusStampColumn(db: Database.Database): void {
  * refused that project's bus for good (the backfill then stamped the project
  * complete). A row from then (BusUpdatedAt NULL) is still guarded by its
  * UpdatedAt if it holds a bus, which may be that new; a row with no bus takes
- * any. Training is not decided here: see recordStemCategoryBus
- * (categoryCentroidTraining.ts). */
+ * any. */
 export function upsertStemCategoryBus(
   db: Database.Database,
   entries: StemBusCategoryEntry[],
@@ -213,48 +211,6 @@ export function upsertStemCategoryRole(
   txn(entries)
   // Discover's precomputed per-kind stem lists read ArrangeRole.
   bumpStemClassificationVersion(db, 'confirmed')
-  // A confirmation changes the classifier's training and eligibility --
-  // its pending lists rebuild on the next batch (background efficiency B4).
-  noteAutoClassifyTrainingChanged()
-}
-
-export interface StemCategoryRow {
-  stemCID: string
-  arrangeRole: ArrangeRole | null
-  drumSubRole: DrumSubRole | null
-  busId: BusId | null
-  source: string
-  sourceProject: string | null
-  updatedAt: number
-}
-
-export function getStemCategory(db: Database.Database, stemCID: string): StemCategoryRow | null {
-  const row = db
-    .prepare(
-      `SELECT StemCID, ArrangeRole, DrumSubRole, BusId, Source, SourceProject, UpdatedAt
-       FROM StemCategories WHERE StemCID = ?`
-    )
-    .get(stemCID) as
-    | {
-        StemCID: string
-        ArrangeRole: string | null
-        DrumSubRole: string | null
-        BusId: string | null
-        Source: string
-        SourceProject: string | null
-        UpdatedAt: number
-      }
-    | undefined
-  if (!row) return null
-  return {
-    stemCID: row.StemCID,
-    arrangeRole: row.ArrangeRole as ArrangeRole | null,
-    drumSubRole: row.DrumSubRole as DrumSubRole | null,
-    busId: row.BusId as BusId | null,
-    source: row.Source,
-    sourceProject: row.SourceProject,
-    updatedAt: row.UpdatedAt
-  }
 }
 
 /** One path's confirmed role, as the renderer needs it. */

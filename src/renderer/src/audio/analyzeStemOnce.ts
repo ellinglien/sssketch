@@ -13,12 +13,7 @@ import {
 import { channelsAfterFirst, measureStemLevelOffThread } from './stemAnalysisClient'
 import { queueStemAnalysisWrite } from './analysisWriteQueue'
 import { stemLevelFields } from '@shared/stemAnalysis'
-import {
-  adoptStemEmbeddingFromBuffer,
-  adoptZeroShotFromBuffer,
-  hasStemEmbeddingEntry,
-  hasZeroShotEntry
-} from './stemEmbeddingCache'
+import { adoptStemEmbeddingFromBuffer, hasStemEmbeddingEntry } from './stemEmbeddingCache'
 
 export type StemAnalysisOutcome = 'done' | 'skipped' | 'failed'
 
@@ -26,7 +21,6 @@ export interface AnalyzeStemOnceResult {
   peaks: StemAnalysisOutcome
   features: StemAnalysisOutcome
   embedding: StemAnalysisOutcome
-  zeroShot: StemAnalysisOutcome
   /** Present only when `needs.level` asked for the level pass. */
   level?: StemAnalysisOutcome
 }
@@ -34,8 +28,7 @@ export interface AnalyzeStemOnceResult {
 const ALL_SKIPPED: AnalyzeStemOnceResult = {
   peaks: 'skipped',
   features: 'skipped',
-  embedding: 'skipped',
-  zeroShot: 'skipped'
+  embedding: 'skipped'
 }
 
 /** Paths whose level pass this session has run or is running. A second scan asking for the same
@@ -61,12 +54,6 @@ const levelMeasured = new Set<string>()
  * module's in-memory entry BEFORE the decode starts -- so an interactive
  * getPeaks/getStemFeatures/getOrExtractStemEmbedding for the same path,
  * mid-analysis, shares this work instead of decoding again.
- *
- * `needs.zeroShot` (background efficiency B5): the YAMNet zero-shot step
- * for a stem whose embedding is already cached but predates that step --
- * inference on the same decoded buffer (stemEmbeddingCache.ts's
- * adoptZeroShotFromBuffer). A fresh embedding runs it as part of its own
- * extraction.
  *
  * `needs.level` (spec 2026-10-05-radio-intensity-arc-design 7.2-7.3): the
  * level pass alone (@shared/stemLevel, every channel, in the worker) for a
@@ -113,11 +100,10 @@ export async function analyzeStemOnce(
   // caller can slip in between these checks and the adopt* calls.
   const wantPeaks = needs.peaks && !hasWaveformEntry(path)
   const wantEmbedding = needs.embedding && !hasStemEmbeddingEntry(path)
-  const wantZeroShot = needs.zeroShot && !wantEmbedding && !hasZeroShotEntry(path)
   // the level backfill (spec 2026-10-05-radio-intensity-arc-design 7.3): a current row without
   // the level pass. A fresh feature extraction measures it itself.
   const wantLevel = needs.level === true && !wantFeatures && !levelMeasured.has(path)
-  if (!wantPeaks && !wantFeatures && !wantEmbedding && !wantZeroShot && !wantLevel) {
+  if (!wantPeaks && !wantFeatures && !wantEmbedding && !wantLevel) {
     return needs.level === true ? { ...ALL_SKIPPED, level: 'skipped' } : ALL_SKIPPED
   }
 
@@ -148,7 +134,6 @@ export async function analyzeStemOnce(
       : null
 
   const embeddingPromise = wantEmbedding ? adoptStemEmbeddingFromBuffer(path, decoded) : null
-  const zeroShotPromise = wantZeroShot ? adoptZeroShotFromBuffer(path, decoded) : null
   // the SAME decode, every channel, merged into the row by main (never a second decode)
   const levelPromise = wantLevel
     ? decoded
@@ -170,11 +155,10 @@ export async function analyzeStemOnce(
     levelPromise.catch(() => levelMeasured.delete(path))
   }
 
-  const [peaks, features, embedding, zeroShot, level] = await Promise.allSettled([
+  const [peaks, features, embedding, level] = await Promise.allSettled([
     peaksPromise,
     featuresPromise,
     embeddingPromise,
-    zeroShotPromise,
     levelPromise
   ])
 
@@ -216,13 +200,6 @@ export async function analyzeStemOnce(
       embeddingPromise === null
         ? 'skipped'
         : embedding.status === 'fulfilled' && embedding.value !== null
-          ? 'done'
-          : 'failed',
-    // adoptZeroShotFromBuffer never rejects either -- false means it failed.
-    zeroShot:
-      zeroShotPromise === null
-        ? 'skipped'
-        : zeroShot.status === 'fulfilled' && zeroShot.value
           ? 'done'
           : 'failed',
     ...(needs.level === true && {

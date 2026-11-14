@@ -11,16 +11,12 @@ export type StemLevelWrite = Required<
  * batched set-stem-analysis-results IPC (background efficiency B7) --
  * each field optional, written exactly as its single-write IPC would:
  * peaks (set-stem-peaks-cache), features (set-stem-feature-cache),
- * embedding (set-stem-embedding-cache), zeroShotAttempted
- * (mark-yamnet-zeroshot-attempted), zeroShotClassIndex
- * (set-yamnet-zeroshot-category), then `level` (merged into the row the features field, or an
+ * embedding (set-stem-embedding-cache), then `level` (merged into the row the features field, or an
  * earlier write, left). Main applies them in that order. */
 export interface StemAnalysisWrite {
   path: string
   peaks?: { peaks: number[]; brightness: number[] }
   features?: StemFeatures
   embedding?: number[]
-  zeroShotAttempted?: boolean
-  zeroShotClassIndex?: number
   level?: StemLevelWrite
 }

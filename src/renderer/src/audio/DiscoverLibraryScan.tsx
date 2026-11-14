@@ -192,9 +192,7 @@ export function DiscoverLibraryScan(): null {
         // decode and no per-stem "do you have it?" round trips -- and the
         // rest go to the queue with their needs, so it asks none itself.
         // Features older than STEM_FEATURE_VERSION come back as needed
-        // (Phase 3 re-extraction), alongside anything missing outright --
-        // and `zeroShot` for stems embedded before the YAMNet zero-shot
-        // step existed (B5: this used to be a second, separate scan).
+        // (Phase 3 re-extraction), alongside anything missing outright.
         const library = createLibraryScanSource({
           targets: toScan,
           pageSize: NEEDS_PAGE_SIZE,

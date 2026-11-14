@@ -51,7 +51,7 @@ describe('the level pass in the analysis', () => {
 describe('the level need', () => {
   it('counts as work, and a fresh extraction asks for none', () => {
     expect(ALL_STEM_ANALYSIS_NEEDS.level).toBe(false)
-    const none = { peaks: false, features: false, embedding: false, zeroShot: false }
+    const none = { peaks: false, features: false, embedding: false }
     expect(needsAnyAnalysis(none)).toBe(false)
     expect(needsAnyAnalysis({ ...none, level: true })).toBe(true)
   })

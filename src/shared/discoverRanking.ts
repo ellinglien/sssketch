@@ -23,8 +23,7 @@ export interface RankedCandidate {
 // NOT YET VALIDATED against real data (2026-09-14 code quality review) --
 // this hasn't been checked against Elling's own actual riff-tempo
 // distribution, only reasoned about in the abstract. Likely needs the same
-// kind of live-data tuning pass CONFIDENCE_RATIO got (see
-// categoryCentroids.ts's own 0.7->0.85 fix, 2026-09-14) once there's a real
+// kind of live-data tuning pass once there's a real
 // library of Discover picks to check it against -- don't treat 40 as tuned
 // or final.
 const BPM_FALLOFF = 40

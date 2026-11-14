@@ -166,20 +166,7 @@ CREATE TABLE IF NOT EXISTS StemAutoCategory (
   FrontScore REAL
 );
 
--- One row per stem once a YAMNet zero-shot classification has been
--- ATTEMPTED (see src/renderer/src/audio/stemEmbeddingCache.ts's own
--- adoptZeroShotFromBuffer / embedAndPersist) -- regardless of whether
--- that attempt actually produced a StemAutoCategory row.
--- getOrExtractStemEmbedding is cache-hit-first (StemEmbeddingCache), so a
--- stem embedded before the zero-shot classification code existed would
--- otherwise never get a chance to run it (see the zeroShot flag of
--- stemAnalysisNeeds.ts's get-stem-analysis-needs). Separately, most
--- stems' own top AudioSet class will never map to anything in audiosetClasses.ts's deliberately narrow table -- without
--- a record of "already tried, regardless of outcome," those stems would
--- get re-decoded and re-inferred on every future scan pass, forever, for
--- no benefit. Direct report, 2026-09-17 ("in discover it wasn't really as
--- accurate honestly"), root-caused to this exact gap: the signal had
--- never actually written anything for Elling's real library.
+-- Legacy (the YAMNet zero-shot role, removed 2026-11-14): old dbs have it and nothing reads it.
 CREATE TABLE IF NOT EXISTS StemYamnetZeroShotAttempted (
   StemCID TEXT PRIMARY KEY,
   AttemptedAt INTEGER NOT NULL

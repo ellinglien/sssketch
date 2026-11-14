@@ -38,9 +38,7 @@ const MAX_PLAUSIBLE_BPM = 200
  *
  * Returns null (never guesses beyond this) when nothing plausible is
  * found -- same "decline rather than force a close call" discipline this
- * session's own classifier work already established (categoryCentroids.ts's
- * CONFIDENCE_RATIO, embeddingMatch.ts's SIMILARITY_MARGIN, audiosetClasses.ts's
- * deliberately narrow table) -- a wrong BPM guess would silently mis-tile
+ * session's own classifier work already established -- a wrong BPM guess would silently mis-tile
  * a loop, worse than no guess at all (falls back to guessLoopBars's own
  * project-tempo-relative heuristic, loopBarGuess.ts). */
 export function guessBpmFromFilename(filename: string): number | null {

@@ -3723,9 +3723,7 @@ function Frame(): React.JSX.Element {
        * settings-menu toggle and DiscoverPanel's own consent prompt both
        * now share -- see DiscoverLibraryScan.tsx's own doc comment for
        * the full "why" (fixes the scan restarting on every Discover tab
-       * switch). It also runs the YAMNet zero-shot step for stems embedded
-       * before that step existed (background efficiency B5 -- formerly a
-       * separate YamnetZeroShotRetroactiveScan). */}
+       * switch). */}
       {discoverConsented && <DiscoverLibraryScan />}
       <div className="ra-frame">
         <div

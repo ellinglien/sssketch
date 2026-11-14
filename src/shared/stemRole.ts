@@ -159,9 +159,8 @@ export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null
   // against), so this was the single most common source of a confidently-
   // wrong-looking suggestion. Still defaults the dropdown to 'vocal' below
   // (an OK starting guess, just no longer asserted as a confident one) --
-  // the centroid classifier (categoryCentroids.ts) can still override this
-  // default with a real suggestion once it has enough diverse training data,
-  // same as it already can for 'fx'.
+  // the stored model guess (the overnight classifier) can still override this
+  // default with a real suggestion, same as it already can for 'fx'.
   const uncertain =
     (stem.type === 'fx' || stem.type === 'audioIn') && busId === null && presetGuess === null
   const arrangeRole =

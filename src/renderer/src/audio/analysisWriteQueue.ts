@@ -25,7 +25,7 @@ function installFlushListeners(): void {
 
 /**
  * Background efficiency B7: the ambient scans' persistence
- * (analyzeStemOnce.ts's peaks/features/embedding/zero-shot writes) goes
+ * (analyzeStemOnce.ts's peaks/features/embedding writes) goes
  * through this queue instead of one IPC per output per stem. Fields for the
  * same path merge into one entry; the queue flushes as ONE
  * set-stem-analysis-results IPC (one main-side transaction) every

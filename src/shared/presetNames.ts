@@ -263,7 +263,7 @@ const NOTES_PRESET_NAMES = [
 // (audioIn) wherever it co-occurs, so this is a correct, safe addition,
 // not a guess. Mostly redundant with instrumentMaskToSoundType's own
 // audioIn-bit check (mask is checked first in every real fallback chain
-// -- see resolveStemArrangeRole.ts) -- this specifically helps the
+// -- see discoverAdjacency.ts's matchRole) -- this specifically helps the
 // smaller remainder: stems whose mask is inconsistent/unset but whose
 // PresetName is still this literal string, plus any future import path
 // that only ever has PresetName to go on (drag-and-drop imports, see

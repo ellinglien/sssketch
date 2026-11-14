@@ -50,8 +50,7 @@ const DEFAULT_SETTINGS: DiscoverSettings = {
   radioView: DEFAULT_RADIO_VIEW
 }
 
-/** Mirrors categoryCentroidStore.ts's own loadCategoryCentroidStore -- an
- * empty/default result (never a thrown error), both when nothing has been
+/** An empty/default result (never a thrown error), both when nothing has been
  * saved yet and when reading fails. */
 export function loadDiscoverSettings(): DiscoverSettings {
   const path = storePath()

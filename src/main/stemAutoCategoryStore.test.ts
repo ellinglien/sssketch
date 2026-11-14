@@ -2,12 +2,11 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import {
-  getAutoCategorizedStemCIDs,
   getStemAutoClassifyProgress,
   isStemEligibleForAutoCategory,
-  markYamnetZeroShotAttempted,
   upsertStemAutoCategory
 } from './stemAutoCategoryStore'
+import { getAutoCategorizedStemCIDs } from './stemCategoryTestReads'
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -26,9 +25,6 @@ function freshDb(): Database.Database {
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
       Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL,
       SubcategoryNote TEXT
-    );
-    CREATE TABLE StemYamnetZeroShotAttempted (
-      StemCID TEXT PRIMARY KEY, AttemptedAt INTEGER NOT NULL
     );
     CREATE TABLE StemAutoClassifyTried (
       StemCID TEXT NOT NULL, TrainingFingerprint TEXT NOT NULL, Mask INTEGER,
@@ -221,25 +217,4 @@ describe('isStemEligibleForAutoCategory', () => {
       expect(isStemEligibleForAutoCategory(db, 's1')).toBe(false)
     }
   )
-})
-
-describe('markYamnetZeroShotAttempted', () => {
-  it('inserts a row readable back by StemCID', () => {
-    const db = freshDb()
-    markYamnetZeroShotAttempted(db, 's1', 1000)
-    const row = db
-      .prepare(`SELECT StemCID, AttemptedAt FROM StemYamnetZeroShotAttempted WHERE StemCID = ?`)
-      .get('s1')
-    expect(row).toEqual({ StemCID: 's1', AttemptedAt: 1000 })
-  })
-
-  it('is idempotent -- calling it twice for the same stem does not throw and keeps the FIRST AttemptedAt', () => {
-    const db = freshDb()
-    markYamnetZeroShotAttempted(db, 's1', 1000)
-    markYamnetZeroShotAttempted(db, 's1', 2000)
-    const row = db
-      .prepare(`SELECT AttemptedAt FROM StemYamnetZeroShotAttempted WHERE StemCID = ?`)
-      .get('s1') as { AttemptedAt: number }
-    expect(row.AttemptedAt).toBe(1000)
-  })
 })

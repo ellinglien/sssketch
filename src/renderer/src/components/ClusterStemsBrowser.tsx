@@ -789,10 +789,7 @@ export function ClusterStemsBrowser({
 
   // Forward-captures every member's BusId into the library-wide
   // StemCategories table (design spec §2) -- fire-and-forget, sits alongside
-  // the ASSIGN_STEMS_TO_BUS dispatch rather than blocking on it. This call
-  // is also what triggers server-side centroid training (see
-  // categoryCentroidTraining.ts, wired into the upsert-stem-category-bus IPC
-  // handler) -- there is no client-side training left to mirror. Uses each
+  // the ASSIGN_STEMS_TO_BUS dispatch rather than blocking on it. Uses each
   // member's own `path` (content-addressed by StemCID for a real library
   // stem -- see stemCategoriesStore.ts's own doc comment); a member whose
   // path doesn't resolve to a real StemCID is silently skipped by the
@@ -807,13 +804,9 @@ export function ClusterStemsBrowser({
 
   // The ArrangeRole equivalent of recordBusCategories above, added
   // 2026-09-14 (direct request) alongside the 8-category picker below --
-  // every Tidy Up assignment now trains BOTH the bus and arrangeRole/
-  // drumSubRole centroid classifiers, not just AutoArrangeWizard/
-  // DrawArrangeWizard's own role-confirmation step (see
-  // categoryCentroidTraining.ts's recordStemCategoryRole, wired into
-  // the SAME upsert-stem-category-role IPC handler this calls into) --
-  // Tidy Up is used far more often than the auto-arrange role step, so this
-  // is a real accuracy win with no extra clicks for the 5 shared
+  // every Tidy Up assignment now writes BOTH the bus and the arrangeRole/
+  // drumSubRole label, not just AutoArrangeWizard/DrawArrangeWizard's own
+  // role-confirmation step, with no extra clicks for the 5 shared
   // categories, where arrangeRole is always fully determined by the bus
   // just assigned.
   //

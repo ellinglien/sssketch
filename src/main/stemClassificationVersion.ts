@@ -9,8 +9,8 @@
 //
 // One counter PER TABLE since scan plan b21ea5a2 Task 10: a confirmation
 // ('confirmed', StemCategories) rebuilds the whole kind index, an overnight
-// guess ('auto', StemAutoCategory -- about once a second while zero-shot
-// work is pending) only its small guess layer.
+// guess ('auto', StemAutoCategory -- about once a second while the classifier
+// runs) only its small guess layer.
 import type Database from 'better-sqlite3'
 
 export type ClassificationTable = 'confirmed' | 'auto'

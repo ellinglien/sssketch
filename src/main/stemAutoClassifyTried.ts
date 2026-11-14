@@ -16,11 +16,11 @@
 // too (stemAutoClassifyWake.ts), since a re-extraction can change the answer.
 //
 // Keyed on (StemCID, TrainingFingerprint), not StemCID alone (review of
-// 0adc41ca): the dev and the packaged app share the own db but each has its
-// own busCentroids.json, so their fingerprints differ, and with one row per
+// 0adc41ca): the dev and the packaged app share the own db but each could
+// carry a different model version, so their fingerprints differ, and with one row per
 // stem each app's record overwrote the other's -- every switch between them
 // re-tried the whole residue. A stem keeps its MAX_TRIED_FINGERPRINTS_PER_STEM
-// newest rows, so training that moves on doesn't grow the table without bound.
+// newest rows, so a model that moves on doesn't grow the table without bound.
 import type Database from 'better-sqlite3'
 import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 

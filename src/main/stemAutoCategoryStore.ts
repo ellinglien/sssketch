@@ -1,7 +1,6 @@
 // src/main/stemAutoCategoryStore.ts
 import type Database from 'better-sqlite3'
 import type { ArrangeRole } from '@shared/stemRole'
-import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { bumpStemClassificationVersion } from './stemClassificationVersion'
 
 export type StemAutoCategorySource = 'model' | 'instrumentMask'
@@ -11,24 +10,6 @@ export type StemAutoCategorySource = 'model' | 'instrumentMask'
  * rule, riffLibrarySchema.ts). Anything else (an older app's guess, or its
  * notes-bit 'lead' mask row; dev and packaged share this db) is guessed again. */
 export const PLACED_AUTO_CATEGORY_SQL = `(a.Source = 'model' OR (a.Source = 'instrumentMask' AND a.ArrangeRole IN ('drums', 'bass')))`
-
-/** Every StemCID, on `ownDb` only (StemAutoCategory, like StemCategories/
- * StemEmbeddingCache/StemFeatureCache, only ever lives there -- see
- * discoverCandidates.ts's own repeated notes on why an external LORE
- * archive db is never a candidate for these sssketch-exclusive tables),
- * already precomputed as `arrangeRole` by the background classify scan
- * (stemAutoClassify.ts). A plain, fast SELECT -- no classifier math at
- * query time, which is the whole point of persisting this instead of
- * recomputing it on every Discover roll (direct request, 2026-09-15). */
-export function getAutoCategorizedStemCIDs(
-  ownDb: Database.Database,
-  arrangeRole: ArrangeRole
-): Set<string> {
-  const rows = ownDb
-    .prepare(`SELECT StemCID FROM StemAutoCategory WHERE ArrangeRole = ?`)
-    .all(arrangeRole) as { StemCID: string }[]
-  return new Set(rows.map((r) => r.StemCID))
-}
 
 export interface StemAutoClassifyProgress {
   /** Eligible analysed stems that received an automatic category from the
@@ -148,62 +129,6 @@ export function isStemEligibleForAutoCategory(ownDb: Database.Database, stemCID:
     )
     .get(stemCID, stemCID)
   return row !== undefined
-}
-
-/** Records that a YAMNet zero-shot classification attempt has happened
- * for this stem -- regardless of whether it produced a StemAutoCategory
- * row (most stems' own top AudioSet class won't map to anything in
- * audiosetClasses.ts's deliberately narrow table, and that's a genuine,
- * deterministic answer for a given audio file, not a reason to retry).
- * `ON CONFLICT ... DO NOTHING` makes this idempotent -- a stem attempted
- * twice (e.g. by both a fresh extraction and, in a narrow race, the
- * retroactive scan) keeps its FIRST AttemptedAt rather than one silently
- * overwriting the other; nothing downstream reads this table's own
- * timestamp for ordering/conflict resolution the way StemCategories'
- * UpdatedAt does, so there's no correctness reason to prefer "latest"
- * here. */
-export function markYamnetZeroShotAttempted(
-  ownDb: Database.Database,
-  stemCID: string,
-  attemptedAt: number
-): void {
-  ownDb
-    .prepare(
-      `INSERT INTO StemYamnetZeroShotAttempted (StemCID, AttemptedAt)
-       VALUES (@stemCID, @attemptedAt)
-       ON CONFLICT(StemCID) DO NOTHING`
-    )
-    .run({ stemCID, attemptedAt })
-}
-
-/** Writes a YAMNet zero-shot guess for an already-resolved StemCID -- the
- * body of the set-yamnet-zeroshot-category IPC, shared with the batched
- * writer (stemAnalysisResultsWriter.ts). A class that maps to no
- * ArrangeRole writes nothing; neither does a stem that's already confirmed
- * or auto-categorized by any source (first classifier to claim a stem
- * wins, same convention as stemAutoClassify.ts's BASE_ELIGIBILITY_WHERE).
- * `computedAt` is epoch milliseconds, as for every StemAutoCategory row
- * (stemAutoClassify.ts writes Date.now()). Until 2026-10-07 the zero-shot
- * rows were floored seconds; the only reader of ComputedAt is
- * discoverCandidates.ts's change signal (MAX/TOTAL as a fingerprint, never
- * compared to a time), so the 774 old rows in seconds are harmless. */
-export function applyYamnetZeroShotCategory(
-  ownDb: Database.Database,
-  stemCID: string,
-  audiosetClassIndex: number,
-  computedAt: number
-): void {
-  const arrangeRole = arrangeRoleForAudiosetClass(audiosetClassIndex)
-  if (!arrangeRole) return
-  if (!isStemEligibleForAutoCategory(ownDb, stemCID)) return
-  // shortcut: removed in Task 17 (the zero-shot writer goes with the old guessers)
-  upsertStemAutoCategory(
-    ownDb,
-    stemCID,
-    arrangeRole,
-    'yamnet-zeroshot' as StemAutoCategorySource,
-    computedAt
-  )
 }
 
 export function upsertStemAutoCategory(

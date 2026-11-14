@@ -31,10 +31,7 @@ import {
   stemPriorityRank,
   type StemPrioritySets
 } from '@shared/stemPriorityOrder'
-import {
-  drainAutoClassifyInputRows,
-  getAutoClassifyTrainingGeneration
-} from './stemAutoClassifyWake'
+import { drainAutoClassifyInputRows } from './stemAutoClassifyWake'
 
 // How many stems ONE call classifies, per data source, before returning --
 // bounds a single call's own cost so the scheduler driving this (see
@@ -328,8 +325,7 @@ function membersHash(set: ReadonlySet<string>): number {
  * from the eligibility queries and consumed a batch at a time -- instead of
  * a COUNT(*) plus an `ORDER BY RANDOM()` over the whole eligible set on
  * every batch. Rebuilt when the fingerprint changed (the model or the
- * classifier's code), when a confirmation is noted via
- * stemAutoClassifyWake.ts (it changes who is eligible), or when both lists are empty and no
+ * classifier's code), or when both lists are empty and no
  * new rows were noted (the scheduler's long safety wake, or a caller that
  * wrote rows without going through the stores). New embedding/feature rows
  * noted by the cache stores join the lists directly. An id's eligibility is
@@ -337,7 +333,6 @@ function membersHash(set: ReadonlySet<string>): number {
  * confirmed or classified by another source is simply dropped. */
 interface PendingState {
   fingerprint: string
-  trainingGeneration: number
   /** priorityKeyOf the priority the lists are laid out for. */
   priorityKey: string
   embedding: PendingList
@@ -431,19 +426,13 @@ async function getPendingState(
   const priority = options.priority ?? NO_PRIORITY
   const state = pendingByDb.get(ownDb)
   const added = drainAutoClassifyInputRows(ownDb)
-  const generation = getAutoClassifyTrainingGeneration()
   const exhausted =
     state !== undefined &&
     state.embedding.ids.length === 0 &&
     state.feature.ids.length === 0 &&
     added.embedding.length === 0 &&
     added.feature.length === 0
-  if (
-    state &&
-    !exhausted &&
-    state.fingerprint === fingerprint &&
-    state.trainingGeneration === generation
-  ) {
+  if (state && !exhausted && state.fingerprint === fingerprint) {
     // A new priority (the username reported after the lists were built, a
     // new star): lay the lists out again, no rebuild.
     const priorityKey = priorityKeyOf(priority)
@@ -466,7 +455,6 @@ async function getPendingState(
   const triedUnder = readStemsTriedUnder(ownDb, fingerprint)
   const rebuilt: PendingState = {
     fingerprint,
-    trainingGeneration: generation,
     priorityKey: priorityKeyOf(priority),
     embedding: pendingListOf(
       await withoutTried(embedding, triedUnder, added.embedding, stemDbs, options.instrumentLookup),

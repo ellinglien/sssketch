@@ -11,7 +11,6 @@ import {
 } from './stemFeatureCacheStore'
 import { noteStemFeatureRowWritten } from './traitQuantileCache'
 import { afterStemEmbeddingRowWritten, writeStemEmbeddingRow } from './stemEmbeddingCacheStore'
-import { applyYamnetZeroShotCategory, markYamnetZeroShotAttempted } from './stemAutoCategoryStore'
 
 const RESOLVE_CHUNK = 500
 // Same budget as stemAutoClassify.ts's classify transactions: keep writing
@@ -52,8 +51,7 @@ function resolveStemCIDs(dbs: Database.Database[], candidates: string[]): Set<st
  * IPCs per stem, each with its own StemCID lookup and autocommit.
  *
  * Same rows, same values, same follow-ups as the single-write handlers:
- * each field goes through the store's own row writer (writeStem*Row,
- * markYamnetZeroShotAttempted, applyYamnetZeroShotCategory), and the
+ * each field goes through the store's own row writer (writeStem*Row), and the
  * in-memory hooks those handlers fire (the trait value table / feature-
  * version counters via afterStemFeatureRowWritten, the overnight
  * classifier's wake signals) fire for every written row once its
@@ -73,9 +71,6 @@ export async function writeStemAnalysisResults(
     [db, ...extraCandidateDbs],
     results.map((r) => basename(r.path))
   )
-  // StemAutoCategory.ComputedAt is milliseconds, as the classifier writes it
-  // (stemAutoClassify.ts); `extractedAt` is the cache rows' seconds.
-  const classifiedAt = Date.now()
   let index = 0
   while (index < results.length) {
     const followUps: (() => void)[] = []
@@ -95,10 +90,6 @@ export async function writeStemAnalysisResults(
         if (result.embedding) {
           writeStemEmbeddingRow(db, stemCID, result.embedding, extractedAt)
           followUps.push(() => afterStemEmbeddingRowWritten(db, stemCID))
-        }
-        if (result.zeroShotAttempted) markYamnetZeroShotAttempted(db, stemCID, extractedAt)
-        if (result.zeroShotClassIndex !== undefined) {
-          applyYamnetZeroShotCategory(db, stemCID, result.zeroShotClassIndex, classifiedAt)
         }
         // the level backfill: merged into the row as it now stands (spec 2026-10-05 7.3)
         if (result.level) {

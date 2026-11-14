@@ -20,8 +20,8 @@ import {
 const DEFAULT_CHUNK_SIZE = 500
 
 /** Whether the YAMNet model shipped (yamnetModel.ts yamnetModelAvailable).
- * False: no stem needs the embedding or zero-shot step, since neither can
- * ever run -- otherwise every stem lacking an embedding (all of them, in a
+ * False: no stem needs the embedding step, since it can
+ * never run -- otherwise every stem lacking an embedding (all of them, in a
  * build without the model: every release up to 1.4.0) stayed "needs work"
  * forever, and each scan pass decoded it again only to fail (share-readiness
  * audit B3). Absent: available. */
@@ -137,7 +137,7 @@ const REWORK_PAGE_SIZE = 2000
  *
  * Read from the trait value table while it accounts for every row (no SQL, no parse); else
  * one JSON pass over StemFeatureCache in keyset pages with a yield after each. Never
- * `.iterate()`. No zero-shot half since 2026-11-14 (see getStemAnalysisNeeds). */
+ * `.iterate()`.. */
 export async function stemCIDsNeedingRework(db: Database.Database): Promise<Set<string>> {
   const out = new Set<string>()
   const table = getTraitValueTable(db)
@@ -181,7 +181,7 @@ export async function stemCIDsNeedingRework(db: Database.Database): Promise<Set<
  * layout, see stemCIDForPath); a path with no cache rows simply needs
  * everything, exactly what the per-module getters would conclude -- except
  * that a path whose basename is not a library stem name (isLibraryStemName:
- * it contains `.`) never needs the embedding or zero-shot (YAMNet) step, nor
+ * it contains `.`) never needs the embedding (YAMNet) step, nor
  * does any path when the model is missing (`options.yamnetAvailable`). Batched: one query per cache
  * table per chunk of `chunkSize` paths (via `.all()`, never `.iterate()`
  * across the yields), yielding to the event loop between chunks.
@@ -211,10 +211,6 @@ export async function getStemAnalysisNeeds(
         peaks: !peaks.has(stemCID),
         features: !features.current.has(stemCID),
         embedding: library && !embeddings.has(stemCID),
-        // The one model places every embedded stem (2026-11-14), so zero-shot is never
-        // needed, and the old guesses the four-categories migration deletes make no work.
-        // shortcut: the field stays false until Task 17 removes it
-        zeroShot: false,
         // only when it is needed: an answer without it reads as no level work
         ...(features.needsLevel.has(stemCID) && { level: true })
       })

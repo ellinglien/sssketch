@@ -5,11 +5,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CLASSIFIER_VERSION, classifyAutoCategoryBatch } from './stemAutoClassify'
-import { getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
 import type { StemFeatures } from '@shared/stemFeatures'
 import { setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { setStemFeatureCache } from './stemFeatureCacheStore'
-import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 import { bumpTableWriteVersion } from './tableWriteVersion'
 import type { StemCategoryModel } from '@shared/stemCategoryModel'
 import {
@@ -17,6 +15,7 @@ import {
   STEM_AUTO_CLASSIFY_TRIED_DDL,
   pruneStemsTriedSlice
 } from './stemAutoClassifyTried'
+import { getAutoCategorizedStemCIDs } from './stemCategoryTestReads'
 
 let dir: string
 beforeEach(() => {
@@ -716,28 +715,6 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
     )
     seedInstrument(archive, 'archive-drums', DRUMS_BIT)
     expect((await classify(own, [archive, own])).processed).toBe(1)
-  })
-
-  // The model doesn't train on device: a confirmation still rebuilds the
-  // lists (it changes who is eligible), but nothing tried under the same
-  // model is tried again.
-  it('a training change noted by the stores rebuilds the lists without re-trying stems tried under the same model', async () => {
-    const db = freshDb()
-    seedFeatures(db, 'feat-1', { transientDensity: 0.9, bassEnergyRatio: 0.1 })
-    seedEmbedding(db, 'unreadable-1', UNPLACEABLE)
-    expect((await classify(db)).processed).toBe(0)
-    const builds = vi.spyOn(db, 'prepare')
-    const featureFetches = (): number =>
-      builds.mock.calls.filter(([sql]) =>
-        String(sql).includes('SELECT f.StemCID AS StemCID FROM StemFeatureCache f')
-      ).length
-
-    noteAutoClassifyTrainingChanged()
-    expect(await classify(db)).toEqual({ processed: 0, remaining: 0 })
-    expect(
-      builds.mock.calls.filter(([sql]) => String(sql).includes('ORDER BY t.StemCID')).length
-    ).toBe(2)
-    expect(featureFetches()).toBe(0)
   })
 
   // 2026-10-07: the tried record lived only in memory, so every launch

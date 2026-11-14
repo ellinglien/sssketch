@@ -3,6 +3,7 @@ import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getStemCategory } from './stemCategoryTestReads'
 
 let musicDir: string
 
@@ -60,7 +61,7 @@ describe('stemCategoriesStore', () => {
     it('writes a BusId row for a stem whose path basename matches a real StemCID', async () => {
       const db = freshDb()
       db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
-      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      const { upsertStemCategoryBus } = await import('./stemCategoriesStore')
       upsertStemCategoryBus(
         db,
         [{ path: '/library/stems/cid-1', busId: 'drums' }],
@@ -82,7 +83,7 @@ describe('stemCategoriesStore', () => {
 
     it('skips a stem whose path basename does not match any real StemCID', async () => {
       const db = freshDb()
-      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      const { upsertStemCategoryBus } = await import('./stemCategoriesStore')
       upsertStemCategoryBus(
         db,
         [{ path: '/some/local/one-shot.wav', busId: 'drums' }],
@@ -96,7 +97,7 @@ describe('stemCategoriesStore', () => {
     it('a newer write overwrites BusId, but an older write does not', async () => {
       const db = freshDb()
       db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
-      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      const { upsertStemCategoryBus } = await import('./stemCategoriesStore')
       upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'drums' }], 'tidyup', null, 2000)
       upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'bass' }], 'backfill', null, 1000)
       expect(getStemCategory(db, 'cid-1')?.busId).toBe('drums')
@@ -109,7 +110,7 @@ describe('stemCategoriesStore', () => {
     it('a write with the same UpdatedAt lands', async () => {
       const db = freshDb()
       db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
-      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      const { upsertStemCategoryBus } = await import('./stemCategoriesStore')
       upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'drums' }], 'tidyup', null, 2000)
       upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'bass' }], 'tidyup', null, 2000)
       expect(getStemCategory(db, 'cid-1')?.busId).toBe('bass')
@@ -138,7 +139,7 @@ describe('stemCategoriesStore', () => {
     it('a bus write never touches an existing ArrangeRole/DrumSubRole on the same row', async () => {
       const db = freshDb()
       db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
-      const { upsertStemCategoryBus, upsertStemCategoryRole, getStemCategory } =
+      const { upsertStemCategoryBus, upsertStemCategoryRole } =
         await import('./stemCategoriesStore')
       upsertStemCategoryRole(
         db,
@@ -160,7 +161,7 @@ describe('stemCategoriesStore', () => {
     it('a newer role write does not refuse an older bus write: the bus has a stamp of its own', async () => {
       const db = freshDb()
       db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
-      const { upsertStemCategoryBus, upsertStemCategoryRole, getStemCategory } =
+      const { upsertStemCategoryBus, upsertStemCategoryRole } =
         await import('./stemCategoriesStore')
       upsertStemCategoryRole(db, [{ path: '/x/cid-1', arrangeRole: 'lead' }], 'tidyup', null, 2000)
       upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'drums' }], 'backfill', '/p', 1000)
@@ -198,7 +199,7 @@ describe('stemCategoriesStore', () => {
         `INSERT INTO StemCategories (StemCID, ArrangeRole, BusId, Source, UpdatedAt)
          VALUES ('cid-1', 'lead', 'drums', 'tidyup', 2000), ('cid-2', 'lead', NULL, 'tidyup', 2000)`
       ).run()
-      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      const { upsertStemCategoryBus } = await import('./stemCategoriesStore')
       upsertStemCategoryBus(
         db,
         [
@@ -236,7 +237,7 @@ describe('stemCategoriesStore', () => {
           return typeof value === 'function' ? value.bind(target) : value
         }
       })
-      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      const { upsertStemCategoryBus } = await import('./stemCategoriesStore')
       expect(() =>
         upsertStemCategoryBus(racing, [{ path: '/x/cid-1', busId: 'bass' }], 'tidyup', null, 1000)
       ).not.toThrow()
@@ -249,7 +250,7 @@ describe('stemCategoriesStore', () => {
     it('writes ArrangeRole/DrumSubRole without touching an existing BusId', async () => {
       const db = freshDb()
       db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
-      const { upsertStemCategoryBus, upsertStemCategoryRole, getStemCategory } =
+      const { upsertStemCategoryBus, upsertStemCategoryRole } =
         await import('./stemCategoriesStore')
       upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'drums' }], 'tidyup', null, 1000)
       upsertStemCategoryRole(
@@ -274,7 +275,7 @@ describe('stemCategoriesStore', () => {
     it('an omitted drumSubRole is stored as null, not undefined/absent', async () => {
       const db = freshDb()
       db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
-      const { upsertStemCategoryRole, getStemCategory } = await import('./stemCategoriesStore')
+      const { upsertStemCategoryRole } = await import('./stemCategoriesStore')
       upsertStemCategoryRole(
         db,
         [{ path: '/x/cid-1', arrangeRole: 'bass', drumSubRole: undefined }],
@@ -311,7 +312,7 @@ describe('stemCategoriesStore', () => {
   describe('getStemCategory', () => {
     it('returns null for a StemCID with no row', async () => {
       const db = freshDb()
-      const { getStemCategory } = await import('./stemCategoriesStore')
+
       expect(getStemCategory(db, 'nonexistent')).toBe(null)
     })
   })
@@ -427,7 +428,7 @@ describe('stemCategoriesStore', () => {
       const db = freshDb()
       const externalDb = freshDb()
       externalDb.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-external')
-      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      const { upsertStemCategoryBus } = await import('./stemCategoriesStore')
       upsertStemCategoryBus(
         db,
         [{ path: '/lore-archive/cid-external', busId: 'drums' }],
@@ -444,7 +445,7 @@ describe('stemCategoriesStore', () => {
     it('skips a stem not found in the primary db or any extra candidate db', async () => {
       const db = freshDb()
       const externalDb = freshDb()
-      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      const { upsertStemCategoryBus } = await import('./stemCategoriesStore')
       upsertStemCategoryBus(
         db,
         [{ path: '/local/one-shot.wav', busId: 'drums' }],

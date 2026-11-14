@@ -21,7 +21,7 @@ let available: boolean | null = null
 
 /** Whether the YAMNet model is there -- checked once per launch, and a
  * missing model logged once (not once per stem). The ambient scans then stop
- * asking for embeddings and zero-shot at all (stemAnalysisNeeds.ts
+ * asking for embeddings at all (stemAnalysisNeeds.ts
  * YamnetAvailability): every release up to 1.4.0 shipped without the model,
  * and each scan pass decoded every stem again only for its embedding to fail
  * (share-readiness audit B3). Once per launch, so a model vendored mid-
@@ -31,9 +31,7 @@ export function yamnetModelAvailable(): boolean {
     const path = yamnetModelPath()
     available = existsSync(path)
     if (!available) {
-      console.warn(
-        `yamnet: no model at ${path} -- stem similarity embeddings and zero-shot categories are off this launch`
-      )
+      console.warn(`yamnet: no model at ${path} -- stem similarity embeddings are off this launch`)
     }
   }
   return available

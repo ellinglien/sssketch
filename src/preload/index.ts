@@ -33,7 +33,6 @@ import type { LibraryScanWork } from '../main/libraryScanWork'
 import type { TidyUpLibraryStem } from '../main/tidyUpLibraryStems'
 import type { DiscoverLoopSeedResult } from '../main/importOneShot'
 import type { PrewarmScanProgress } from '../main/discoverCandidates'
-import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
 import type { RadioHeartsKeyStatus, RadioHeartsResult } from '@shared/radioHearts'
@@ -43,7 +42,6 @@ import type { StemGlyphCacheEntry, StemGlyphCacheWrite } from '@shared/glyphBand
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
 import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
-import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 import type { RemoteCommand, RemoteKeepOutcome, RemoteState } from '@shared/remoteState'
 import type { LanAddressCandidate } from '@shared/lanAddress'
 import type {
@@ -414,10 +412,6 @@ const api = {
     deviceName: string
   ): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke('engine-set-output-device', deviceName),
-  getCategoryCentroids: (): Promise<CategoryCentroidStore> =>
-    ipcRenderer.invoke('get-category-centroids'),
-  getConfirmedEmbeddings: (axis: CategoryAxis): Promise<ConfirmedEmbedding[]> =>
-    ipcRenderer.invoke('get-confirmed-embeddings', axis),
   getDiscoverCandidates: (
     kinds: DiscoverSlotKind[],
     onlyOwnStems: boolean,
@@ -508,10 +502,6 @@ const api = {
     bpm: number
     creationTime: number | null
   } | null> => ipcRenderer.invoke('find-riff-for-stem-path', stemPath),
-  resolveStemArrangeRoles: (
-    entries: { stemCID: string; instrumentMask: number; presetName: string }[]
-  ): Promise<Record<string, ArrangeRole | null>> =>
-    ipcRenderer.invoke('resolve-stem-arrange-roles', entries),
   getLibraryWarmupStatus: (): Promise<boolean> => ipcRenderer.invoke('get-library-warmup-status'),
   // Faster startup (2026-10-06): every library index can answer reads (saved
   // copies loaded, or the own-only index on a rebuild) -- StartupGate closes
@@ -635,10 +625,6 @@ const api = {
     ipcRenderer.invoke('get-stem-embedding-cache', path),
   setStemEmbeddingCache: (path: string, embedding: number[]): Promise<void> =>
     ipcRenderer.invoke('set-stem-embedding-cache', path, embedding),
-  setYamnetZeroShotCategory: (path: string, audiosetClassIndex: number): Promise<void> =>
-    ipcRenderer.invoke('set-yamnet-zeroshot-category', path, audiosetClassIndex),
-  markYamnetZeroShotAttempted: (path: string): Promise<void> =>
-    ipcRenderer.invoke('mark-yamnet-zeroshot-attempted', path),
   setStemAnalysisResults: (results: StemAnalysisWrite[]): Promise<void> =>
     ipcRenderer.invoke('set-stem-analysis-results', results),
   getYamnetModel: (): Promise<Uint8Array | null> => ipcRenderer.invoke('get-yamnet-model'),

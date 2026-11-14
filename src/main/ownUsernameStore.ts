@@ -43,8 +43,8 @@ export function loadOwnUsername(): string | null {
 }
 
 /** Saves `username` (null or blank: none). Never throws. Written to a temp
- * file, fsynced, then renamed over the old one (categoryCentroidStore.ts's
- * pattern): a crash or a full disk mid-write leaves the previous name, never
+ * file, fsynced, then renamed over the old one (the same
+ * pattern as the other small stores): a crash or a full disk mid-write leaves the previous name, never
  * a truncated file that reads as none. */
 export function saveOwnUsername(username: string | null): void {
   const name = username?.trim() ?? ''

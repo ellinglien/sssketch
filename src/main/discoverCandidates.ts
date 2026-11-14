@@ -1304,7 +1304,7 @@ interface GuessLayer {
 }
 
 /** The guess layer is rebuilt at most this often while StemAutoCategory
- * keeps moving (the classifier and zero-shot write about once a second
+ * keeps moving (the classifier writes about once a second
  * while they have work). */
 export const GUESS_LAYER_MIN_MS = 10_000
 
@@ -1987,8 +1987,8 @@ async function getMaskDiscoverCandidates({
   //
   // No inner try/catch here (removed 2026-09-15, finding 1): StemCategories
   // on ownDb is guaranteed present by a real migration that runs on every
-  // app start, same established convention as embeddingMatch.ts's own
-  // getConfirmedEmbeddings. A real SQL error here (e.g. a typo) should
+  // app start, same established convention as the other
+  // own-db reads. A real SQL error here (e.g. a typo) should
   // throw, not silently produce an empty Discover pool with no diagnostic
   // trail.
   const arrangeRole = discoverSlotKindToArrangeRole(kind)

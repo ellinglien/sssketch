@@ -79,22 +79,8 @@ import {
 import { startPlaybackEngine, type PlaybackEngineHandle } from './playbackEngineLifecycle'
 import { runFullScan } from './runFullScan'
 import { loadCatalog, toggleFavourite } from './pluginCatalog'
-import { loadCategoryCentroidStore } from './categoryCentroidStore'
-import { getConfirmedEmbeddings } from './embeddingMatch'
-import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
-import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
-import {
-  recordStemCategoryBus,
-  recordStemCategoryRole,
-  rebuildMissingCentroidStore,
-  setCentroidStoreUnreadableListener
-} from './categoryCentroidTraining'
 import { nextUpdateState, type UpdateState } from '@shared/updateState'
-import {
-  instrumentMaskToSoundType,
-  type RiffFilters,
-  type DiscoverSoundSourceFilter
-} from '@shared/riffLibraryTypes'
+import type { RiffFilters, DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import {
   riffLibraryAvailable,
   riffLibraryHasRiffs,
@@ -190,24 +176,16 @@ import {
 } from './discoverArtistSession'
 import type Database from 'better-sqlite3'
 import { prewarmTraitQuantileTables } from './traitQuantileCache'
-import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
-import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
 import { loadPreviewLevel, savePreviewLevel } from './previewLevelStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
 import { loadSoundSettings, saveSoundSettings } from './soundSettingsStore'
 import type { SoundMeters, SoundSettings } from '@shared/radioSound'
-import {
-  getStemAutoClassifyProgress,
-  applyYamnetZeroShotCategory,
-  markYamnetZeroShotAttempted,
-  type StemAutoClassifyProgress
-} from './stemAutoCategoryStore'
+import { getStemAutoClassifyProgress, type StemAutoClassifyProgress } from './stemAutoCategoryStore'
 import {
   currentAutoClassifyTrainingFingerprint,
   lookupAutoClassifyInstrumentMasks
 } from './stemAutoClassify'
-import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
 import { getStemPriority, seedStemPriorityOwnStems, setStemPriorityUsername } from './stemPriority'
 import { loadOwnUsername, saveOwnUsername } from './ownUsernameStore'
@@ -217,7 +195,6 @@ import { ownUsernameAfterReport, parseOwnUsernameReport } from '@shared/ownUsern
 import { stemPriorityRank } from '@shared/stemPriorityOrder'
 import { getStemAvailabilityReport, onStemAvailabilityNotice } from './stemAvailability'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
-import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
 import type { DiscoverSlotKind, DiscoverTraitKind } from '@shared/discoverSlotKind'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
@@ -255,7 +232,8 @@ import {
   getStemCategoryGuessesForPaths,
   getStemCategoryRolesForPaths,
   resolveSourceProjectPath,
-  stemCIDForPath,
+  upsertStemCategoryBus,
+  upsertStemCategoryRole,
   type StemBusCategoryEntry,
   type StemGuessLookup,
   type StemRoleCategoryEntry,
@@ -864,34 +842,6 @@ app.whenReady().then(async () => {
   // run unconditionally on every startup.
   migrateLegacyFavourites(openOwnRiffLibraryDb())
 
-  // A classifier training file (busCentroids.json) that exists but will not
-  // load is never trained into or saved over (categoryCentroidTraining.ts),
-  // so nothing learns from new confirmations until it is fixed or moved
-  // aside: say so, once per distinct error, not only in the console. Set
-  // before the backfill below, the first training write of a launch. The
-  // backfill runs before the window exists, so the warning waits for it
-  // (windowNotices): a dialog with no parent window would block startup.
-  setCentroidStoreUnreadableListener((path, error) => {
-    windowNotices.post(`centroid-store-unreadable:${error}`, (win) => {
-      void dialog
-        .showMessageBox(win, {
-          type: 'warning',
-          buttons: ['show in finder', 'ok'],
-          defaultId: 1,
-          cancelId: 1,
-          message:
-            "sssketch couldn't read the file where it keeps what it has learned from your " +
-            "confirmed stems, so it won't learn new ones until this is fixed.",
-          detail:
-            'your confirmed stems themselves are still saved. move this file somewhere else ' +
-            `and sssketch rebuilds it from them.\n\n${path}\n(${error})`
-        })
-        .then(({ response }) => {
-          if (response === 0) shell.showItemInFolder(path)
-        })
-    })
-  })
-
   // One-time-in-spirit, safe-to-call-on-every-startup migration recovering
   // busOf bus assignments trapped in old .sssketchproj files under the
   // project library folder -- see stemCategoriesBackfill.ts's own doc
@@ -914,17 +864,6 @@ app.whenReady().then(async () => {
   console.log(
     `backfillInstrumentMaskCategories: categorized ${instrumentMaskBackfillSummary.categorizedStems} stems`
   )
-
-  // A classifier training file (busCentroids.json) that is missing -- first
-  // run, or moved aside -- and that neither backfill above rebuilt (they
-  // rebuild it only on a write, and an unchanged library writes nothing) is
-  // rebuilt from the db now, so the classifier doesn't run on an empty store
-  // until the next bus or role confirmation. After the backfills, so it
-  // holds what they wrote. Synchronous, ~50 ms on Elling's db; a no-op when
-  // the file is there.
-  if (rebuildMissingCentroidStore(openOwnRiffLibraryDb())) {
-    console.log('rebuildMissingCentroidStore: rebuilt busCentroids.json from the library db')
-  }
 
   // Background "pre-categorize the whole library" scheduler -- direct
   // request, 2026-09-15 ("why not just do a prelim scan that
@@ -1797,16 +1736,6 @@ app.whenReady().then(async () => {
     }
   )
 
-  ipcMain.handle('get-category-centroids', (): CategoryCentroidStore => loadCategoryCentroidStore())
-
-  // No candidateDbsForRiff() here, unlike most other openOwnRiffLibraryDb()
-  // handlers in this file -- see getConfirmedEmbeddings's own doc comment
-  // (2026-09-15 real-world bug fix) for why StemCategories/StemEmbeddingCache
-  // can only ever live in the own db, never an external candidate.
-  ipcMain.handle('get-confirmed-embeddings', (_event, axis: CategoryAxis): ConfirmedEmbedding[] =>
-    getConfirmedEmbeddings(openOwnRiffLibraryDb(), axis)
-  )
-
   ipcMain.handle(
     'get-discover-candidates',
     async (
@@ -2020,40 +1949,6 @@ app.whenReady().then(async () => {
     findRiffForStemPath(stemPath)
   )
 
-  // Direct request, 2026-09-16: "the audio analysis should be able to
-  // detect and differentiate drums from leads etc etc." Batched (one round
-  // trip for a whole riff's stems, not one per stem) -- checks the real
-  // trained classifier (StemCategories human confirmations, else
-  // StemAutoCategory's own audio-analysis result) before falling back to
-  // the SAME blunt instrument-mask/preset-name chain the renderer used to
-  // compute entirely on its own (LibraryBrowser.tsx's own
-  // seedDiscoverFromBrowseRiff) -- `?? 'fx'` as the very last resort so
-  // this always returns a real ArrangeRole for every entry, matching that
-  // original chain's own contract (a seeded slot must always get SOME
-  // role, never null).
-  ipcMain.handle(
-    'resolve-stem-arrange-roles',
-    (
-      _event,
-      entries: { stemCID: string; instrumentMask: number; presetName: string }[]
-    ): Record<string, ArrangeRole | null> => {
-      const entryByStemCID = new Map(entries.map((e) => [e.stemCID, e]))
-      return resolveStemArrangeRoles(
-        openOwnRiffLibraryDb(),
-        entries.map((e) => e.stemCID),
-        (stemCID) => {
-          const entry = entryByStemCID.get(stemCID)
-          if (!entry) return null
-          const soundType =
-            instrumentMaskToSoundType(entry.instrumentMask) ??
-            guessSoundTypeFromPresetName(entry.presetName) ??
-            'fx'
-          return SOUND_TYPE_TO_ARRANGE_ROLE[soundType]
-        }
-      )
-    }
-  )
-
   ipcMain.handle('get-library-warmup-status', (): boolean => libraryWarmupDone)
   ipcMain.handle('get-library-index-usable', (): boolean => libraryIndexUsable)
   // The renderer's "me" (OwnUsernameReporter), reported at mount and on every
@@ -2163,12 +2058,7 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'upsert-stem-category-bus',
     (_event, entries: StemBusCategoryEntry[], source: string, project: ProjectRef): void => {
-      // Each (stem, bus) pair trains once into this app's store file
-      // (busCentroids.json keeps the pairs it holds), whoever writes it
-      // first: the startup backfill reading the same assignment from the
-      // saved project later adds nothing. A store rebuilt from the db (the
-      // file was missing) starts over from the rows (recordStemCategoryBus).
-      recordStemCategoryBus(
+      upsertStemCategoryBus(
         openOwnRiffLibraryDb(),
         entries,
         source,
@@ -2182,7 +2072,7 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'upsert-stem-category-role',
     (_event, entries: StemRoleCategoryEntry[], source: string, project: ProjectRef) => {
-      recordStemCategoryRole(
+      upsertStemCategoryRole(
         openOwnRiffLibraryDb(),
         entries,
         source,
@@ -2301,35 +2191,7 @@ app.whenReady().then(async () => {
     )
   })
 
-  // Direct counterpart to how the classifier passes in stemAutoClassify.ts
-  // gate their own writes (BASE_ELIGIBILITY_WHERE): never overwrite an
-  // existing StemCategories confirmation OR an existing StemAutoCategory
-  // guess from a DIFFERENT source -- first classifier to claim a stem wins,
-  // same "no source ever re-evaluates/overrides another source's guess"
-  // convention already established there.
-  ipcMain.handle(
-    'set-yamnet-zeroshot-category',
-    (_event, path: string, audiosetClassIndex: number) => {
-      // Unmapped class: nothing to write, skip the StemCID lookup too.
-      if (!arrangeRoleForAudiosetClass(audiosetClassIndex)) return
-      const db = openOwnRiffLibraryDb()
-      const stemCID = stemCIDForPath(db, path, candidateDbsForRiff())
-      if (!stemCID) return
-      // Milliseconds, like every other StemAutoCategory row -- see applyYamnetZeroShotCategory.
-      applyYamnetZeroShotCategory(db, stemCID, audiosetClassIndex, Date.now())
-    }
-  )
-
-  // Records a zero-shot classification ATTEMPT, independent of whether
-  // set-yamnet-zeroshot-category above actually wrote a role for it --
-  // see StemYamnetZeroShotAttempted's own schema doc comment
-  // (riffLibrarySchema.ts) for the full reasoning: most stems' own top
-  // AudioSet class won't map to anything in audiosetClasses.ts's
-  // deliberately narrow table, and that's a genuine, deterministic
-  // answer for a given audio file -- without recording that the attempt
-  // happened at all, get-stem-analysis-needs' zeroShot flag would keep
-  // re-selecting the same never-classifiable stems forever.
-  // Batched counterpart to the set-stem-*-cache / zero-shot handlers above
+  // Batched counterpart to the set-stem-*-cache handlers above
   // for the ambient scans (background efficiency B7): every output of
   // several analysed stems in one IPC and one (time-budgeted) transaction,
   // with the StemCIDs resolved in one query per db instead of per write.
@@ -2344,13 +2206,6 @@ app.whenReady().then(async () => {
         candidateDbsForRiff()
       )
   )
-
-  ipcMain.handle('mark-yamnet-zeroshot-attempted', (_event, path: string) => {
-    const db = openOwnRiffLibraryDb()
-    const stemCID = stemCIDForPath(db, path, candidateDbsForRiff())
-    if (!stemCID) return
-    markYamnetZeroShotAttempted(db, stemCID, Math.floor(Date.now() / 1000))
-  })
 
   ipcMain.handle('engine-get-buffer-size', async (): Promise<number | null> => {
     if (!playbackEngine) return null

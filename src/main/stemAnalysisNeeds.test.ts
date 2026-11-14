@@ -28,7 +28,6 @@ function freshDb(): Database.Database {
       StemCID TEXT PRIMARY KEY, EmbeddingJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
     );
     CREATE TABLE Stems (StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, Instrument INTEGER);
-    CREATE TABLE StemYamnetZeroShotAttempted (StemCID TEXT PRIMARY KEY, AttemptedAt INTEGER NOT NULL);
     CREATE TABLE StemCategories (StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, UpdatedAt INTEGER);
     CREATE TABLE StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
@@ -77,13 +76,13 @@ describe('getStemAnalysisNeeds', () => {
       '/local/one-shot.wav'
     ])
     expect(needs).toEqual([
-      { peaks: false, features: false, embedding: false, zeroShot: false },
-      { peaks: false, features: true, embedding: false, zeroShot: false },
-      { peaks: false, features: true, embedding: true, zeroShot: false },
-      { peaks: true, features: true, embedding: true, zeroShot: false },
-      { peaks: true, features: true, embedding: true, zeroShot: false },
+      { peaks: false, features: false, embedding: false },
+      { peaks: false, features: true, embedding: false },
+      { peaks: false, features: true, embedding: true },
+      { peaks: true, features: true, embedding: true },
+      { peaks: true, features: true, embedding: true },
       // not a library stem name: YAMNet's result could never be stored (audit 6)
-      { peaks: true, features: true, embedding: false, zeroShot: false }
+      { peaks: true, features: true, embedding: false }
     ])
   })
 
@@ -92,7 +91,7 @@ describe('getStemAnalysisNeeds', () => {
     const needs = await getStemAnalysisNeeds(db, [
       '/projects/p/baked/0123456789abcdef0123456789abcdef.baked.wav'
     ])
-    expect(needs).toEqual([{ peaks: true, features: true, embedding: false, zeroShot: false }])
+    expect(needs).toEqual([{ peaks: true, features: true, embedding: false }])
   })
 
   it('answers across chunk boundaries and for duplicate paths', async () => {
@@ -111,34 +110,8 @@ describe('getStemAnalysisNeeds', () => {
     expect(needs).toHaveLength(24)
     needs.forEach((n, i) => {
       const done = i === 23 || i % 2 === 0
-      expect(n).toEqual({ peaks: !done, features: !done, embedding: !done, zeroShot: false })
+      expect(n).toEqual({ peaks: !done, features: !done, embedding: !done })
     })
-  })
-
-  it('flags zero-shot only for embedded, never-attempted, unclassified stems with their own Stems row', async () => {
-    const db = freshDb()
-    const stems = ['pending', 'attempted', 'confirmed', 'auto', 'no-stems-row', 'no-embedding']
-    for (const cid of stems) {
-      addFeatures(db, cid, current)
-      addPeaks(db, cid)
-      if (cid !== 'no-embedding') addEmbedding(db, cid)
-      if (cid !== 'no-stems-row') {
-        db.prepare(`INSERT INTO Stems VALUES (?, 'jam', NULL)`).run(cid)
-      }
-    }
-    db.prepare(`INSERT INTO StemYamnetZeroShotAttempted VALUES ('attempted', 1)`).run()
-    db.prepare(`INSERT INTO StemCategories VALUES ('confirmed', 'drums', 1)`).run()
-    db.prepare(`INSERT INTO StemAutoCategory VALUES ('auto', 'bass', 'centroid', 1)`).run()
-
-    const needs = await getStemAnalysisNeeds(
-      db,
-      stems.map((cid) => `/lib/jam/${cid}`)
-    )
-    // Never since 2026-11-14: the model places every embedded stem.
-    expect(needs.map((n) => n.zeroShot)).toEqual([false, false, false, false, false, false])
-    // The one without an embedding needs the embedding (which runs the
-    // zero-shot step itself), not a separate zero-shot pass.
-    expect(needs[5].embedding).toBe(true)
   })
 
   it('asks for the level pass only on a current row without it (spec 2026-10-05 7.3)', async () => {
@@ -275,19 +248,13 @@ describe('getStemAnalysisNeeds', () => {
       ['v1', v1],
       ['corrupt', '{not json'],
       ['json-null', 'null'],
-      ['json-number', '5'],
-      ['zero-shot', current],
-      ['attempted', current]
+      ['json-number', '5']
     ]
     for (const [cid, json] of rows) {
       addFeatures(db, cid, json)
       addPeaks(db, cid)
       addEmbedding(db, cid)
     }
-    for (const cid of ['zero-shot', 'attempted']) {
-      db.prepare(`INSERT INTO Stems VALUES (?, 'jam', NULL)`).run(cid)
-    }
-    db.prepare(`INSERT INTO StemYamnetZeroShotAttempted VALUES ('attempted', 1)`).run()
     // features only: not fully rowed, but its row's state still counts
     addFeatures(db, 'feature-only-v1', v1)
 
@@ -313,12 +280,12 @@ describe('getStemAnalysisNeeds', () => {
     })
   })
 
-  it('with no YAMNet model, nothing needs the embedding or zero-shot step (audit B3)', async () => {
+  it('with no YAMNet model, nothing needs the embedding step (audit B3)', async () => {
     const db = freshDb()
     // everything but the embedding: with no model, there is nothing left to do
     addFeatures(db, 'noembed', current)
     addPeaks(db, 'noembed')
-    // zero-shot pending: an embedding from when the model was there
+    // an embedding from when the model was there
     addFeatures(db, 'zs', current)
     addPeaks(db, 'zs')
     addEmbedding(db, 'zs')
@@ -326,34 +293,15 @@ describe('getStemAnalysisNeeds', () => {
 
     const paths = ['/lib/j/noembed', '/lib/j/zs', '/lib/j/never']
     const withModel = await getStemAnalysisNeeds(db, paths)
-    expect(withModel.map((n) => [n.embedding, n.zeroShot])).toEqual([
-      [true, false],
-      [false, false],
-      [true, false]
-    ])
+    expect(withModel.map((n) => n.embedding)).toEqual([true, false, true])
     const needs = await getStemAnalysisNeeds(db, paths, undefined, { yamnetAvailable: false })
     expect(needs).toEqual([
-      { peaks: false, features: false, embedding: false, zeroShot: false },
-      { peaks: false, features: false, embedding: false, zeroShot: false },
-      { peaks: true, features: true, embedding: false, zeroShot: false }
+      { peaks: false, features: false, embedding: false },
+      { peaks: false, features: false, embedding: false },
+      { peaks: true, features: true, embedding: false }
     ])
     expect(needsAnyAnalysis(needs[0])).toBe(false)
     expect(needsAnyAnalysis(needs[1])).toBe(false)
-  })
-
-  // 2026-11-14: the model places every embedded stem, so the old guesses the
-  // four-categories migration deletes must not turn into zero-shot work (a
-  // disk decode per stem on a USB library).
-  it('an embedded stem with no attempt and no auto row needs no zero-shot step', async () => {
-    const db = freshDb()
-    addFeatures(db, 'cleared', current)
-    addPeaks(db, 'cleared')
-    addEmbedding(db, 'cleared')
-    db.prepare(`INSERT INTO Stems VALUES ('cleared', 'jam', NULL)`).run()
-    const [needs] = await getStemAnalysisNeeds(db, ['/lib/j/cleared'])
-    expect(needs.zeroShot).toBe(false)
-    expect(needsAnyAnalysis(needs)).toBe(false)
-    expect([...(await stemCIDsNeedingRework(db))]).toEqual([])
   })
 
   it('returns an empty list for no paths without querying', async () => {

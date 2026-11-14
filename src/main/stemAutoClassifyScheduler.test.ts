@@ -137,20 +137,6 @@ describe('startStemAutoClassifyScheduler', () => {
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
   })
 
-  it('wakes on a training change (confirmation / centroid retrain)', async () => {
-    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
-    classifyAutoCategoryBatch.mockResolvedValue({ processed: 0, remaining: 0 })
-    const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
-    const wake = await import('./stemAutoClassifyWake')
-    startStemAutoClassifyScheduler()
-    await vi.advanceTimersByTimeAsync(3000)
-    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
-
-    wake.noteAutoClassifyTrainingChanged()
-    await vi.advanceTimersByTimeAsync(3000)
-    expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
-  })
-
   it('does not sleep on a signal that arrived while its batch was running', async () => {
     loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
     const wake = await import('./stemAutoClassifyWake')
@@ -182,7 +168,6 @@ describe('startStemAutoClassifyScheduler', () => {
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1000)
     wake.noteAutoClassifyInputRow({} as never, 'embedding', 's1')
-    wake.noteAutoClassifyTrainingChanged()
     await vi.advanceTimersByTimeAsync(2000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
   })
