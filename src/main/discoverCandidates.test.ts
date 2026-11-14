@@ -119,11 +119,12 @@ function seedAutoCategory(
   db: Database.Database,
   stemCID: string,
   arrangeRole: string,
-  source: 'embedding' | 'centroid' | 'model' = 'embedding'
+  source: 'embedding' | 'centroid' | 'model' = 'embedding',
+  frontScore: number | null = null
 ): void {
   db.prepare(
-    `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt) VALUES (?, ?, ?, 1000)`
-  ).run(stemCID, arrangeRole, source)
+    `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt, FrontScore) VALUES (?, ?, ?, 1000, ?)`
+  ).run(stemCID, arrangeRole, source, frontScore)
 }
 
 function seedRiff(
@@ -2028,6 +2029,30 @@ describe('getDiscoverCandidates (pools by category)', () => {
     expect(await pool(own, 'front')).toEqual([])
     const drums = await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds: ['drums'] })
     expect(drums.map((c) => [c.stemCID, c.kindSources.drums])).toEqual([['n', 'guess']])
+  })
+
+  it('front and back rank by the dial: a guess by its FrontScore, a label at its end', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['lo', 'hi', 'led', 'aux'])
+    seedStem(own, 'lo', 'jam1', { instrument: NOTES })
+    seedStem(own, 'hi', 'jam1', { instrument: NOTES })
+    seedStem(own, 'led', 'jam1', { instrument: NOTES })
+    seedStem(own, 'aux', 'jam1', { instrument: NOTES })
+    seedAutoCategory(own, 'lo', 'backing', 'model', 0.2)
+    seedAutoCategory(own, 'hi', 'lead', 'model', 0.8)
+    seedCategory(own, 'led', { arrangeRole: 'lead' })
+    seedCategory(own, 'aux', { arrangeRole: 'aux' })
+    const dial = async (
+      kinds: ('back' | 'front')[]
+    ): Promise<Record<string, [number | null | undefined, number | null | undefined]>> =>
+      Object.fromEntries(
+        (await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds })).map((c) => [
+          c.stemCID,
+          [c.traitPercentiles.front, c.traitPercentiles.back]
+        ])
+      )
+    expect(await dial(['front'])).toEqual({ lo: [0, 1], hi: [1, 0], led: [1, 0] })
+    expect(await dial(['back'])).toEqual({ lo: [0, 1], hi: [1, 0], aux: [0, 1] })
   })
 })
 

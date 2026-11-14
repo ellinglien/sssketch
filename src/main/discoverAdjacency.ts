@@ -33,6 +33,7 @@ import { whenAllTableCountsSettled } from './tableChangeSignal'
 import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
 import {
+  attachDiscoverDial,
   attachDiscoverIntensity,
   attachDiscoverTraits,
   getRiffIndexForDb,
@@ -317,7 +318,13 @@ export async function getAdjacentDiscoverCandidates(
     )
   }
 
-  const traited = await attachAdjacentTraits(ownDb, result, traitKinds, options.percentileTraits)
+  const traited = await attachAdjacentTraits(
+    ownDb,
+    result,
+    normalizedKinds,
+    traitKinds,
+    options.percentileTraits
+  )
   if (options.intensity !== true) return traited
   const withIntensity = async (
     list: AdjacentDiscoverCandidate[]
@@ -328,26 +335,29 @@ export async function getAdjacentDiscoverCandidates(
   return { newer: await withIntensity(traited.newer), older: await withIntensity(traited.older) }
 }
 
-/** Trait values and percentiles for `percentileTraits` (plus the slot's own) on both directions. */
+/** Trait values and percentiles for `percentileTraits` (plus the slot's own) on both directions,
+ * and the front/back dial for a slot with a dial kind (attachDiscoverDial). */
 async function attachAdjacentTraits(
   ownDb: Database.Database,
   result: AdjacentWalkResult<AdjacentDiscoverCandidate>,
+  slotKinds: readonly DiscoverSlotKind[],
   traitKinds: readonly DiscoverTraitKind[],
   percentileTraits: readonly DiscoverTraitKind[] | undefined
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   if (percentileTraits === undefined) return result
   const valueKinds = [...traitKinds, ...percentileTraits.filter((k) => !traitKinds.includes(k))]
-  if (valueKinds.length === 0) return result
   // Re-attached per direction, keeping each candidate's own extra fields (path, soundType).
   const withTraits = async (
     list: AdjacentDiscoverCandidate[]
   ): Promise<AdjacentDiscoverCandidate[]> => {
     const attached = await attachDiscoverTraits(ownDb, list, valueKinds)
+    // shortcut: labelled stems carry no dial in the dig pool; pass their confirmed category if that ever matters
+    const dialed = attachDiscoverDial(ownDb, attached, slotKinds)
     return list.map((c, i) => ({
       ...c,
-      traitValues: attached[i].traitValues,
-      traitFieldValues: attached[i].traitFieldValues,
-      traitPercentiles: attached[i].traitPercentiles
+      traitValues: dialed[i].traitValues,
+      traitFieldValues: dialed[i].traitFieldValues,
+      traitPercentiles: dialed[i].traitPercentiles
     }))
   }
   return { newer: await withTraits(result.newer), older: await withTraits(result.older) }

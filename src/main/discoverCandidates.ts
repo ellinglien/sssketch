@@ -10,6 +10,7 @@ import {
 import {
   DISCOVER_MASK_SLOT_KINDS,
   discoverSlotKindToArrangeRole,
+  isDialKind,
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
@@ -32,6 +33,8 @@ import {
 } from '@shared/radioIntensity'
 import { getTraitQuantileTables, getTraitValueTable } from './traitQuantileCache'
 import { countWork } from './workCounters'
+import { getFrontScores } from './frontScoreCache'
+import { dialFor, withDial } from '@shared/stemCategoryDial'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
   invalidateRiffIndexCache,
@@ -1692,9 +1695,30 @@ async function getDiscoverCandidatesPool({
       pool.push({ ...candidate, slotKinds: normalized })
     }
   }
-  return valueKinds.length > 0
-    ? attachTraitPercentiles(ownDb, attachTraitValues(ownDb, pool, valueKinds))
-    : pool
+  const withTraits =
+    valueKinds.length > 0
+      ? await attachTraitPercentiles(ownDb, attachTraitValues(ownDb, pool, valueKinds))
+      : pool
+  // After attachTraitPercentiles, which replaces traitPercentiles wholesale.
+  return attachDiscoverDial(ownDb, withTraits, normalized)
+}
+
+/** The front/back dial (@shared/stemCategoryDial) on every candidate, for kind sets that rank by
+ * it (rankKindsOf): a label at its end, a guess at its FrontScore's library percentile. Same
+ * order, same length; a set with no dial kind returns the pool as it is. */
+export function attachDiscoverDial(
+  ownDb: Database.Database,
+  pool: DiscoverCandidate[],
+  kinds: readonly DiscoverSlotKind[]
+): DiscoverCandidate[] {
+  if (pool.length === 0 || !kinds.some(isDialKind)) return pool
+  const { byStemCID, table } = getFrontScores(ownDb)
+  return pool.map((c) =>
+    withDial(
+      c,
+      dialFor({ kindSources: c.kindSources, frontScore: byStemCID.get(c.stemCID), table })
+    )
+  )
 }
 
 /** Trait values for `kinds` (attachTraitValues) and their library percentiles
