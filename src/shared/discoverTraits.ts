@@ -6,8 +6,8 @@ import {
 } from './riffLibraryTypes'
 import type { StemFeatures } from './stemFeatures'
 import type { ArrangeRole } from './stemRole'
+import { categoryOfRole, type StemCategory } from './stemCategory'
 import {
-  discoverSlotKindToArrangeRole,
   isMaskSlotKind,
   normalizeSlotKinds,
   type DiscoverSlotKind,
@@ -114,13 +114,15 @@ export interface StemSlotClassification {
  *    "non-endlesss" = audio-in/mic.
  * 2. A trait-only set accepts anything that survives (tagged or not) --
  *    trait kinds never filter, they only rank.
- * 3. Mask kinds (drums/bass/lead) OR together, and a stem is placed by, in
- *    order: its human-confirmed role (always wins, any mask -- confirmed for
- *    a different role excludes it); else its Endlesss instrument mask when
- *    that resolves to drums/bass/notes (ground truth -- an auto guess never
- *    moves it); else, only for a stem the mask can't place (no mask, or
- *    audio-in), the overnight classifier's guess. Direct request,
- *    2026-09-22: audio-in/mic stems never appeared under drums/bass/lead. */
+ * 3. Mask kinds (the four categories) OR together, and a stem is placed by,
+ *    in order: its human-confirmed role's category (always wins, any mask --
+ *    confirmed for a different category excludes it); else its Endlesss
+ *    instrument mask when that resolves to drums/bass (ground truth -- an
+ *    auto guess never moves it; the notes tag says "melodic", not back or
+ *    front, so it places nothing by itself); else the overnight classifier's
+ *    guess, where a back or front guess admits the stem to BOTH back and
+ *    front (the dial ranks it). Direct request, 2026-09-22: audio-in/mic
+ *    stems must be able to appear under the mask kinds. */
 export function stemMatchesSlotKinds(
   instrumentMask: number | null | undefined,
   kinds: readonly DiscoverSlotKind[],
@@ -128,24 +130,21 @@ export function stemMatchesSlotKinds(
   classification: StemSlotClassification = {}
 ): boolean {
   if (!soundSourceMatchesFilter(instrumentMask, soundSource)) return false
-  const maskKinds = normalizeSlotKinds(kinds).filter(isMaskSlotKind)
+  const maskKinds = normalizeSlotKinds(kinds).filter(isMaskSlotKind) as StemCategory[]
   if (maskKinds.length === 0) return true
 
-  const roles = maskKinds.map(discoverSlotKindToArrangeRole)
   const { confirmedRole, autoRole } = classification
-  if (confirmedRole) return roles.includes(confirmedRole)
+  if (confirmedRole) return maskKinds.includes(categoryOfRole(confirmedRole))
 
   const soundType =
     instrumentMask === null || instrumentMask === undefined
       ? null
       : instrumentMaskToSoundType(instrumentMask)
-  if (soundType === 'drums' || soundType === 'bass' || soundType === 'notes') {
-    return maskKinds.some(
-      (k) =>
-        (k === 'drums' && soundType === 'drums') ||
-        (k === 'bass' && soundType === 'bass') ||
-        (k === 'front' && soundType === 'notes')
-    )
-  }
-  return autoRole !== null && autoRole !== undefined && roles.includes(autoRole)
+  if (soundType === 'drums' || soundType === 'bass') return maskKinds.includes(soundType)
+  if (!autoRole) return false
+  const guessed = categoryOfRole(autoRole)
+  // A back-or-front guess sits in both pools; the dial ranks it (stemCategoryDial.ts).
+  if (guessed === 'back' || guessed === 'front')
+    return maskKinds.includes('back') || maskKinds.includes('front')
+  return maskKinds.includes(guessed)
 }

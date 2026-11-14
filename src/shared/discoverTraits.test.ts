@@ -134,7 +134,7 @@ describe('stemMatchesSlotKinds', () => {
 
   it('a confirmed role overrides the mask, any mask', () => {
     expect(stemMatchesSlotKinds(DRUM, ['bass'], both, { confirmedRole: 'bass' })).toBe(true)
-    expect(stemMatchesSlotKinds(MIC, ['lead'], both, { confirmedRole: 'lead' })).toBe(true)
+    expect(stemMatchesSlotKinds(MIC, ['front'], both, { confirmedRole: 'lead' })).toBe(true)
   })
 
   it('a stem confirmed for another role is excluded, even if its mask or auto guess match', () => {
@@ -172,5 +172,29 @@ describe('stemMatchesSlotKinds', () => {
   it('mixed sets filter by the mask kinds only', () => {
     expect(stemMatchesSlotKinds(DRUM, ['drums', 'warm'], both)).toBe(true)
     expect(stemMatchesSlotKinds(null, ['drums', 'warm'], both)).toBe(false)
+  })
+})
+
+describe('stemMatchesSlotKinds by category', () => {
+  const all = { endlesss: true, audioIn: true }
+  const DRUMS_MASK = 1 << 1
+  const NOTES_MASK = 1 << 2
+  it('a confirmed vocal is front, never back', () => {
+    expect(stemMatchesSlotKinds(null, ['front'], all, { confirmedRole: 'vocal' })).toBe(true)
+    expect(stemMatchesSlotKinds(null, ['back'], all, { confirmedRole: 'vocal' })).toBe(false)
+  })
+  it('a confirmed aux is back', () => {
+    expect(stemMatchesSlotKinds(null, ['back'], all, { confirmedRole: 'aux' })).toBe(true)
+  })
+  it('the notes tag alone places nothing', () => {
+    expect(stemMatchesSlotKinds(NOTES_MASK, ['front'], all, {})).toBe(false)
+  })
+  it('a back-or-front guess is in both front and back', () => {
+    expect(stemMatchesSlotKinds(NOTES_MASK, ['front'], all, { autoRole: 'backing' })).toBe(true)
+    expect(stemMatchesSlotKinds(NOTES_MASK, ['back'], all, { autoRole: 'lead' })).toBe(true)
+    expect(stemMatchesSlotKinds(NOTES_MASK, ['drums'], all, { autoRole: 'lead' })).toBe(false)
+  })
+  it('the drums tag still wins over a guess', () => {
+    expect(stemMatchesSlotKinds(DRUMS_MASK, ['front'], all, { autoRole: 'lead' })).toBe(false)
   })
 })

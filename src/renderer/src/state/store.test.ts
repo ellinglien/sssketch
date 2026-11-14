@@ -3419,7 +3419,7 @@ describe('the phrase actions', () => {
     },
     {
       id: 's2',
-      kinds: ['lead', 'bright'],
+      kinds: ['front', 'bright'],
       gain: 0.8,
       audible: true,
       rolling: false,

@@ -8,7 +8,6 @@ import type { ArrangeRole } from './stemRole'
 import { CATEGORY_ROLE, STEM_CATEGORY_OPTIONS, categoryOfRole } from './stemCategory'
 import {
   DISCOVER_SLOT_KIND_LABEL,
-  discoverSlotKindToArrangeRole,
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
@@ -123,8 +122,8 @@ function traitEntry(
  * - a trait kind shows 5-step bars from the stem's library percentile, with
  *   the exact number (and a `· relaxed` marker when barUsed < the requested
  *   bar) in the tooltip;
- * - `reclassified` (a Discover reclassify to a role none of the slot's
- *   mask kinds covers) adds one confirmed entry for that role, so the
+ * - `reclassified` (a Discover reclassify to a role whose category none of
+ *   the slot's mask kinds is) adds one confirmed entry for that role, so the
  *   reclassify trigger is still there to change it again. */
 export function buildMatchMeter({
   kinds,
@@ -150,10 +149,7 @@ export function buildMatchMeter({
     const source = kindSources[kind]
     if (source) entries.push(maskEntry(kind, DISCOVER_SLOT_KIND_LABEL[kind], source))
   }
-  if (
-    reclassified &&
-    !maskKinds.some((k) => discoverSlotKindToArrangeRole(k) === reclassified.role)
-  ) {
+  if (reclassified && !maskKinds.includes(categoryOfRole(reclassified.role))) {
     entries.push(maskEntry(null, reclassified.label, 'confirmed'))
   }
   for (const kind of normalized) {
@@ -164,8 +160,8 @@ export function buildMatchMeter({
 }
 
 /** A Discover reclassify of the slot's stem to `role`: the slot's mask kind
- * for that role (if any) becomes 'confirmed'; every other mask kind loses
- * its source (a confirmation for another role excludes the stem from
+ * for that role's category (if any) becomes 'confirmed'; every other mask
+ * kind loses its source (a confirmation for another category excludes the stem from
  * them -- same rule the candidate pools apply), so the stem's previous
  * sources don't matter. */
 export function reclassifyKindSources(
@@ -174,7 +170,7 @@ export function reclassifyKindSources(
 ): DiscoverKindSources {
   const out: DiscoverKindSources = {}
   for (const kind of normalizeSlotKinds(kinds)) {
-    if (isMaskSlotKind(kind) && discoverSlotKindToArrangeRole(kind) === role) {
+    if (isMaskSlotKind(kind) && categoryOfRole(role) === kind) {
       out[kind as DiscoverMaskKind] = 'confirmed'
     }
   }

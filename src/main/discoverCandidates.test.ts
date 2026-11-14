@@ -32,6 +32,8 @@ import { bumpTableWriteVersion } from './tableWriteVersion'
 import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { countWork } from './workCounters'
 import { instrumentMaskToSoundType, soundSourceMatchesFilter } from '@shared/riffLibraryTypes'
+import { categoryOfRole } from '@shared/stemCategory'
+import type { ArrangeRole } from '@shared/stemRole'
 
 /** tableChangeSignal.ts's cheap half of a table's change signal (MAX(rowid)
  * + data_version): not a read of the table's rows, so the query-count tests
@@ -111,13 +113,13 @@ function seedUnavailable(db: Database.Database, stemCID: string): void {
  * thresholds) is stemAutoClassify's own concern and is tested there.
  * Since 2026-09-22 (direct request: audio-in/mic stems never appeared
  * under drums/bass/lead), a MASK kind's pool reads this table again -- but
- * only for stems the Endlesss instrument mask can't place (no mask, or
- * audio-in); an Endlesss drums/bass/notes mask stays ground truth. */
+ * only for stems the Endlesss instrument mask can't place (no mask, notes,
+ * or audio-in); an Endlesss drums/bass mask stays ground truth. */
 function seedAutoCategory(
   db: Database.Database,
   stemCID: string,
   arrangeRole: string,
-  source: 'embedding' | 'centroid' = 'embedding'
+  source: 'embedding' | 'centroid' | 'model' = 'embedding'
 ): void {
   db.prepare(
     `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt) VALUES (?, ?, ?, 1000)`
@@ -1979,6 +1981,46 @@ describe('getDiscoverCandidates (kindSources)', () => {
   })
 })
 
+describe('getDiscoverCandidates (pools by category)', () => {
+  const NOTES = 1 << 2
+  const jamsFor = (db: Database.Database): { jamCID: string; dbForJam: Database.Database }[] => [
+    { jamCID: 'jam1', dbForJam: db }
+  ]
+  const pool = async (
+    db: Database.Database,
+    kind: 'back' | 'front'
+  ): Promise<[string, string | undefined][]> =>
+    (await getDiscoverCandidates({ ownDb: db, jams: jamsFor(db), kinds: [kind] }))
+      .map((c): [string, string | undefined] => [c.stemCID, c.kindSources[kind]])
+      .sort()
+
+  it('a stem confirmed aux is back, never front', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['a'])
+    seedStem(own, 'a', 'jam1', { instrument: NOTES })
+    seedCategory(own, 'a', { arrangeRole: 'aux' })
+    expect(await pool(own, 'back')).toEqual([['a', 'confirmed']])
+    expect(await pool(own, 'front')).toEqual([])
+  })
+
+  it('a notes stem guessed lead is in both front and back, as a guess', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['n'])
+    seedStem(own, 'n', 'jam1', { instrument: NOTES })
+    seedAutoCategory(own, 'n', 'lead', 'model')
+    expect(await pool(own, 'front')).toEqual([['n', 'guess']])
+    expect(await pool(own, 'back')).toEqual([['n', 'guess']])
+  })
+
+  it('a notes stem with no guess is in neither', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['n'])
+    seedStem(own, 'n', 'jam1', { instrument: NOTES })
+    expect(await pool(own, 'front')).toEqual([])
+    expect(await pool(own, 'back')).toEqual([])
+  })
+})
+
 describe('background efficiency B1: trait values from the in-memory table', () => {
   const DRUM = 1 << 1
   const jams = (db: Database.Database): { jamCID: string; dbForJam: Database.Database }[] => [
@@ -2093,7 +2135,9 @@ describe('background efficiency B1: trait values from the in-memory table', () =
 describe('background efficiency B2: per-kind stem lists', () => {
   const MASKS = [null, 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, (1 << 4) | (1 << 1), 1 << 6]
   const ROLES = ['drums', 'bass', 'lead', 'aux']
-  type Kind = 'drums' | 'bass' | 'front'
+  type Kind = 'drums' | 'bass' | 'back' | 'front'
+  const cat = (role: string | undefined): string | undefined =>
+    role === undefined ? undefined : categoryOfRole(role as ArrangeRole)
 
   /** The pre-B2 walk (getMaskKindStemMasks + getMaskDiscoverCandidates's
    * confirmed/sound-source steps), written out plainly -- the reference the
@@ -2133,17 +2177,17 @@ describe('background efficiency B2: per-kind stem lists', () => {
         if (!allowed.has(row.OwnerJamCID) || admitted.has(row.StemCID)) continue
         const c = confirmed.get(row.StemCID)
         if (c !== undefined) {
-          if (c === kind)
+          if (cat(c) === kind)
             admitted.set(row.StemCID, { instrument: row.Instrument, source: 'confirmed' })
           continue
         }
         const t = row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
-        const placed = t === 'drums' || t === 'bass' || t === 'notes'
+        const placed = t === 'drums' || t === 'bass'
+        const guessed = cat(auto.get(row.StemCID))
         const ok = placed
-          ? (t === 'drums' && kind === 'drums') ||
-            (t === 'bass' && kind === 'bass') ||
-            (t === 'notes' && kind === 'front')
-          : auto.get(row.StemCID) === kind
+          ? t === kind
+          : guessed === kind ||
+            ((guessed === 'back' || guessed === 'front') && (kind === 'back' || kind === 'front'))
         if (ok)
           admitted.set(row.StemCID, {
             instrument: row.Instrument,
@@ -2153,7 +2197,7 @@ describe('background efficiency B2: per-kind stem lists', () => {
     }
     const out = new Map<string, string>()
     // Confirmed stems the walk never passed still count (mask unknown).
-    for (const [cid, role] of confirmed) if (role === kind) out.set(cid, 'confirmed')
+    for (const [cid, role] of confirmed) if (cat(role) === kind) out.set(cid, 'confirmed')
     for (const [cid, a] of admitted) {
       if (!out.has(cid)) out.set(cid, a.source)
     }
@@ -2167,7 +2211,7 @@ describe('background efficiency B2: per-kind stem lists', () => {
     let x = seed
     const rand = (n: number): number => {
       x = (x * 1103515245 + 12345) % 2147483648
-      return x % n
+      return Math.floor((x / 2147483648) * n) // high bits: an LCG's low bits cycle
     }
     for (let r = 0; r < 40; r++) {
       const db = r % 4 === 3 ? other : own
@@ -2199,7 +2243,7 @@ describe('background efficiency B2: per-kind stem lists', () => {
         { jamCID: 'jam1', dbForJam: other },
         { jamCID: 'jam3', dbForJam: other }
       ]
-      for (const kind of ['drums', 'bass', 'lead'] as Kind[]) {
+      for (const kind of ['drums', 'bass', 'back', 'front'] as Kind[]) {
         for (const soundSource of [
           { endlesss: true, audioIn: true },
           { endlesss: false, audioIn: true },
@@ -3745,7 +3789,7 @@ describe('kind index layers (scan plan Task 10)', () => {
 
   async function pool(
     own: Database.Database,
-    kind: 'drums' | 'bass' | 'front'
+    kind: 'drums' | 'bass' | 'back' | 'front'
   ): Promise<Map<string, string | undefined>> {
     const got = await getDiscoverCandidates({ ownDb: own, jams: jamsOf(own), kinds: [kind] })
     return new Map(got.map((c) => [c.stemCID, c.kindSources[kind]]))
@@ -3754,7 +3798,7 @@ describe('kind index layers (scan plan Task 10)', () => {
   /** The same library, indexed from scratch (a fresh connection). */
   async function fromScratch(
     own: Database.Database,
-    kind: 'drums' | 'bass' | 'front'
+    kind: 'drums' | 'bass' | 'back' | 'front'
   ): Promise<Map<string, string | undefined>> {
     return pool(new Database(own.serialize()), kind)
   }
@@ -3806,7 +3850,7 @@ describe('kind index layers (scan plan Task 10)', () => {
 
   it('after any mix of writes, once settled, the pools equal a from-scratch build', async () => {
     const own = library()
-    const kinds = ['drums', 'bass', 'lead'] as const
+    const kinds = ['drums', 'bass', 'back', 'front'] as const
     for (const kind of kinds) await pool(own, kind)
     const writes: (() => void)[] = [
       () => upsertStemAutoCategory(own, 'mic1', 'lead', 'embedding', 10),

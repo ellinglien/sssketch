@@ -188,6 +188,17 @@ describe('buildMatchMeter', () => {
     })
     expect(entries.map((e) => e.text)).toEqual(['drums: confirmed'])
   })
+
+  it("a reclassified role in a slot kind's category adds no extra entry", () => {
+    const entries = buildMatchMeter({
+      kinds: ['front'],
+      kindSources: { front: 'confirmed' },
+      traitPercentiles: {},
+      barUsed: null,
+      reclassified: { role: 'vocal', label: 'front' }
+    })
+    expect(entries.map((e) => e.text)).toEqual(['front: confirmed'])
+  })
 })
 
 describe('reclassifyKindSources', () => {
@@ -209,6 +220,11 @@ describe('reclassifyKindSources', () => {
 
   it('does not add a mask kind the slot does not request', () => {
     expect(reclassifyKindSources(['drums'], 'lead')).toEqual({})
+  })
+
+  it("a reclassify to a role in the kind's category confirms it", () => {
+    expect(reclassifyKindSources(['front'], 'vocal')).toEqual({ front: 'confirmed' })
+    expect(reclassifyKindSources(['back', 'front'], 'aux')).toEqual({ back: 'confirmed' })
   })
 })
 
