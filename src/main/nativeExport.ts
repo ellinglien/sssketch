@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppState } from '../renderer/src/state/store'
 import { buildEngineProject } from '@shared/buildEngineProject'
-import { stemKey, type BusId } from '@shared/types'
+import { stemKey } from '@shared/types'
+import { STEM_CATEGORY_OPTIONS, categoryOfBus, type StemCategory } from '@shared/stemCategory'
 import { packIntoTracks } from '@shared/packIntoTracks'
 import { audibleRisers, riserSoundingEndBar } from '@shared/riser'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
@@ -234,13 +235,13 @@ function assertHasPlacedRifffs(state: AppState): void {
  * it — i.e. "export the tidied tracks", the same shape as soloing each bus
  * in Ableton and exporting that selection, not a file per individual stem.
  * Every stem assigned to a bus (via state.busOf, falling back to
- * DEFAULT_STEMS_BUS) is soloed together for that bus's render — reuses
+ * DEFAULT_STEMS_CATEGORY) is soloed together for that category's render — reuses
  * soloState's existing multi-target support (see its own "a bus solo, not
  * just a single stem" doc comment), so within-bus balance (relative volume/
  * fades/placement) is preserved exactly as tidied, just isolated from every
  * OTHER bus for this one file. A bus with nothing assigned to it produces
  * no file at all, rather than an empty/silent one. Named directly
- * `<busId>.wav` in destDir -- BusId's own values are already safe, fixed,
+ * `<category>.wav` in destDir -- the four category words are already safe, fixed,
  * lowercase identifiers, so no sanitization or disambiguation is needed the
  * way per-stem filenames used to require.
  *
@@ -250,11 +251,11 @@ function assertHasPlacedRifffs(state: AppState): void {
  * the rendered bytes back into the main process, let alone across IPC (see
  * git history for why: an earlier per-stem design that round-tripped bytes
  * through IPC reproducibly crashed Electron on a large project). Returns
- * the filenames actually written, in bus order (BUS_ORDER, not discovery
+ * the filenames actually written, in category order (STEM_CATEGORY_OPTIONS, not discovery
  * order).
  */
-const DEFAULT_STEMS_BUS: BusId = 'aux'
-const BUS_ORDER: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
+// A stem with no bus counts as back, as aux did before the four categories.
+const DEFAULT_STEMS_CATEGORY: StemCategory = 'back'
 
 /** One placed (rifff, stem) pair assigned to a bus, with its occupied time
  * span (in bars) -- the span ignores leftCrop (which only trims audio from
@@ -267,10 +268,10 @@ const BUS_ORDER: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
  * rendered track. */
 type StemEntry = { key: string; startBar: number; endBar: number }
 
-function stemEntriesByBus(state: AppState): Map<BusId, StemEntry[]> {
+function stemEntriesByBus(state: AppState): Map<StemCategory, StemEntry[]> {
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
-  const byBus = new Map<BusId, StemEntry[]>()
-  for (const busId of BUS_ORDER) byBus.set(busId, [])
+  const byBus = new Map<StemCategory, StemEntry[]>()
+  for (const category of STEM_CATEGORY_OPTIONS) byBus.set(category, [])
 
   for (const rifff of placed) {
     const playedBars = state.playedBars[rifff.groupId] ?? rifff.barLength
@@ -278,8 +279,9 @@ function stemEntriesByBus(state: AppState): Map<BusId, StemEntry[]> {
     const endBar = startBar + playedBars
     for (const stem of rifff.stems) {
       const key = stemKey(rifff.groupId, stem.slot)
-      const busId = state.busOf[key] ?? DEFAULT_STEMS_BUS
-      byBus.get(busId)!.push({ key, startBar, endBar })
+      const bus = state.busOf[key]
+      const category = bus ? categoryOfBus(bus) : DEFAULT_STEMS_CATEGORY
+      byBus.get(category)!.push({ key, startBar, endBar })
     }
   }
 
@@ -319,8 +321,8 @@ export async function renderStemsToDir(
   try {
     await client.connect(engineHandle.port)
 
-    for (const busId of BUS_ORDER) {
-      const busEntries = keysByBus.get(busId)!
+    for (const category of STEM_CATEGORY_OPTIONS) {
+      const busEntries = keysByBus.get(category)!
       if (busEntries.length === 0) continue
       const busKeys = busEntries.map((e) => e.key)
 
@@ -332,7 +334,7 @@ export async function renderStemsToDir(
         pluginStates,
         { dubThrows }
       )
-      const fileName = `${busId}.wav`
+      const fileName = `${category}.wav`
       const outputPath = join(destDir, fileName)
 
       client.send('load-project', project)
@@ -346,9 +348,7 @@ export async function renderStemsToDir(
       )) as { success: boolean; error?: string }
 
       if (!result.success) {
-        throw new Error(
-          `native export failed for bus "${busId}": ${result.error ?? 'unknown error'}`
-        )
+        throw new Error(`native export failed for ${category}: ${result.error ?? 'unknown error'}`)
       }
 
       fileNames.push(fileName)
@@ -471,7 +471,7 @@ export async function exportStemsNextToSource(
  * share one physical track/file, stems that DO overlap are forced onto
  * separate ones. Every stem on a given track is soloed together for that
  * track's render, same multi-target soloState reuse as renderStemsToDir.
- * Named `<projectName> - <busId> <n>.wav`, always numbered (even a bus with
+ * Named `<projectName> - <category> <n>.wav`, always numbered (even a bus with
  * only one track) so the number consistently means "track index within this
  * bus" regardless of how many tracks a given bus actually needed -- flat in
  * destDir, no subfolders, same as renderStemsToDir, so these still drag
@@ -507,8 +507,8 @@ export async function renderStemTracksToDir(
   try {
     await client.connect(engineHandle.port)
 
-    for (const busId of BUS_ORDER) {
-      const busEntries = entriesByBus.get(busId)!
+    for (const category of STEM_CATEGORY_OPTIONS) {
+      const busEntries = entriesByBus.get(category)!
       if (busEntries.length === 0) continue
 
       const packed = packIntoTracks(
@@ -526,7 +526,7 @@ export async function renderStemTracksToDir(
           pluginStates,
           { dubThrows }
         )
-        const fileName = `${sanitizedProjectName} - ${busId} ${i + 1}.wav`
+        const fileName = `${sanitizedProjectName} - ${category} ${i + 1}.wav`
         const outputPath = join(destDir, fileName)
 
         client.send('load-project', project)
@@ -540,7 +540,7 @@ export async function renderStemTracksToDir(
 
         if (!result.success) {
           throw new Error(
-            `native export failed for bus "${busId}" track ${i + 1}: ${result.error ?? 'unknown error'}`
+            `native export failed for ${category} track ${i + 1}: ${result.error ?? 'unknown error'}`
           )
         }
 

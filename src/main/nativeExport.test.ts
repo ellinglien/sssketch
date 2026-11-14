@@ -352,7 +352,7 @@ describe('nativeExport — multi-stem/multi-rifff parity against reference math'
 })
 
 describe('renderStemsToDir', () => {
-  it('mixes every stem assigned to a bus down into one <busId>.wav, not one file per stem', async () => {
+  it('mixes every stem assigned to a bus down into one <category>.wav, not one file per stem', async () => {
     // Two DIFFERENT stems, both assigned to the 'drums' bus -- the point of
     // this export is "the tidied track", so both must land in ONE file, not
     // two, unlike the old per-stem behavior.
@@ -464,12 +464,12 @@ describe('renderStemsToDir', () => {
 
       const fileNames = await renderStemsToDir(state, destDir)
 
-      // Bus order (BUS_ORDER in nativeExport.ts), not discovery/placement order.
+      // Category order (STEM_CATEGORY_OPTIONS), not discovery/placement order.
       expect(fileNames).toEqual(['drums.wav', 'bass.wav'])
       expect(existsSync(join(destDir, 'drums.wav'))).toBe(true)
       expect(existsSync(join(destDir, 'bass.wav'))).toBe(true)
-      expect(existsSync(join(destDir, 'lead.wav'))).toBe(false)
-      expect(existsSync(join(destDir, 'backing.wav'))).toBe(false)
+      expect(existsSync(join(destDir, 'front.wav'))).toBe(false)
+      expect(existsSync(join(destDir, 'back.wav'))).toBe(false)
       expect(existsSync(join(destDir, 'aux.wav'))).toBe(false)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
@@ -477,7 +477,7 @@ describe('renderStemsToDir', () => {
     }
   }, 30000)
 
-  it('falls back to aux.wav for a stem with no busOf assignment', async () => {
+  it('falls back to back.wav for a stem with no busOf assignment', async () => {
     const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
     const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
     try {
@@ -506,8 +506,50 @@ describe('renderStemsToDir', () => {
 
       const fileNames = await renderStemsToDir(state, destDir)
 
-      expect(fileNames).toEqual(['aux.wav'])
-      expect(existsSync(join(destDir, 'aux.wav'))).toBe(true)
+      expect(fileNames).toEqual(['back.wav'])
+      expect(existsSync(join(destDir, 'back.wav'))).toBe(true)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('writes aux and backing stems into one back.wav, and lead into front.wav', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-dest-'))
+    try {
+      const paths = ['a', 'b', 'c'].map((n) => join(srcDir, `${n}.wav`))
+      paths.forEach((p) => writeConstantWav(p, 0.2, 4410))
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'mixed',
+        bpm: 60,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: paths.map((path, i) => ({
+          slot: i + 1,
+          author: 'e',
+          name: `s${i}`,
+          type: 'fx' as const,
+          path,
+          durationSec: 0.1,
+          barLength: 1
+        }))
+      }
+      const state: AppState = {
+        ...initialState,
+        bpm: 60,
+        rifffs: { r1: rifff },
+        busOf: { 'r1:1': 'aux', 'r1:2': 'backing', 'r1:3': 'lead' }
+      }
+
+      const fileNames = await renderStemsToDir(state, destDir)
+
+      expect(fileNames).toEqual(['back.wav', 'front.wav'])
+      for (const gone of ['aux.wav', 'backing.wav', 'lead.wav']) {
+        expect(existsSync(join(destDir, gone))).toBe(false)
+      }
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(destDir, { recursive: true, force: true })
@@ -977,7 +1019,7 @@ describe('exportStemTracksToLibrary / exportStemTracksNextToSource', () => {
 
       await exportStemTracksNextToSource(state, sourcePath)
 
-      expect(existsSync(join(projectDir, 'Stems', 'my-proj', 'my-proj - lead 1.wav'))).toBe(true)
+      expect(existsSync(join(projectDir, 'Stems', 'my-proj', 'my-proj - front 1.wav'))).toBe(true)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(projectDir, { recursive: true, force: true })
@@ -1080,7 +1122,7 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
       }
       const sourcePath = join(projectDir, 'my-proj.sssketchproj')
       // A sibling sketch's export and the user's own file, both in Stems/.
-      const siblingStem = join(projectDir, 'Stems', 'other-proj', 'lead.wav')
+      const siblingStem = join(projectDir, 'Stems', 'other-proj', 'front.wav')
       const usersOwn = join(projectDir, 'Stems', 'vocal take.wav')
       mkdirSync(join(projectDir, 'Stems', 'other-proj'), { recursive: true })
       writeFileSync(siblingStem, 'sibling')
@@ -1088,7 +1130,7 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
 
       await exportStemsNextToSource(state, sourcePath)
 
-      expect(existsSync(join(projectDir, 'Stems', 'my-proj', 'lead.wav'))).toBe(true)
+      expect(existsSync(join(projectDir, 'Stems', 'my-proj', 'front.wav'))).toBe(true)
       expect(existsSync(siblingStem)).toBe(true)
       expect(existsSync(usersOwn)).toBe(true)
     } finally {

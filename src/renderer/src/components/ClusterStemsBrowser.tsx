@@ -873,7 +873,7 @@ export function ClusterStemsBrowser({
   // not a row index -- see focusedId's own doc comment above for why.
   const [celebratingId, setCelebratingId] = useState<number | null>(null)
 
-  // `category` is one of ARRANGE_ROLE_OPTIONS' 8 values, not just a BusId --
+  // `category` is a stored role (CATEGORY_ROLE of the picked category), not a BusId --
   // the 3 without a bus of their own (textureFx/fill/vocal) route to 'aux'
   // (see ARRANGE_ROLE_TO_BUS's own doc comment, shared/stemRole.ts) while
   // still recording the finer category via recordRoles. For the 5 shared

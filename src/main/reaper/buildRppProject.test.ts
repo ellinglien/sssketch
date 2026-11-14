@@ -316,6 +316,36 @@ describe('buildRppProject', () => {
     expect(findChild(track, 'NAME')?.params[0]).toBe('"DRUMS"')
   })
 
+  it('puts aux and backing stems on back tracks and lead on front, named by category', () => {
+    const rifffs = ['a', 'b', 'c'].map((id) => ({ ...drumsRifff(), groupId: id, startBar: 0 }))
+    const state = emptyAppState({
+      rifffs: Object.fromEntries(rifffs.map((r) => [r.groupId, r])),
+      busOf: { 'a:0': 'aux', 'b:0': 'backing', 'c:0': 'lead' }
+    })
+    const rppText = buildRppProject(
+      state,
+      new Map([
+        ['a:0', 'a.wav'],
+        ['b:0', 'b.wav'],
+        ['c:0', 'c.wav']
+      ])
+    )
+    const { tracks } = tracksOf(rppText)
+    const names = tracks.map((t) => findChild(t, 'NAME')?.params[0] as string)
+
+    // Same-time stems open one track each: two back, one front, back first.
+    expect(names).toHaveLength(3)
+    expect(names.map((n) => n.replace(/^"|"$/g, '').split(/ [-—] /)[0])).toEqual([
+      'BACK',
+      'BACK',
+      'FRONT'
+    ])
+    const rgb = (hex: number): number =>
+      0x01000000 | (((hex & 0xff) << 16) | (hex & 0xff00) | (hex >> 16))
+    expect(findChild(tracks[0], 'PEAKCOL')?.params).toEqual([String(rgb(0x7fc98a))]) // backing's
+    expect(findChild(tracks[2], 'PEAKCOL')?.params).toEqual([String(rgb(0xc7a4d2))]) // lead's
+  })
+
   it('keeps tracks for the same bus adjacent when packIntoTracks opens more than one', () => {
     // Two non-overlapping same-bus stems that DO overlap in time (forcing
     // packIntoTracks to open two physical tracks for this one bus).

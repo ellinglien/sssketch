@@ -1,7 +1,13 @@
 // src/main/ableton/buildAlsXml.ts
 import { join } from 'node:path'
 import type { AppState } from '../../renderer/src/state/store'
-import type { BusId, Rifff, Stem, SoundType } from '@shared/types'
+import type { Rifff, Stem, SoundType } from '@shared/types'
+import {
+  CATEGORY_BUS,
+  STEM_CATEGORY_OPTIONS,
+  categoryOfBus,
+  type StemCategory
+} from '@shared/stemCategory'
 import { stemKey } from '@shared/types'
 import { parseKeyToAbletonScale } from './scaleMapping'
 import { packIntoTracks } from '@shared/packIntoTracks'
@@ -96,7 +102,7 @@ function applyFade(
   )
 }
 
-// Ableton's own fixed palette index (0-69ish) per bus, applied to every
+// Ableton's own fixed palette index (0-69ish) per category (back takes backing's, front lead's), applied to every
 // group/track/clip that bus produces -- per direct feedback ("can we color
 // code the groups and clips"). bass/lead/backing are NOT guesses: extracted
 // directly from a real project the user hand-recolored in Ableton itself as
@@ -124,13 +130,15 @@ function applyFade(
 // "adjust by hand in Ableton if this index isn't actually the tan it's
 // assumed to be" caveat as drums above -- unlike drums/bass/lead/backing,
 // this one was never checked against a real opened project.
-const ABLETON_BUS_COLORS: Record<BusId, number> = {
+const ABLETON_CATEGORY_COLORS: Record<StemCategory, number> = {
   drums: 65,
   bass: 0,
-  lead: 53,
-  backing: 67,
-  aux: 22
+  front: 53,
+  back: 67
 }
+
+// Risers belong to no category: they keep the old aux tan (22) as their neutral.
+const ABLETON_RISER_COLOR = 22
 
 // Mirrors src/renderer/src/state/selectors.ts's resolvePlayedBars
 // (re-implemented here rather than imported wholesale, matching
@@ -950,12 +958,12 @@ function buildSharedAudioTrack(
  * (two shared tracks with an identical type summary) still gets a
  * disambiguating numeric suffix rather than silently duplicating a name. */
 function uniqueSharedTrackName(
-  busId: BusId,
+  category: StemCategory,
   trackEntries: StemClipsResult[],
   usedNames: Map<string, number>
 ): string {
   const summary = summarizeSoundTypes(trackEntries.map((e) => e.soundType))
-  const base = `${busId} (shared: ${summary})`
+  const base = `${category} (shared: ${summary})`
   const count = (usedNames.get(base) ?? 0) + 1
   usedNames.set(base, count)
   return count === 1 ? base : `${base} ${count}`
@@ -1260,12 +1268,12 @@ export function buildAlsXml(
   const nextId = (): number => nextIdValue++
   const outTracks: AlsNode[] = []
 
-  const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
-  const DEFAULT_BUS: BusId = 'aux'
+  // A stem with no bus counts as back, as aux did before the four categories.
+  const DEFAULT_CATEGORY: StemCategory = 'back'
   const canonicalClipTemplate = findCanonicalClip(canonicalAudioTrack)
 
-  const byBus = new Map<BusId, StemClipsResult[]>()
-  for (const busId of BUS_IDS) byBus.set(busId, [])
+  const byBus = new Map<StemCategory, StemClipsResult[]>()
+  for (const category of STEM_CATEGORY_OPTIONS) byBus.set(category, [])
 
   const placedForBuses = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
   for (const rifff of placedForBuses) {
@@ -1283,11 +1291,12 @@ export function buildAlsXml(
 
       // Computed before buildStemClips (not after, as this loop originally
       // did) so its own colorIndex can be threaded straight into the call
-      // below -- see ABLETON_BUS_COLORS.
-      const busId = state.busOf[key] ?? DEFAULT_BUS
+      // below -- see ABLETON_CATEGORY_COLORS.
+      const bus = state.busOf[key]
+      const category = bus ? categoryOfBus(bus) : DEFAULT_CATEGORY
       if (baked) {
         byBus
-          .get(busId)!
+          .get(category)!
           .push(
             buildBakedStemClip(
               canonicalClipTemplate,
@@ -1299,7 +1308,7 @@ export function buildAlsXml(
               leftCropBars,
               playedBars,
               state.bpm,
-              ABLETON_BUS_COLORS[busId]
+              ABLETON_CATEGORY_COLORS[category]
             )
           )
         continue
@@ -1337,7 +1346,7 @@ export function buildAlsXml(
         playedBars,
         state.bpm,
         state.muteRegions,
-        ABLETON_BUS_COLORS[busId],
+        ABLETON_CATEGORY_COLORS[category],
         // A fully-muted stem exports its clip at SampleVolume 0, not
         // whatever its own volume knob was -- rather than skipping the
         // stem entirely (as a fully-covered mute REGION does, see
@@ -1351,12 +1360,12 @@ export function buildAlsXml(
       )
       if (result.clips.length === 0) continue // fully muted -- nothing to place
 
-      byBus.get(busId)!.push(result)
+      byBus.get(category)!.push(result)
     }
   }
 
-  for (const busId of BUS_IDS) {
-    const entries = byBus.get(busId)!
+  for (const category of STEM_CATEGORY_OPTIONS) {
+    const entries = byBus.get(category)!
     if (entries.length === 0) continue
 
     const groupTrack = cloneNode(canonicalGroupTrack)
@@ -1364,8 +1373,8 @@ export function buildAlsXml(
     clearSends(groupTrack, 'GroupTrack', keepReverbReturn ? 1 : 0)
     const groupTrackId = attrs(groupTrack)['@_Id']
     const groupTrackBody = childArray(groupTrack, 'GroupTrack')
-    setTrackName(findChild(groupTrackBody, 'Name')!, busGroupName(busId, entries))
-    setColor(groupTrackBody, ABLETON_BUS_COLORS[busId])
+    setTrackName(findChild(groupTrackBody, 'Name')!, busGroupName(CATEGORY_BUS[category], entries))
+    setColor(groupTrackBody, ABLETON_CATEGORY_COLORS[category])
     outTracks.push(groupTrack)
 
     // In automation mode every stem gets its own track, deliberately: an
@@ -1390,14 +1399,14 @@ export function buildAlsXml(
       const trackName =
         trackEntries.length === 1
           ? trackEntries[0].trackName
-          : uniqueSharedTrackName(busId, trackEntries, usedSharedTrackNames)
+          : uniqueSharedTrackName(category, trackEntries, usedSharedTrackNames)
       const track = buildSharedAudioTrack(
         canonicalAudioTrack,
         nextId,
         groupTrackId,
         trackName,
         allClips,
-        ABLETON_BUS_COLORS[busId],
+        ABLETON_CATEGORY_COLORS[category],
         keepReverbReturn ? 1 : 0
       )
       if (automationMode) {
@@ -1433,7 +1442,7 @@ export function buildAlsXml(
           riserFileName,
           outputDir,
           state.bpm,
-          ABLETON_BUS_COLORS.aux
+          ABLETON_RISER_COLOR
         )
       )
       outTracks.push(
@@ -1443,7 +1452,7 @@ export function buildAlsXml(
           '-1',
           index === 0 ? 'risers' : `risers ${index + 1}`,
           clips,
-          ABLETON_BUS_COLORS.aux,
+          ABLETON_RISER_COLOR,
           keepReverbReturn ? 1 : 0
         )
       )
