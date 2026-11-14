@@ -1,6 +1,6 @@
 # Four categories: drums, bass, back, front
 
-Status: design, approved in chat (2026-11-14). Not built.
+Status: built 2026-11-14 on `four-categories`, awaiting Elling's walkthrough.
 
 ## Why
 
