@@ -48,8 +48,12 @@ export interface CvReport {
   perClassArgmax: Record<StemCategory, ClassReport>
 }
 
-/** The 2026-10-15 test: centroid 0.55, live guesses 0.24, best model ~0.65 on unseen jams. */
-export const FLOOR = { frontBack: 0.6, drumsRecall: 0.6, bassRecall: 0.6 }
+/** What a model must reach to ship, measured through the shipped rule (perClass). Front/back:
+ * the 2026-10-15 test had the centroid at 0.55, live guesses 0.24, the best model ~0.65 on unseen
+ * jams. Drums and bass are judged on precision, not recall (Elling, 2026-11-14): Endlesss's tags
+ * already place most of them, a missed one still sits in back/front on the dial, but a wrong
+ * call hides a lead under drums, which was the old guesser's bug. */
+export const FLOOR = { frontBack: 0.6, drumsPrecision: 0.5, bassPrecision: 0.5 }
 
 export function fitStemCategoryModel(
   samples: TrainingSample[],
@@ -173,10 +177,11 @@ export function meetsFloor(report: CvReport): { ok: boolean; reasons: string[] }
   const reasons: string[] = []
   if (report.frontBackAccuracy < FLOOR.frontBack)
     reasons.push(`front/back ${report.frontBackAccuracy.toFixed(3)} < ${FLOOR.frontBack}`)
-  if (report.perClass.drums.recall < FLOOR.drumsRecall)
-    reasons.push(`drums recall ${report.perClass.drums.recall.toFixed(3)} < ${FLOOR.drumsRecall}`)
-  if (report.perClass.bass.recall < FLOOR.bassRecall)
-    reasons.push(`bass recall ${report.perClass.bass.recall.toFixed(3)} < ${FLOOR.bassRecall}`)
+  const { drums, bass } = report.perClass
+  if (drums.precision < FLOOR.drumsPrecision)
+    reasons.push(`drums precision ${drums.precision.toFixed(3)} < ${FLOOR.drumsPrecision}`)
+  if (bass.precision < FLOOR.bassPrecision)
+    reasons.push(`bass precision ${bass.precision.toFixed(3)} < ${FLOOR.bassPrecision}`)
   return { ok: reasons.length === 0, reasons }
 }
 

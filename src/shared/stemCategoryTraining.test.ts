@@ -4,6 +4,8 @@ import {
   crossValidate,
   fitStemCategoryModel,
   meetsFloor,
+  type ClassReport,
+  type CvReport,
   type TrainingSample
 } from './stemCategoryTraining'
 import { CONFIDENT_DRUMS_BASS, predictCategoryProbs } from './stemCategoryModel'
@@ -72,5 +74,30 @@ describe('stemCategoryTraining', () => {
     const verdict = meetsFloor(report)
     expect(verdict.ok).toBe(false)
     expect(verdict.reasons.length).toBeGreaterThan(0)
+  })
+
+  it('judges drums and bass on precision, not recall', () => {
+    const cls = (precision: number, recall: number): ClassReport => ({ n: 50, precision, recall })
+    const base: CvReport = {
+      n: 200,
+      folds: 5,
+      fourWayAccuracy: 0.5,
+      frontBackAccuracy: 0.62,
+      perClass: {
+        drums: cls(0.66, 0.3),
+        bass: cls(0.53, 0.3),
+        back: cls(0.3, 0.4),
+        front: cls(0.4, 0.4)
+      },
+      perClassArgmax: {
+        drums: cls(0.66, 0.6),
+        bass: cls(0.5, 0.6),
+        back: cls(0.3, 0.3),
+        front: cls(0.5, 0.4)
+      }
+    }
+    expect(meetsFloor(base).ok).toBe(true)
+    const wrongDrums = { ...base, perClass: { ...base.perClass, drums: cls(0.4, 0.9) } }
+    expect(meetsFloor(wrongDrums)).toEqual({ ok: false, reasons: ['drums precision 0.400 < 0.5'] })
   })
 })

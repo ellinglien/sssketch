@@ -109,8 +109,11 @@ One small linear model replaces the guessers for roles:
   nothing personal. The script prints a cross-validated report (grouped by jam) and refuses to
   write weights that score below the 2026-10-15 baseline. Retraining with new labels is running
   that script again; there is no on-device training. The floor: front/back accuracy on jams the
-  model didn't train on at least 0.60 (the old centroid scored 0.55, the live guesses 0.24), and
-  drums and bass recall at least 0.60.
+  model didn't train on at least 0.60 (the old centroid scored 0.55, the live guesses 0.24), and,
+  through the shipped 0.8 rule, drums and bass right at least half the time when the model says
+  so (precision 0.5; Elling, 2026-11-14: a miss stays on the dial, a wrong call hides a lead).
+  First training (2026-11-14, 296 labels, 25 jams): front/back 0.62; drums found 52%, right 66%;
+  bass found 47%, right 53%.
 - **Inference** is a dot product in main, inside the existing overnight scheduler
   (`stemAutoClassify.ts`), in its batches. It's far cheaper than today's centroid and
   nearest-neighbour passes, which it removes.
