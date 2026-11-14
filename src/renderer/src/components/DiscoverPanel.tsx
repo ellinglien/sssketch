@@ -10305,7 +10305,7 @@ export function DiscoverPanel({
   // Match meter reclassify (promise-vs-delivery spec, Phase 2; user
   // choice: reclassify, don't skip): records a role confirmation for the
   // slot's stem through the SAME write path Tidy Up uses (recordStemRoles
-  // -- StemCategories + arrangeRole centroid training), source 'discover'.
+  // -- StemCategories), source 'discover'.
   // The bare StemCID is passed as the entry's
   // `path`: main resolves a path to a StemCID by its basename
   // (stemCIDForPath), and a StemCID is its own basename -- so this works

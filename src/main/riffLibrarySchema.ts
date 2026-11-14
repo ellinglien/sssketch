@@ -5,7 +5,6 @@ import Database from 'better-sqlite3'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { LOOP_FOLDERS_DDL } from './loopFolders'
 import { bumpStemClassificationVersion } from './stemClassificationVersion'
-import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 import {
   STEM_AUTO_CLASSIFY_TRIED_DDL,
   ensureStemAutoClassifyTriedSchema
@@ -389,7 +388,10 @@ function ensureStemAutoCategoryHasFrontScore(db: Database.Database): void {
   try {
     db.transaction(() => {
       db.exec(`ALTER TABLE StemAutoCategory ADD COLUMN FrontScore REAL`)
-      db.exec(`DELETE FROM StemAutoCategory AS a WHERE NOT ${PLACED_AUTO_CATEGORY_SQL}`)
+      // Only Endlesss's drums/bass bit survives: no row then is the one model's.
+      db.exec(
+        `DELETE FROM StemAutoCategory WHERE NOT (Source = 'instrumentMask' AND ArrangeRole IN ('drums', 'bass'))`
+      )
     })()
   } catch (err) {
     if (!String(err).includes('duplicate column')) throw err

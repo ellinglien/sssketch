@@ -86,11 +86,16 @@ function confirm(db: Database.Database, stemCID: string, role: string): void {
   ).run(stemCID, role)
 }
 
-function autoClassify(db: Database.Database, stemCID: string, role: string): void {
+function autoClassify(
+  db: Database.Database,
+  stemCID: string,
+  role: string,
+  source = 'model:2.1'
+): void {
   db.prepare(
     `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt)
-     VALUES (?, ?, 'zeroshot', 1)`
-  ).run(stemCID, role)
+     VALUES (?, ?, ?, 1)`
+  ).run(stemCID, role, source)
 }
 
 /** A folder listing that holds every name asked about. */
@@ -200,6 +205,15 @@ describe('listTidyUpLibraryStems', () => {
     const out = await listTidyUpLibraryStems(db, [], 10, allExist)
     expect(out.find((s) => s.stemCID === 'guessed')?.suggestedRole).toBe('bass')
     expect(out.find((s) => s.stemCID === 'unguessed')?.suggestedRole).toBeNull()
+  })
+
+  it("ignores an older app's guess (not a placed row)", async () => {
+    const { listTidyUpLibraryStems } = await import('./tidyUpLibraryStems')
+    const db = freshDb()
+    seedStem(db, 'old')
+    autoClassify(db, 'old', 'drums', 'centroid')
+    const out = await listTidyUpLibraryStems(db, [], 10, allExist)
+    expect(out.find((s) => s.stemCID === 'old')?.suggestedRole).toBeNull()
   })
 
   it('derives barLength from Length16s and durationSec from that and the bpm', async () => {

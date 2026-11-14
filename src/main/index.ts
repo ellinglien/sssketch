@@ -184,6 +184,7 @@ import type { SoundMeters, SoundSettings } from '@shared/radioSound'
 import { getStemAutoClassifyProgress, type StemAutoClassifyProgress } from './stemAutoCategoryStore'
 import {
   currentAutoClassifyTrainingFingerprint,
+  modelAutoCategorySource,
   lookupAutoClassifyInstrumentMasks
 } from './stemAutoClassify'
 import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
@@ -264,7 +265,7 @@ import { restrictStems } from '@shared/discoverFaves'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import { backfillStemCategoriesFromProjectLibrary } from './stemCategoriesBackfill'
-import { backfillInstrumentMaskCategories } from './instrumentMaskCentroidBackfill'
+import { backfillInstrumentMaskCategories } from './instrumentMaskCategoryBackfill'
 import {
   startStemAutoClassifyScheduler,
   getAutoClassifyStatus,
@@ -851,7 +852,7 @@ app.whenReady().then(async () => {
 
   // Idempotent, safe-to-call-on-every-startup backfill of drums/bass
   // ArrangeRole labels from Endlesss's own performer-set Instrument
-  // bitmask -- see instrumentMaskCentroidBackfill.ts's own doc comment.
+  // bitmask -- see instrumentMaskCategoryBackfill.ts's own doc comment.
   // Direct report, 2026-09-17 ("restarted .. no sign of it in the
   // console"): this call previously discarded its own return value, so
   // there was no way to tell from the outside whether it ran, or ran and
@@ -2013,6 +2014,7 @@ app.whenReady().then(async () => {
     const dbs = candidateDbsForRiff()
     return getStemAutoClassifyProgress(
       ownDb,
+      modelAutoCategorySource(),
       currentAutoClassifyTrainingFingerprint(),
       (stemCIDs) => lookupAutoClassifyInstrumentMasks(dbs, stemCIDs, getInstrumentMaskLookup)
     )

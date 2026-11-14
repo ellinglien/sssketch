@@ -3,17 +3,33 @@ import type Database from 'better-sqlite3'
 import type { ArrangeRole } from '@shared/stemRole'
 import { bumpStemClassificationVersion } from './stemClassificationVersion'
 
-export type StemAutoCategorySource = 'model' | 'instrumentMask'
+/** What wrote a row: the model, tagged with the classifier code and weights that
+ * wrote it (modelAutoCategorySource, stemAutoClassify.ts), or Endlesss's mask. */
+export type StemAutoCategorySource = `model:${string}` | 'instrumentMask'
 
-/** SQL: a StemAutoCategory row, aliased `a`, that counts as placed -- the
- * model's, or Endlesss's drums/bass bit (the four-categories migration's own
- * rule, riffLibrarySchema.ts). Anything else (an older app's guess, or its
- * notes-bit 'lead' mask row; dev and packaged share this db) is guessed again. */
-export const PLACED_AUTO_CATEGORY_SQL = `(a.Source = 'model' OR (a.Source = 'instrumentMask' AND a.ArrangeRole IN ('drums', 'bass')))`
+const MASK_DRUMS_BASS_SQL = `(a.Source = 'instrumentMask' AND a.ArrangeRole IN ('drums', 'bass'))`
+
+/** SQL: a StemAutoCategory row, aliased `a`, that is a usable guess (every reader) --
+ * any model's (an older model's keeps serving until it is guessed again; the bare
+ * 'model' rows of this branch's first commits too), or Endlesss's drums/bass bit.
+ * Anything else (an older app's guess, or its notes-bit 'lead' mask row; dev and
+ * packaged share this db) is never read and is guessed again. */
+export const PLACED_AUTO_CATEGORY_SQL = `(a.Source LIKE 'model%' OR ${MASK_DRUMS_BASS_SQL})`
+
+/** SQL: a row, aliased `a`, that the current model needs no new guess for (the
+ * classifier's eligibility, its progress and the tried-ledger prune): written by
+ * `modelSource` (the current tag), or the drums/bass bit. A row from any other
+ * model is guessed again, once. */
+export function currentAutoCategorySql(modelSource: string): string {
+  // Interpolated, so only the numeric tag modelAutoCategorySource builds.
+  if (!/^model:[\d.]+$/.test(modelSource)) throw new Error(`bad model source: ${modelSource}`)
+  return `(a.Source = '${modelSource}' OR ${MASK_DRUMS_BASS_SQL})`
+}
 
 export interface StemAutoClassifyProgress {
   /** Eligible analysed stems that received an automatic category from the
-   * model or the mask (an older app's guess is pending: it is guessed again). */
+   * current model or the mask (an older app's or older model's guess is
+   * pending: it is guessed again). */
   categorized: number
   /** Distinct stems with a cached embedding or feature vector (whichever
    * of the two the background scan can classify from, see
@@ -48,6 +64,7 @@ export interface StemAutoClassifyProgress {
  * a session. */
 export async function getStemAutoClassifyProgress(
   ownDb: Database.Database,
+  modelSource: string,
   trainingFingerprint?: string,
   lookupMasks?: (stemCIDs: string[]) => Map<string, number>
 ): Promise<StemAutoClassifyProgress> {
@@ -56,7 +73,7 @@ export async function getStemAutoClassifyProgress(
       `SELECT candidates.StemCID AS StemCID,
          EXISTS (SELECT 1 FROM StemAutoCategory a
                  WHERE a.StemCID = candidates.StemCID
-                   AND ${PLACED_AUTO_CATEGORY_SQL}) AS Categorized
+                   AND ${currentAutoCategorySql(modelSource)}) AS Categorized
        FROM (
          SELECT StemCID FROM StemEmbeddingCache
          UNION
@@ -107,30 +124,9 @@ export async function getStemAutoClassifyProgress(
   }
 }
 
-/** Persists one stem's precomputed classification. Upsert (not insert-only)
- * so a stem reclassified by a later scan pass (shouldn't normally happen --
- * the scan itself skips anything already in this table -- but a hand-edited
- * db or a future reclassification policy could still want this) overwrites
- * cleanly rather than throwing a PRIMARY KEY conflict. */
-/** Mirrors stemAutoClassify.ts's own BASE_ELIGIBILITY_WHERE idiom (NOT
- * EXISTS ... AND NOT EXISTS ..., not a UNION -- UNION's implicit DISTINCT
- * is unnecessary work here) for a single on-demand stem, rather than that
- * file's own batch queries: a stem is eligible for a fresh auto-category
- * write only when it has NO StemCategories row with a non-null ArrangeRole
- * (already human-confirmed) AND NO StemAutoCategory row at all (already
- * claimed by some other classifier source -- first classifier to claim a
- * stem wins, same convention BASE_ELIGIBILITY_WHERE's own callers use). */
-export function isStemEligibleForAutoCategory(ownDb: Database.Database, stemCID: string): boolean {
-  const row = ownDb
-    .prepare(
-      `SELECT 1 AS eligible WHERE
-         NOT EXISTS (SELECT 1 FROM StemCategories WHERE StemCID = ? AND ArrangeRole IS NOT NULL)
-         AND NOT EXISTS (SELECT 1 FROM StemAutoCategory WHERE StemCID = ?)`
-    )
-    .get(stemCID, stemCID)
-  return row !== undefined
-}
-
+/** Persists one stem's precomputed classification. Upsert (not insert-only):
+ * a stem guessed again (a newer model, CLASSIFIER_VERSION) overwrites its row
+ * rather than throwing a PRIMARY KEY conflict. */
 export function upsertStemAutoCategory(
   ownDb: Database.Database,
   stemCID: string,

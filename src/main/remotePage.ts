@@ -1504,7 +1504,7 @@ input {
   // A selection is a bitmask over KINDS, and the only thing that ever
   // changes it is a KIND_TOGGLE lookup. Tapping is not add-to-a-list: it is
   // the mac's own toggleSlotKind, so tapping sparkly with buttery already on
-  // swaps them, and tapping drummy then rhythmic keeps both.
+  // swaps them, and tapping drums then rhythmic keeps both.
   var pendingMask = 0
   var chipEls = []
 

@@ -17,7 +17,7 @@ import {
   recordStemTried
 } from './stemAutoClassifyTried'
 import {
-  PLACED_AUTO_CATEGORY_SQL,
+  currentAutoCategorySql,
   upsertStemAutoCategory,
   type StemAutoCategorySource
 } from './stemAutoCategoryStore'
@@ -87,7 +87,7 @@ async function classifyInYieldingChunks<Row>(
 // otherwise we can rely on the endlesss categories easily" -- audioIn is a
 // catch-all for "recorded via live input" that genuinely can be anything,
 // not a real category by itself, but drums/notes/bass are real, reliable
-// performer-set ground truth (the same reasoning instrumentMaskCentroidBackfill.ts
+// performer-set ground truth (the same reasoning instrumentMaskCategoryBackfill.ts
 // already trusts enough to skip classification for drums/bass entirely).
 // Follow-up direct request: lean into this cheap, reliable signal over the
 // expensive audio-similarity search wherever it meaningfully cuts
@@ -184,19 +184,19 @@ interface EmbeddingCandidateRow {
 
 // Shared by both the count and fetch queries below -- a stem is eligible
 // for either pass when it isn't already human-confirmed (ANY role) and
-// has no placed StemAutoCategory row (PLACED_AUTO_CATEGORY_SQL): an older
-// app's guess is guessed again (2026-11-14). `e`/`f` is the outer
-// table's own alias (StemEmbeddingCache or StemFeatureCache).
-const BASE_ELIGIBILITY_WHERE = (alias: string): string => `
+// has no current StemAutoCategory row (currentAutoCategorySql): an older
+// app's or an older model's guess is guessed again (2026-11-14). `e`/`f` is
+// the outer table's own alias (StemEmbeddingCache or StemFeatureCache).
+const BASE_ELIGIBILITY_WHERE = (alias: string, modelSource: string): string => `
   NOT EXISTS (SELECT 1 FROM StemCategories c WHERE c.StemCID = ${alias}.StemCID AND c.ArrangeRole IS NOT NULL)
-  AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = ${alias}.StemCID AND ${PLACED_AUTO_CATEGORY_SQL})
+  AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = ${alias}.StemCID AND ${currentAutoCategorySql(modelSource)})
 `
 
 // Same as above, PLUS excludes any stem that has an embedding at all: the
 // embedding pass (the model) takes those. The feature pass only places a
 // feature-only stem by its mask.
-const featureEligibilityWhere = (alias: string): string =>
-  `${BASE_ELIGIBILITY_WHERE(alias)}
+const featureEligibilityWhere = (alias: string, modelSource: string): string =>
+  `${BASE_ELIGIBILITY_WHERE(alias, modelSource)}
    AND NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = ${alias}.StemCID)`
 
 // Rows per keyset page when (re)building a pending list -- ids only, so a
@@ -362,6 +362,16 @@ function trainingFingerprintOf(model: StemCategoryModel): string {
   return `c${CLASSIFIER_VERSION}|m${model.version}`
 }
 
+/** The Source a model guess is stored with (StemAutoCategory): the same two
+ * versions as the fingerprint, so new weights or a CLASSIFIER_VERSION bump
+ * make every stored guess not current (currentAutoCategorySql) and the stem is
+ * guessed again, while the old guess keeps serving (PLACED_AUTO_CATEGORY_SQL). */
+export function modelAutoCategorySource(
+  model: StemCategoryModel = STEM_CATEGORY_MODEL
+): `model:${string}` {
+  return `model:${CLASSIFIER_VERSION}.${model.version}`
+}
+
 /** The persisted tried-ledger key for the shipped model, for the gear-menu
  * progress request. */
 export function currentAutoClassifyTrainingFingerprint(): string {
@@ -420,6 +430,7 @@ const triedPruneCursorByDb = new WeakMap<Database.Database, number>()
 async function getPendingState(
   ownDb: Database.Database,
   fingerprint: string,
+  modelSource: string,
   stemDbs: Database.Database[],
   options: ClassifyBatchOptions
 ): Promise<PendingState> {
@@ -447,10 +458,21 @@ async function getPendingState(
     return state
   }
   countWork('auto-classify:rebuild')
-  const embedding = await eligibleStemCIDs(ownDb, 'StemEmbeddingCache', BASE_ELIGIBILITY_WHERE('t'))
-  const feature = await eligibleStemCIDs(ownDb, 'StemFeatureCache', featureEligibilityWhere('t'))
+  const embedding = await eligibleStemCIDs(
+    ownDb,
+    'StemEmbeddingCache',
+    BASE_ELIGIBILITY_WHERE('t', modelSource)
+  )
+  const feature = await eligibleStemCIDs(
+    ownDb,
+    'StemFeatureCache',
+    featureEligibilityWhere('t', modelSource)
+  )
   countWork('sql:auto-classify.tried-prune')
-  triedPruneCursorByDb.set(ownDb, pruneStemsTriedSlice(ownDb, triedPruneCursorByDb.get(ownDb) ?? 0))
+  triedPruneCursorByDb.set(
+    ownDb,
+    pruneStemsTriedSlice(ownDb, modelSource, triedPruneCursorByDb.get(ownDb) ?? 0)
+  )
   countWork('sql:auto-classify.tried-read')
   const triedUnder = readStemsTriedUnder(ownDb, fingerprint)
   const rebuilt: PendingState = {
@@ -477,7 +499,8 @@ function inPlaceholders(ids: string[]): string {
  * may predate a confirmation or another source's write). */
 function fetchPendingEmbeddingRows(
   ownDb: Database.Database,
-  ids: string[]
+  ids: string[],
+  modelSource: string
 ): EmbeddingCandidateRow[] {
   if (ids.length === 0) return []
   countWork('sql:auto-classify.fetch-embeddings')
@@ -485,19 +508,23 @@ function fetchPendingEmbeddingRows(
     .prepare(
       `SELECT e.StemCID AS StemCID, e.EmbeddingJSON AS EmbeddingJSON
        FROM StemEmbeddingCache e
-       WHERE e.StemCID IN (${inPlaceholders(ids)}) AND ${BASE_ELIGIBILITY_WHERE('e')}`
+       WHERE e.StemCID IN (${inPlaceholders(ids)}) AND ${BASE_ELIGIBILITY_WHERE('e', modelSource)}`
     )
     .all(...ids) as EmbeddingCandidateRow[]
 }
 
-function fetchPendingFeatureRows(ownDb: Database.Database, ids: string[]): { StemCID: string }[] {
+function fetchPendingFeatureRows(
+  ownDb: Database.Database,
+  ids: string[],
+  modelSource: string
+): { StemCID: string }[] {
   if (ids.length === 0) return []
   countWork('sql:auto-classify.fetch-features')
   return ownDb
     .prepare(
       `SELECT f.StemCID AS StemCID FROM StemFeatureCache f
        WHERE f.StemCID IN (${inPlaceholders(ids)})
-       AND ${featureEligibilityWhere('f')}`
+       AND ${featureEligibilityWhere('f', modelSource)}`
     )
     .all(...ids) as { StemCID: string }[]
 }
@@ -507,7 +534,7 @@ export interface ClassifyBatchResult {
   processed: number
   /** How many pending ids are left (across both sources) after this call
    * -- 0 means "fully caught up, for now": the scheduler sleeps until a
-   * wake signal (new embedding/feature rows, a confirmation -- see
+   * wake signal (new or rewritten embedding/feature rows, see
    * stemAutoClassifyWake.ts) or its safety interval. */
   remaining: number
 }
@@ -517,8 +544,9 @@ export interface ClassifyBatchResult {
  * pre-categorizes the stems... something people can leave running
  * overnight"). Classifies stems that have a cached embedding or feature
  * vector (StemEmbeddingCache / StemFeatureCache, populated by
- * DiscoverLibraryScan.tsx's own renderer-side scan) but aren't yet in
- * StemAutoCategory, and persists the result there -- so
+ * DiscoverLibraryScan.tsx's own renderer-side scan) but have no current
+ * StemAutoCategory row (currentAutoCategorySql: an older model's guess is
+ * guessed again), and persists the result there -- so
  * discoverCandidates.ts's own candidate query can read a plain, fast
  * SELECT instead of re-running classifiers on every single Discover roll,
  * which is what made rolling itself slow earlier the same day.
@@ -599,7 +627,8 @@ export async function classifyAutoCategoryBatch(
 
   const model = options.model ?? STEM_CATEGORY_MODEL
   const fingerprint = trainingFingerprintOf(model)
-  const pending = await getPendingState(ownDb, fingerprint, stemDbs, options)
+  const modelSource = modelAutoCategorySource(model)
+  const pending = await getPendingState(ownDb, fingerprint, modelSource, stemDbs, options)
   const now = Date.now()
 
   /** One row's outcome, written in the batch's transaction: placed (its
@@ -627,7 +656,7 @@ export async function classifyAutoCategoryBatch(
     // is recorded as tried (StemAutoClassifyTried) and taken again once the
     // fingerprint or its own mask moves, or a store rewrites its row.
     const taken = takePending(pending.embedding, BATCH_SIZE)
-    const batchRows = fetchPendingEmbeddingRows(ownDb, taken)
+    const batchRows = fetchPendingEmbeddingRows(ownDb, taken, modelSource)
     const masks = lookupInstrumentMasks(
       stemDbs,
       batchRows.map((r) => r.StemCID),
@@ -653,7 +682,7 @@ export async function classifyAutoCategoryBatch(
       const guess = guessFromProbs(probs)
       return settle(row.StemCID, instrument, {
         role: CATEGORY_ROLE[guess.category],
-        source: 'model',
+        source: modelSource,
         frontScore: guess.frontScore
       })
     })
@@ -662,7 +691,7 @@ export async function classifyAutoCategoryBatch(
   // --- Feature pass: a feature-only stem is placed by its mask, or tried ---
   if (pending.feature.ids.length > 0) {
     const taken = takePending(pending.feature, BATCH_SIZE)
-    const batchRows = fetchPendingFeatureRows(ownDb, taken)
+    const batchRows = fetchPendingFeatureRows(ownDb, taken, modelSource)
     const masks = lookupInstrumentMasks(
       stemDbs,
       batchRows.map((r) => r.StemCID),

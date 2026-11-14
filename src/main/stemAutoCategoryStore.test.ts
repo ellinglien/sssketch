@@ -1,12 +1,8 @@
 // src/main/stemAutoCategoryStore.test.ts
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
-import {
-  getStemAutoClassifyProgress,
-  isStemEligibleForAutoCategory,
-  upsertStemAutoCategory
-} from './stemAutoCategoryStore'
-import { getAutoCategorizedStemCIDs } from './stemCategoryTestReads'
+import { getStemAutoClassifyProgress, upsertStemAutoCategory } from './stemAutoCategoryStore'
+import { getAutoCategorizedStemCIDs, isStemEligibleForAutoCategory } from './stemCategoryTestReads'
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -56,14 +52,14 @@ function seedConfirmed(db: Database.Database, stemCID: string, arrangeRole: stri
 describe('upsertStemAutoCategory / getAutoCategorizedStemCIDs', () => {
   it('inserts a new row, readable by role', () => {
     const db = freshDb()
-    upsertStemAutoCategory(db, 's1', 'drums', 'model', 1000)
+    upsertStemAutoCategory(db, 's1', 'drums', 'model:2.1', 1000)
     expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['s1']))
     expect(getAutoCategorizedStemCIDs(db, 'bass')).toEqual(new Set())
   })
 
   it('overwrites an existing row on conflict rather than throwing', () => {
     const db = freshDb()
-    upsertStemAutoCategory(db, 's1', 'drums', 'model', 1000)
+    upsertStemAutoCategory(db, 's1', 'drums', 'model:2.1', 1000)
     upsertStemAutoCategory(db, 's1', 'bass', 'instrumentMask', 2000)
 
     expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set())
@@ -89,13 +85,13 @@ describe('upsertStemAutoCategory FrontScore', () => {
 
   it('writes the dial when given one', () => {
     const db = freshDb()
-    upsertStemAutoCategory(db, 'S1', 'backing', 'model', 123, 0.25)
+    upsertStemAutoCategory(db, 'S1', 'backing', 'model:2.1', 123, 0.25)
     expect(frontScore(db)).toBe(0.25)
   })
 
   it('writes NULL without one, and an overwrite clears an old dial', () => {
     const db = freshDb()
-    upsertStemAutoCategory(db, 'S1', 'backing', 'model', 123, 0.25)
+    upsertStemAutoCategory(db, 'S1', 'backing', 'model:2.1', 123, 0.25)
     upsertStemAutoCategory(db, 'S1', 'drums', 'instrumentMask', 124)
     expect(frontScore(db)).toBeNull()
   })
@@ -104,7 +100,7 @@ describe('upsertStemAutoCategory FrontScore', () => {
 describe('getStemAutoClassifyProgress', () => {
   it('returns an empty caught-up snapshot when nothing has been extracted', async () => {
     const db = freshDb()
-    expect(await getStemAutoClassifyProgress(db)).toEqual({
+    expect(await getStemAutoClassifyProgress(db, 'model:2.1')).toEqual({
       categorized: 0,
       eligible: 0,
       terminalUnclassified: 0,
@@ -119,9 +115,9 @@ describe('getStemAutoClassifyProgress', () => {
     seedFeatures(db, 's2')
     seedEmbedding(db, 's3')
     seedFeatures(db, 's3') // both -- counted once, not twice
-    upsertStemAutoCategory(db, 's1', 'drums', 'model', 1000)
+    upsertStemAutoCategory(db, 's1', 'drums', 'model:2.1', 1000)
 
-    expect(await getStemAutoClassifyProgress(db)).toEqual({
+    expect(await getStemAutoClassifyProgress(db, 'model:2.1')).toEqual({
       categorized: 1,
       eligible: 3,
       terminalUnclassified: 0,
@@ -132,9 +128,11 @@ describe('getStemAutoClassifyProgress', () => {
 
   it.each([
     ['centroid', 'lead'],
-    ['instrumentMask', 'lead']
+    ['instrumentMask', 'lead'],
+    ['model', 'backing'], // this branch's first, untagged model rows
+    ['model:2.0', 'lead'] // an older model's guess
   ])(
-    "counts an older app's guess (%s, %s) as still pending: the model guesses it again",
+    "counts an older app's or model's guess (%s, %s) as still pending: the model guesses it again",
     async (source, role) => {
       const db = freshDb()
       seedEmbedding(db, 's1')
@@ -143,7 +141,7 @@ describe('getStemAutoClassifyProgress', () => {
        VALUES ('s1', ?, ?, 1)`
       ).run(role, source)
 
-      expect(await getStemAutoClassifyProgress(db)).toEqual({
+      expect(await getStemAutoClassifyProgress(db, 'model:2.1')).toEqual({
         categorized: 0,
         eligible: 1,
         terminalUnclassified: 0,
@@ -159,7 +157,7 @@ describe('getStemAutoClassifyProgress', () => {
     seedConfirmed(db, 's1', 'bass')
     seedEmbedding(db, 's2') // unconfirmed -- still eligible
 
-    expect(await getStemAutoClassifyProgress(db)).toEqual({
+    expect(await getStemAutoClassifyProgress(db, 'model:2.1')).toEqual({
       categorized: 0,
       eligible: 1,
       terminalUnclassified: 0,
@@ -184,6 +182,7 @@ describe('getStemAutoClassifyProgress', () => {
     expect(
       await getStemAutoClassifyProgress(
         db,
+        'model:2.1',
         'training-1',
         (ids) => new Map(ids.map((id) => [id, id === 'same-mask' ? 4 : 16]))
       )
@@ -209,7 +208,7 @@ describe('isStemEligibleForAutoCategory', () => {
     expect(isStemEligibleForAutoCategory(db, 's1')).toBe(false)
   })
 
-  it.each(['model', 'instrumentMask'] as const)(
+  it.each(['model:2.1', 'instrumentMask'] as const)(
     'returns false for a stem that already has a StemAutoCategory row (source: %s)',
     (source) => {
       const db = freshDb()

@@ -1,4 +1,5 @@
 // src/main/tidyUpLibraryStems.ts
+import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 import type Database from 'better-sqlite3'
 import type { SoundType } from '@shared/types'
 import type { ArrangeRole } from '@shared/stemRole'
@@ -132,7 +133,7 @@ export async function listTidyUpLibraryStems(
                 a.ArrangeRole AS SuggestedRole
          FROM StemFeatureCache f
          LEFT JOIN StemCategories c ON c.StemCID = f.StemCID
-         LEFT JOIN StemAutoCategory a ON a.StemCID = f.StemCID
+         LEFT JOIN StemAutoCategory a ON a.StemCID = f.StemCID AND ${PLACED_AUTO_CATEGORY_SQL}
          WHERE f.StemCID > ?
          ORDER BY f.StemCID LIMIT ?`
       )

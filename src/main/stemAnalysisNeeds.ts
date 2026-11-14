@@ -137,7 +137,7 @@ const REWORK_PAGE_SIZE = 2000
  *
  * Read from the trait value table while it accounts for every row (no SQL, no parse); else
  * one JSON pass over StemFeatureCache in keyset pages with a yield after each. Never
- * `.iterate()`.. */
+ * `.iterate()`. */
 export async function stemCIDsNeedingRework(db: Database.Database): Promise<Set<string>> {
   const out = new Set<string>()
   const table = getTraitValueTable(db)

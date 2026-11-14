@@ -5,7 +5,7 @@ import {
   DISCOVER_TRAIT_FIELD,
   DISCOVER_TRAIT_PREFERRED_FIELD
 } from './discoverTraits'
-import { isDialRankKind, type DiscoverRankKind, type DiscoverTraitKind } from './discoverSlotKind'
+import { isDialKind, type DiscoverRankKind, type DiscoverTraitKind } from './discoverSlotKind'
 import { radioClashBedScore, radioClashTraitScore, type RankClash } from './radioClash'
 import { DIG_WEIGHT, radioDigCloseness, type RankDig } from './radioDig'
 import { intensityTerms, type RankIntensity } from './radioIntensity'
@@ -122,7 +122,7 @@ export function rankCandidates(
   // on the fallback field, which every analysed row carries. Candidates
   // without field values (legacy constructors) use traitValues as-is.
   // A dial kind (back/front) has no pool fallback: only its percentile ranks.
-  const traitKinds = targetTraits.filter((k): k is DiscoverTraitKind => !isDialRankKind(k))
+  const traitKinds = targetTraits.filter((k): k is DiscoverTraitKind => !isDialKind(k))
   const poolValues = new Map<DiscoverTraitKind, (c: DiscoverCandidate) => number | null>()
   for (const kind of traitKinds) {
     const preferred = DISCOVER_TRAIT_PREFERRED_FIELD[kind]
@@ -168,7 +168,7 @@ export function rankCandidates(
         // comparable across rolls, unlike the pool's own min-max range.
         const percentile = candidate.traitPercentiles?.[kind]
         const hasPercentile = typeof percentile === 'number' && Number.isFinite(percentile)
-        if (isDialRankKind(kind)) {
+        if (isDialKind(kind)) {
           if (hasPercentile) score += percentile * TRAIT_SCORE_WEIGHT
           continue
         }

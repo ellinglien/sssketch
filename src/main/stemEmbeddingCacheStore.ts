@@ -8,8 +8,8 @@ import { noteAutoClassifyInputRow } from './stemAutoClassifyWake'
  * structural mirror of stemFeatureCacheStore.ts's own getStemFeatureCache,
  * swapping StemFeatures for a plain 1024-dim number[]. Returns null both
  * for "never extracted yet" and "not a real library stem at all" -- a
- * caller treats both identically: no embedding available, fall back to
- * Plan B1's classifier (see roleEmbeddingRefinement.ts, a later task). A
+ * caller treats both identically: no embedding available, so the model
+ * can't guess the stem (only its mask can place it). A
  * row whose EmbeddingJSON fails to parse (shouldn't happen -- only ever
  * written by setStemEmbeddingCache below -- but defensive against a
  * corrupted DB file) is treated the same as a miss rather than throwing. */

@@ -1,4 +1,5 @@
 // src/main/discoverAdjacency.ts
+import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 import { basename } from 'node:path'
 import type Database from 'better-sqlite3'
 import { instrumentMaskToSoundType, type DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
@@ -217,7 +218,9 @@ export async function getAdjacentDiscoverCandidates(
   const confirmedRoleStmt = ownDb.prepare(
     `SELECT ArrangeRole FROM StemCategories WHERE StemCID = ? AND ArrangeRole IS NOT NULL`
   )
-  const autoRoleStmt = ownDb.prepare(`SELECT ArrangeRole FROM StemAutoCategory WHERE StemCID = ?`)
+  const autoRoleStmt = ownDb.prepare(
+    `SELECT a.ArrangeRole FROM StemAutoCategory a WHERE a.StemCID = ? AND ${PLACED_AUTO_CATEGORY_SQL}`
+  )
   const featureStmt = ownDb.prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
 
   async function matchRole(summary: {

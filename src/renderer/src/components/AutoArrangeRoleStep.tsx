@@ -23,6 +23,7 @@ import { ARRANGE_STEP_BARS, DRAW_ARRANGE_SECTIONS } from '@shared/autoArrangeApp
 import { minSectionsForShape, type ArrangeShape } from '@shared/autoArrangeAutomation'
 import { DiscoverReclassifyPicker } from './DiscoverReclassifyPicker'
 import { ROLE_LABELS } from '@shared/autoArrangeLabels'
+import { categoryOfBus } from '@shared/stemCategory'
 import { useConfirmedStemRoles } from '../state/useConfirmedStemRoles'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { ProjectRef } from '@shared/types'
@@ -735,7 +736,7 @@ export function AutoArrangeRoleStep({
                     density. */}
                 <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
                   {role.soundType}
-                  {role.busId ? ` · ${role.busId}` : ''}
+                  {role.busId ? ` · ${categoryOfBus(role.busId)}` : ''}
                 </span>
                 <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>
                   {densityLabel(densities[role.stemKey] ?? 0)}

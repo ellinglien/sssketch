@@ -1,4 +1,5 @@
 // src/main/discoverCandidates.ts
+import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 import type Database from 'better-sqlite3'
 import { ARRANGE_ROLE_OPTIONS, type ArrangeRole, type DrumSubRole } from '@shared/stemRole'
 import { categoryOfRole, rolesInCategory } from '@shared/stemCategory'
@@ -1509,7 +1510,11 @@ async function buildGuessLayer(
   countWork('sql:discover.kind-index-build')
   const autoRoleByStemCID = new Map(
     (
-      ownDb.prepare(`SELECT StemCID, ArrangeRole FROM StemAutoCategory`).all() as {
+      ownDb
+        .prepare(
+          `SELECT a.StemCID, a.ArrangeRole FROM StemAutoCategory a WHERE ${PLACED_AUTO_CATEGORY_SQL}`
+        )
+        .all() as {
         StemCID: string
         ArrangeRole: string
       }[]

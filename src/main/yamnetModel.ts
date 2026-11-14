@@ -43,9 +43,8 @@ export function yamnetModelAvailable(): boolean {
  * not just a URL). Returns null (not a throw) when the model hasn't been
  * vendored yet (e.g. a fresh dev checkout that hasn't run
  * scripts/vendor-yamnet.sh) -- the renderer-side embedding path treats a
- * null model the same as "extraction unavailable," which the design's own
- * layered-fallback shape already handles gracefully (falls back to Plan
- * B1's centroid classifier).
+ * null model the same as "extraction unavailable": with no embedding the
+ * model can't guess a stem, and only its mask can place it.
  *
  * Async (readFile, not readFileSync) -- this file is ~16MB, and a
  * synchronous read on the main process's single event-loop thread would

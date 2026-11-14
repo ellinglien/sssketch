@@ -119,7 +119,7 @@ function seedAutoCategory(
   db: Database.Database,
   stemCID: string,
   arrangeRole: string,
-  source: 'embedding' | 'centroid' | 'model' = 'embedding',
+  source = 'model:2.1',
   frontScore: number | null = null
 ): void {
   db.prepare(
@@ -1931,6 +1931,20 @@ describe('getDiscoverCandidates (kindSources)', () => {
     expect(candidates.map((c) => c.kindSources)).toEqual([{ drums: 'guess' }, { drums: 'guess' }])
   })
 
+  it("ignores an older app's guess (not a placed row)", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic'])
+    seedStem(own, 'mic', 'jam1', { instrument: MIC })
+    seedAutoCategory(own, 'mic', 'drums', 'centroid')
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: jamsFor(own),
+      kinds: ['drums']
+    })
+    expect(candidates).toEqual([])
+  })
+
   it('a combination set records the source under the kind that admitted each stem', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['d', 'b'])
@@ -2498,7 +2512,7 @@ describe('background efficiency B3: change detection instead of a TTL', () => {
     seedRiff(own, 'r1', 'jam1', 128, ['s1'])
     const first = await getRiffIndexForDb(own)
     for (let i = 0; i < 50; i += 1) {
-      upsertStemAutoCategory(own, `other-stem-${i}`, 'drums', 'model', 2000 + i)
+      upsertStemAutoCategory(own, `other-stem-${i}`, 'drums', 'model:2.1', 2000 + i)
     }
     advance(31_000 + 10 * 60_000)
     expect(await getRiffIndexForDb(own)).toBe(first)
@@ -3846,7 +3860,7 @@ describe('kind index layers (scan plan Task 10)', () => {
     expect(await pool(own, 'drums')).toEqual(new Map([['d1', 'tag']]))
     expect(count('scan:discover.kind-index-rows')).toBe(1)
 
-    upsertStemAutoCategory(own, 'mic1', 'drums', 'model', 5)
+    upsertStemAutoCategory(own, 'mic1', 'drums', 'model:2.1', 5)
     now += 1_000
     expect(await pool(own, 'drums')).toEqual(new Map([['d1', 'tag']])) // up to 10 s stale
     now += 9_500
@@ -3862,14 +3876,14 @@ describe('kind index layers (scan plan Task 10)', () => {
 
   it('a confirmation rebuilds both layers at once', async () => {
     const own = library()
-    upsertStemAutoCategory(own, 'mic1', 'drums', 'model', 5)
+    upsertStemAutoCategory(own, 'mic1', 'drums', 'model:2.1', 5)
     expect(await pool(own, 'drums')).toEqual(
       new Map([
         ['d1', 'tag'],
         ['mic1', 'guess']
       ])
     )
-    upsertStemAutoCategory(own, 'mic2', 'drums', 'model', 6)
+    upsertStemAutoCategory(own, 'mic2', 'drums', 'model:2.1', 6)
     upsertStemCategoryRole(own, [{ path: 'mic1', arrangeRole: 'bass' }], 'discover', null, 7)
     expect(await pool(own, 'drums')).toEqual(
       new Map([
@@ -3891,13 +3905,13 @@ describe('kind index layers (scan plan Task 10)', () => {
     const kinds = ['drums', 'bass', 'back', 'front'] as const
     for (const kind of kinds) await pool(own, kind)
     const writes: (() => void)[] = [
-      () => upsertStemAutoCategory(own, 'mic1', 'lead', 'model', 10),
-      () => upsertStemAutoCategory(own, 'mic2', 'bass', 'model', 11),
-      () => upsertStemAutoCategory(own, 'c1', 'drums', 'model', 12), // confirmed wins
-      () => upsertStemAutoCategory(own, 'd1', 'bass', 'model', 13), // the tag wins
+      () => upsertStemAutoCategory(own, 'mic1', 'lead', 'model:2.1', 10),
+      () => upsertStemAutoCategory(own, 'mic2', 'bass', 'model:2.1', 11),
+      () => upsertStemAutoCategory(own, 'c1', 'drums', 'model:2.1', 12), // confirmed wins
+      () => upsertStemAutoCategory(own, 'd1', 'bass', 'model:2.1', 13), // the tag wins
       () =>
         upsertStemCategoryRole(own, [{ path: 'mic2', arrangeRole: 'drums' }], 'discover', null, 14),
-      () => upsertStemAutoCategory(own, 'mic1', 'drums', 'model', 15)
+      () => upsertStemAutoCategory(own, 'mic1', 'drums', 'model:2.1', 15)
     ]
     for (const write of writes) {
       write()

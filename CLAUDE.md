@@ -351,8 +351,12 @@ One model guesses (`stemCategoryModel.ts` + `.json`), trained offline by
 `scripts/train-stem-category-model.mts` from a COPY of a library db, never a live one. Pass
 `--stems-db` pointing at a COPY of the LORE archive db too, so archive stems get their jams. The
 script refuses weights below `FLOOR` (front/back at least 0.6; drums/bass precision at least 0.5
-through the shipped 0.8 rule). A retrain changes `version`, which re-guesses every stem not placed
-by a label or the mask. Labels write through the plain upserts (`upsertStemCategoryBus`/`Role`):
+through the shipped 0.8 rule). A model guess is stored with `Source = 'model:<CLASSIFIER_VERSION>.<version>'`
+(`modelAutoCategorySource`). Readers take any model row (`PLACED_AUTO_CATEGORY_SQL`); the classifier
+takes only the current tag (`currentAutoCategorySql`). So a retrain (a new `version`) or a
+`CLASSIFIER_VERSION` bump re-guesses every stem not placed by a label or the mask, once, and the old
+guess serves until then. The dev and packaged apps share the db, so two different versions re-guess
+each other's rows on every switch. Labels write through the plain upserts (`upsertStemCategoryBus`/`Role`):
 nothing trains on device, so a label write wakes nothing. The old centroid, nearest-neighbour and
 zero-shot guessers are gone. The web radio imports `src/shared`, so renaming a shared export breaks
 its build, and its branch `four-categories` in `ell.ing/radio` must merge together with this one.

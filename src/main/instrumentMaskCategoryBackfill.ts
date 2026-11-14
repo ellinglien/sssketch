@@ -1,4 +1,4 @@
-// src/main/instrumentMaskCentroidBackfill.ts
+// src/main/instrumentMaskCategoryBackfill.ts
 import type Database from 'better-sqlite3'
 import { upsertStemCategoryRole, type StemRoleCategoryEntry } from './stemCategoriesStore'
 import { resolveStemPath, candidateDbsForRiff } from './riffLibraryStore'

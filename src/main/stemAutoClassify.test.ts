@@ -4,7 +4,11 @@ import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CLASSIFIER_VERSION, classifyAutoCategoryBatch } from './stemAutoClassify'
+import {
+  CLASSIFIER_VERSION,
+  classifyAutoCategoryBatch,
+  modelAutoCategorySource
+} from './stemAutoClassify'
 import type { StemFeatures } from '@shared/stemFeatures'
 import { setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { setStemFeatureCache } from './stemFeatureCacheStore'
@@ -121,6 +125,8 @@ const TEST_MODEL = testModel(
   ],
   [0, 0, 5, 0]
 )
+/** What TEST_MODEL writes as a row's Source. */
+const SOURCE = modelAutoCategorySource(TEST_MODEL)
 const UNTRAINED_MODEL: StemCategoryModel = { ...TEST_MODEL, version: 0 }
 /** The same probabilities (drums, bass, back, front) whatever the embedding. */
 function fixedProbsModel(p: [number, number, number, number]): StemCategoryModel {
@@ -177,7 +183,7 @@ describe('classifyAutoCategoryBatch', () => {
     const result = await classify(db)
     expect(result.processed).toBe(1)
     expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['guessed-1']))
-    expect(autoRow(db, 'guessed-1')?.Source).toBe('model')
+    expect(autoRow(db, 'guessed-1')?.Source).toBe(SOURCE)
   })
 
   it('skips a stem already confirmed for any role', async () => {
@@ -210,7 +216,7 @@ describe('classifyAutoCategoryBatch', () => {
 
     const result = await classify(db)
     expect(result).toEqual({ processed: 1, remaining: 0 })
-    expect(autoRow(db, 'both-1')?.Source).toBe('model')
+    expect(autoRow(db, 'both-1')?.Source).toBe(SOURCE)
     expect(
       featureFetch.mock.calls.filter(([sql]) =>
         String(sql).includes('SELECT f.StemCID AS StemCID FROM StemFeatureCache f')
@@ -258,7 +264,7 @@ describe('classifyAutoCategoryBatch', () => {
     for (const row of db.prepare(`SELECT Source FROM StemAutoCategory`).all() as {
       Source: string
     }[]) {
-      expect(row.Source).toBe('model')
+      expect(row.Source).toBe(SOURCE)
     }
   })
 
@@ -336,7 +342,7 @@ describe('classifyAutoCategoryBatch', () => {
       const result = await classify(db, [db])
       expect(result.processed).toBe(1)
       expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['masked-audioin-1']))
-      expect(autoRow(db, 'masked-audioin-1')?.Source).toBe('model')
+      expect(autoRow(db, 'masked-audioin-1')?.Source).toBe(SOURCE)
     })
 
     it('does NOT short-circuit a stem with no Instrument row at all', async () => {
@@ -345,7 +351,7 @@ describe('classifyAutoCategoryBatch', () => {
 
       const result = await classify(db, [db])
       expect(result.processed).toBe(1)
-      expect(autoRow(db, 'no-mask-1')?.Source).toBe('model')
+      expect(autoRow(db, 'no-mask-1')?.Source).toBe(SOURCE)
     })
 
     it('resolves a mask-confident stem even when the model is untrained', async () => {
@@ -657,6 +663,31 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
     expect(getAutoCategorizedStemCIDs(db, 'lead')).toEqual(new Set(['leans-lead']))
   })
 
+  it('re-guesses a stem another model version guessed, once, and not one it guessed itself', async () => {
+    const db = freshDb()
+    seedEmbedding(db, 'x', [0, 0, 1])
+    expect((await classify(db)).processed).toBe(1)
+    expect((await classify(db)).processed).toBe(0) // version A: its own guess stands
+
+    const modelB = { model: { ...TEST_MODEL, version: 2 } }
+    expect((await classify(db, [db], modelB)).processed).toBe(1)
+    expect(autoRow(db, 'x')?.Source).toBe(modelAutoCategorySource(modelB.model))
+    expect((await classify(db, [db], modelB)).processed).toBe(0)
+  })
+
+  it.each(['model', 'model:1.0'])(
+    "keeps an older guess (%s) serving when the current model can't place the stem",
+    async (source) => {
+      const db = freshDb()
+      seedEmbedding(db, 'x', UNPLACEABLE)
+      db.prepare(
+        `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt) VALUES ('x', 'lead', ?, 1)`
+      ).run(source)
+      expect((await classify(db)).processed).toBe(0)
+      expect(autoRow(db, 'x')).toMatchObject({ ArrangeRole: 'lead', Source: source })
+    }
+  )
+
   it('re-attempts a tried stem whose embedding a store rewrote', async () => {
     const db = freshDb()
     seedEmbedding(db, 'unreadable-1', UNPLACEABLE)
@@ -921,8 +952,8 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
         seedEmbedding(db, 'placed-elsewhere', UNPLACEABLE)
         db.prepare(
           `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt)
-           VALUES ('placed-elsewhere', 'drums', 'model', 1)`
-        ).run()
+           VALUES ('placed-elsewhere', 'drums', ?, 1)`
+        ).run(SOURCE)
         seedEmbedding(db, 'confirmed', UNPLACEABLE)
         seedConfirmed(db, 'confirmed', 'bass')
         // no embedding or feature row any more
@@ -933,13 +964,15 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
         expect(new Set(tried(db))).toEqual(new Set(['still-waiting']))
       })
 
-      // An older app's guess doesn't count as placed (the model guesses it
+      // An older app's or model's guess isn't current (the model guesses it
       // again), so its record must stay, or every rebuild would re-try it.
       it.each([
         ['embedding', 'drums'],
-        ['instrumentMask', 'lead']
+        ['instrumentMask', 'lead'],
+        ['model', 'drums'],
+        ['model:1.0', 'lead']
       ])(
-        "keeps the record of a stem whose only row is an older app's guess (%s, %s)",
+        "keeps the record of a stem whose only row is an older app's or model's guess (%s, %s)",
         async (source, role) => {
           const db = freshDb()
           seedEmbedding(db, 'old-guess', UNPLACEABLE)
@@ -959,11 +992,11 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
       it('looks at a bounded slice of rows per call, carrying on where it left off', () => {
         const db = freshDb()
         seedTried(db, ['gone-1', 'gone-2', 'gone-3', 'gone-4', 'gone-5'])
-        let cursor = pruneStemsTriedSlice(db, 0, 2)
+        let cursor = pruneStemsTriedSlice(db, SOURCE, 0, 2)
         expect(tried(db)).toEqual(['gone-3', 'gone-4', 'gone-5'])
-        cursor = pruneStemsTriedSlice(db, cursor, 2)
+        cursor = pruneStemsTriedSlice(db, SOURCE, cursor, 2)
         expect(tried(db)).toEqual(['gone-5'])
-        cursor = pruneStemsTriedSlice(db, cursor, 2)
+        cursor = pruneStemsTriedSlice(db, SOURCE, cursor, 2)
         expect(tried(db)).toEqual([])
         expect(cursor).toBe(0) // the end: the next slice starts over
       })
@@ -1171,7 +1204,7 @@ describe('classifyAutoCategoryBatch (the one model)', () => {
     await classify(db, [db], { model: fixedProbsModel([0.1, 0.1, 0.6, 0.2]) })
     const row = autoRow(db, 'n')!
     expect(row.ArrangeRole).toBe('backing')
-    expect(row.Source).toBe('model')
+    expect(row.Source).toBe(SOURCE)
     expect(row.FrontScore).toBeCloseTo(0.25, 9)
   })
 
@@ -1179,7 +1212,7 @@ describe('classifyAutoCategoryBatch (the one model)', () => {
     const db = freshDb()
     seedEmbedding(db, 'd', [0, 0, 0])
     await classify(db, [db], { model: fixedProbsModel([0.85, 0.05, 0.05, 0.05]) })
-    expect(autoRow(db, 'd')).toEqual({ ArrangeRole: 'drums', Source: 'model', FrontScore: null })
+    expect(autoRow(db, 'd')).toEqual({ ArrangeRole: 'drums', Source: SOURCE, FrontScore: null })
   })
 
   it('with an untrained model, a stem with an embedding and no reliable mask is tried, not placed', async () => {
@@ -1204,7 +1237,7 @@ describe('classifyAutoCategoryBatch (the one model)', () => {
     expect((await classify(db)).processed).toBe(1)
     const row = autoRow(db, 'old')!
     expect(row.ArrangeRole).toBe('lead')
-    expect(row.Source).toBe('model')
+    expect(row.Source).toBe(SOURCE)
     expect(row.FrontScore).toBeGreaterThan(0.5)
   })
 
@@ -1217,7 +1250,7 @@ describe('classifyAutoCategoryBatch (the one model)', () => {
        VALUES ('notes', 'lead', 'instrumentMask', 1)`
     ).run()
     expect((await classify(db)).processed).toBe(1)
-    expect(autoRow(db, 'notes')).toMatchObject({ ArrangeRole: 'backing', Source: 'model' })
+    expect(autoRow(db, 'notes')).toMatchObject({ ArrangeRole: 'backing', Source: SOURCE })
   })
 
   it('a stem with features but no embedding and no reliable mask is tried, not placed', async () => {

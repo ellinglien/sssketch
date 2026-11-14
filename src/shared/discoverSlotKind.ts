@@ -122,11 +122,8 @@ export const DISCOVER_SLOT_KIND_LABEL: Record<DiscoverSlotKind, string> = {
   warm: 'buttery'
 }
 
+/** Also takes a DiscoverRankKind (a subset of the slot kinds). */
 export function isDialKind(kind: DiscoverSlotKind): kind is DiscoverDialKind {
-  return kind === 'back' || kind === 'front'
-}
-
-export function isDialRankKind(kind: DiscoverRankKind): kind is DiscoverDialKind {
   return kind === 'back' || kind === 'front'
 }
 
