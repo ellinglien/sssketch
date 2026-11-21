@@ -109,16 +109,19 @@ lots of loud bits, sparse, low volume ... and how they would match with each oth
 - The candidate carries `presence` (attached with the arrival gain, for every roll). The web
   index carries it as `p`.
 
+## 4. Fewer rows
+
+Elling, 2026-11-21: "i find the number of elements in the radio often a bit too many", and to a
+fixed lower peak: "yes ... would be awesome". Radio's density arc (`radioDensity.ts`) peaks at
+**3 or 4 rows** instead of 4 or 5. The low point stays 2 or 3. Shared, so both radios change. No
+new control. Rows he adds by hand are untouched, as before.
+
 ## Moved to design 2
 
 - **Groove** (straight or swung, like the drums). Elling: "conflicting rhythms and combinations
   are cool", and "varying the method could be great". So groove is not an always-on rule: it
   becomes one of radio's rotating matching focuses (in key, locked groove, contrast, space) in the
   next design, with its measurement and its one-off rescan.
-- **Fewer rows.** Elling finds radio often has a few too many elements, and expects the varied
-  matching and the balance to fix it. The density arc's peak (4 to 5 rows) is left alone here and
-  looked at again after listening.
-
 ## Not in this
 
 - A "key" dial. One fixed lean first; a control only if the fixed one proves wrong.

@@ -545,6 +545,18 @@ Before the map: `const strongest = balance && !balance.exempt ? Math.max(-Infini
 
 ---
 
+### Task 9b: radio peaks at 3 or 4 rows
+
+**Files:**
+- Modify: `src/shared/radioDensity.ts`, its tests; any test in either repo that pins the old peak (grep `DENSITY_PEAK`, `DENSITY_MAX`, and literal 5s in `radioDensity*.test.ts`, the radio repo's `density.test.ts`, `step.test.ts`)
+
+- [ ] **Step 1:** read `radioDensity.ts` whole. `DENSITY_PEAK = { min: 4, max: 5 }` becomes `{ min: 3, max: 4 }`; `DENSITY_TROUGH` stays `{ min: 2, max: 3 }`. Update the comments (spec 2026-11-21 section 4; keep the older quotes as history, add the new one: "the number of elements ... often a bit too many").
+- [ ] **Step 2:** work out what `DENSITY_MAX` (5) governs: if it is only the arc's ceiling, make it 4; if it also caps rows the user adds by hand or the row-count UI, leave it and say so. A peak of 3 after a trough of 3 is a leg that goes nowhere: check the leg logic draws a peak above the trough it left (and a trough below the peak), and if it can draw equal ends, make the draw exclude that with a test.
+- [ ] **Step 3:** failing tests first for the new window (a growing leg's target is 3 or 4, never 5), then the constants. Fix pinned expectations in both repos only where they encode the old peak, not where they encode behaviour.
+- [ ] **Step 4:** tests in both repos, typecheck, lint; commits `feat(radio): the density arc peaks at 3 or 4 rows` (one per repo if the radio repo's tests changed).
+
+---
+
 ### Task 10: docs and the full gates
 
 - [ ] **Step 1:** `CLAUDE.md`: a short "Better picks (key, level, balance)" section after "Four categories": the three terms and where they live (`keyFit.ts`, `discoverKey.ts`, `stemLevel.ts` `arrivalGain`/`rerolledGain`, `radioIntensity.ts` `stemPresence`), the rules (drums exempt from key and from the balance, bass counts in the balance; unknown key neutral; gain only turns down and is the row's ordinary gain; every term absent-safe), and that the web index carries `kr`/`ks`/`g`/`p`.
