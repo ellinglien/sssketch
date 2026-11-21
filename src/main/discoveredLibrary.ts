@@ -65,7 +65,14 @@ export interface SaveDiscoveredResult {
    * nothing. */
   indexRows: {
     stemCID: string
-    entry: { riffCID: string; ownerJamCID: string; bpmRnd: number; creationTime: number | null }
+    entry: {
+      riffCID: string
+      ownerJamCID: string
+      bpmRnd: number
+      creationTime: number | null
+      root: number | null
+      scale: number | null
+    }
   }[]
   newInstrumentRows: { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
 }
@@ -261,7 +268,10 @@ export function saveDiscoveredRifff(
       riffCID,
       ownerJamCID: DISCOVERED_JAM_CID,
       bpmRnd: input.bpm,
-      creationTime: input.creationTime as number | null
+      creationTime: input.creationTime as number | null,
+      // No key, like its Riffs row below (a collage has no honest one).
+      root: null,
+      scale: null
     }
   }))
   const newInstrumentRows = newStemRows.map(({ stemCID }) => ({

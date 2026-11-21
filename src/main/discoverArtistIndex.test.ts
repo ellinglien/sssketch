@@ -394,7 +394,7 @@ describe('pairs from the shared Stems walk (scan plan Task 4)', () => {
     const own = ownDb()
     own.exec(`
       CREATE TABLE IF NOT EXISTS Riffs (RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
-        BPMrnd REAL, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
+        BPMrnd REAL, Root INTEGER, Scale INTEGER, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
         StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT);
       CREATE TABLE DiscoverRiffIndexCache (SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL,
         RiffCID TEXT NOT NULL, OwnerJamCID TEXT NOT NULL, BPMrnd REAL NOT NULL, CreationTime INTEGER,
@@ -407,7 +407,7 @@ describe('pairs from the shared Stems walk (scan plan Task 4)', () => {
         ComputedAt INTEGER NOT NULL);`)
     const db = archive()
     db.exec(`CREATE TABLE Riffs (RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
-      BPMrnd REAL, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
+      BPMrnd REAL, Root INTEGER, Scale INTEGER, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
       StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT)`)
     many(db, 0, 4_500)
     getArtistIndex(own, [], 'elling') // the picker module is loaded (its sink installed)

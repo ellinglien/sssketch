@@ -278,6 +278,29 @@ describe('getDiscoverCandidates', () => {
     })
   })
 
+  it("carries the owning riff's Root and Scale (null when the riff has none)", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 140, ['s1'])
+    seedRiff(own, 'r2', 'jam1', 140, ['s2'])
+    own.prepare(`UPDATE Riffs SET Root = 4, Scale = 5 WHERE RiffCID = 'r1'`).run()
+    for (const s of ['s1', 's2']) {
+      seedStem(own, s, 'jam1')
+      seedCategory(own, s, { arrangeRole: 'drums', busId: 'drums' })
+    }
+    expect((await getRiffIndexForDb(own)).get('s1')).toMatchObject({ root: 4, scale: 5 })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['drums']
+    })
+    expect(candidates.find((c) => c.stemCID === 's1')).toMatchObject({ riffRoot: 4, riffScale: 5 })
+    expect(candidates.find((c) => c.stemCID === 's2')).toMatchObject({
+      riffRoot: null,
+      riffScale: null
+    })
+  })
+
   it("looks up StemCategories ONLY against ownDb, even when a jam's own Riffs/Stems live in a different db", async () => {
     const own = freshDb()
     const external = freshDb()
@@ -971,7 +994,19 @@ describe('prewarmDiscoverCandidateCaches', () => {
     saveRiffIndexCache(
       own,
       own.name,
-      new Map([['s1', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128, creationTime: 1000 }]]),
+      new Map([
+        [
+          's1',
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'jam1',
+            bpmRnd: 128,
+            creationTime: 1000,
+            root: null,
+            scale: null
+          }
+        ]
+      ]),
       1
     )
     saveInstrumentRowsCache(
@@ -1002,7 +1037,9 @@ describe('prewarmDiscoverCandidateCaches', () => {
       riffCID: 'r1',
       ownerJamCID: 'jam1',
       bpmRnd: 128,
-      creationTime: 1000
+      creationTime: 1000,
+      root: null,
+      scale: null
     })
   })
 
@@ -1018,7 +1055,17 @@ describe('prewarmDiscoverCandidateCaches', () => {
       own,
       own.name,
       new Map([
-        ['stale', { riffCID: 'stale-riff', ownerJamCID: 'stale-jam', bpmRnd: 999, creationTime: 1 }]
+        [
+          'stale',
+          {
+            riffCID: 'stale-riff',
+            ownerJamCID: 'stale-jam',
+            bpmRnd: 999,
+            creationTime: 1,
+            root: null,
+            scale: null
+          }
+        ]
       ]),
       5
     )
@@ -1033,7 +1080,9 @@ describe('prewarmDiscoverCandidateCaches', () => {
       riffCID: 'r1',
       ownerJamCID: 'jam1',
       bpmRnd: 128,
-      creationTime: 1000
+      creationTime: 1000,
+      root: null,
+      scale: null
     })
     expect(index.has('stale')).toBe(false)
   })
@@ -2546,7 +2595,19 @@ describe('background efficiency B3: change detection instead of a TTL', () => {
     saveRiffIndexCache(
       own,
       own.name,
-      new Map([['s1', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128, creationTime: 1000 }]]),
+      new Map([
+        [
+          's1',
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'jam1',
+            bpmRnd: 128,
+            creationTime: 1000,
+            root: null,
+            scale: null
+          }
+        ]
+      ]),
       1
     )
     saveInstrumentRowsCache(
@@ -2699,7 +2760,14 @@ describe('appendToInMemoryDiscoverCaches', () => {
       [
         {
           stemCID: 's2',
-          entry: { riffCID: 'r2', ownerJamCID: 'discovered', bpmRnd: 140, creationTime: 20 }
+          entry: {
+            riffCID: 'r2',
+            ownerJamCID: 'discovered',
+            bpmRnd: 140,
+            creationTime: 20,
+            root: null,
+            scale: null
+          }
         }
       ],
       []
@@ -2721,7 +2789,14 @@ describe('appendToInMemoryDiscoverCaches', () => {
       [
         {
           stemCID: 's1',
-          entry: { riffCID: 'r2', ownerJamCID: 'discovered', bpmRnd: 140, creationTime: 20 }
+          entry: {
+            riffCID: 'r2',
+            ownerJamCID: 'discovered',
+            bpmRnd: 140,
+            creationTime: 20,
+            root: null,
+            scale: null
+          }
         }
       ],
       []
@@ -2737,7 +2812,19 @@ describe('appendToInMemoryDiscoverCaches', () => {
     expect(() =>
       appendToInMemoryDiscoverCaches(
         db,
-        [{ stemCID: 's1', entry: { riffCID: 'r', ownerJamCID: 'j', bpmRnd: 1, creationTime: 1 } }],
+        [
+          {
+            stemCID: 's1',
+            entry: {
+              riffCID: 'r',
+              ownerJamCID: 'j',
+              bpmRnd: 1,
+              creationTime: 1,
+              root: null,
+              scale: null
+            }
+          }
+        ],
         []
       )
     ).not.toThrow()
@@ -2991,7 +3078,7 @@ describe('getInstrumentMaskLookup', () => {
     const writer = new Database(path)
     writer.exec(`
       CREATE TABLE Riffs (
-        RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER, BPMrnd REAL,
+        RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER, BPMrnd REAL, Root INTEGER, Scale INTEGER,
         StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
         StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT
       );
@@ -3066,6 +3153,7 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
   const ARCHIVE_DDL = `
     CREATE TABLE Riffs (
       RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER, BPMrnd REAL,
+      Root INTEGER, Scale INTEGER,
       StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
       StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY (RiffCID)
     );
@@ -3119,11 +3207,16 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
   }
 
   /** The index the old RiffCID-ordered walk built: first seen wins. */
-  function oracle(
-    path: string
-  ): Map<
+  function oracle(path: string): Map<
     string,
-    { riffCID: string; ownerJamCID: string; bpmRnd: number; creationTime: number | null }
+    {
+      riffCID: string
+      ownerJamCID: string
+      bpmRnd: number
+      creationTime: number | null
+      root: number | null
+      scale: number | null
+    }
   > {
     const db = new Database(path, { readonly: true })
     const rows = db.prepare(`SELECT * FROM Riffs ORDER BY RiffCID`).all() as Record<
@@ -3139,7 +3232,9 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
           riffCID: r.RiffCID,
           ownerJamCID: r.OwnerJamCID,
           bpmRnd: r.BPMrnd,
-          creationTime: r.CreationTime
+          creationTime: r.CreationTime,
+          root: r.Root,
+          scale: r.Scale
         })
       }
     }
@@ -3180,6 +3275,47 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
     expect(await getRiffIndexForDb(src)).toEqual(expected)
     expect(await persisted(own, path)).toEqual(expected)
     expect(walkedRiffs()).toBe(12_345)
+  })
+
+  it("keeps each riff's Root and Scale, in the saved copy too", async () => {
+    const path = archivePath()
+    const w = new Database(path)
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, Root, Scale, StemCID_1) VALUES ('a', 'j', 120, 4, 5, 's1')`
+    ).run()
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('b', 'j', 120, 's2')`
+    ).run()
+    w.close()
+    const src = launch(path)
+    const own = freshDb()
+    await prewarm(src, own)
+    expect((await getRiffIndexForDb(src)).get('s1')).toMatchObject({ root: 4, scale: 5 })
+    expect((await getRiffIndexForDb(src)).get('s2')).toMatchObject({ root: null, scale: null })
+    expect((await persisted(own, path)).get('s1')).toMatchObject({ root: 4, scale: 5 })
+  })
+
+  it('a copy saved before keys were kept is rebuilt once, with them', async () => {
+    const path = archivePath()
+    seedRiffs(path, 50, 9)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    // As an earlier version left it: no version on the meta, no keys on the rows.
+    own.prepare(`UPDATE DiscoverRiffIndexCacheMeta SET IndexVersion = NULL`).run()
+    own.prepare(`UPDATE DiscoverRiffIndexCache SET Root = NULL, Scale = NULL`).run()
+    const w = new Database(path)
+    w.prepare(`UPDATE Riffs SET Root = 4, Scale = 5`).run()
+    w.close()
+
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedRiffs()).toBe(50)
+    expect(await persisted(own, path)).toEqual(oracle(path))
+    expect([...(await persisted(own, path)).values()][0]).toMatchObject({ root: 4, scale: 5 })
+
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedRiffs()).toBe(0)
   })
 
   it('an in-session rebuild (no prewarm) gives the same index', async () => {
@@ -3375,7 +3511,9 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
           riffCID: 'kept',
           ownerJamCID: 'discovered',
           bpmRnd: 120,
-          creationTime: null
+          creationTime: null,
+          root: null,
+          scale: null
         }
       ],
       1
@@ -3479,7 +3617,7 @@ describe('instrument rows walk and extension (scan plan Task 3)', () => {
     const db = new Database(path)
     db.exec(`
       CREATE TABLE Riffs (RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
-        BPMrnd REAL, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
+        BPMrnd REAL, Root INTEGER, Scale INTEGER, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
         StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY (RiffCID));
       CREATE TABLE Stems (StemCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, Instrument INTEGER,
         CreatorUserName TEXT, PRIMARY KEY (StemCID));`)
@@ -3941,7 +4079,7 @@ describe('faster startup: usable before complete (2026-10-06)', () => {
     const db = new Database(path)
     db.exec(`
       CREATE TABLE Riffs (RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
-        BPMrnd REAL, UserName TEXT, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
+        BPMrnd REAL, Root INTEGER, Scale INTEGER, UserName TEXT, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
         StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY (RiffCID));
       CREATE TABLE Stems (StemCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, Instrument INTEGER,
         PresetName TEXT, CreatorUserName TEXT, PRIMARY KEY (StemCID));

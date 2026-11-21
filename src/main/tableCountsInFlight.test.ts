@@ -58,7 +58,7 @@ function archive(n: number): string {
       CreatorUserName TEXT, Instrument INTEGER);
     CREATE INDEX Stems_IndexUser ON Stems (CreatorUserName);
     CREATE TABLE Riffs (RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, UserName TEXT,
-      BPMrnd REAL, CreationTime INTEGER, ${slots});
+      BPMrnd REAL, Root INTEGER, Scale INTEGER, CreationTime INTEGER, ${slots});
     CREATE INDEX Riff_IndexUser ON Riffs (UserName);`)
   const stem = db.prepare(`INSERT INTO Stems VALUES (?, 'jam', ?, 1)`)
   const riff = db.prepare(

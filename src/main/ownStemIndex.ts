@@ -131,6 +131,8 @@ interface RiffRow {
   OwnerJamCID: string
   BPMrnd: number
   CreationTime: number | null
+  Root: number | null
+  Scale: number | null
   [slot: string]: unknown
 }
 
@@ -144,7 +146,7 @@ async function readOwnRiffs(
   const index = new Map<string, RiffIndexEntry>()
   if (own.size === 0) return index
   const info = columnInfo(db, 'Riffs', 'UserName')
-  const select = `SELECT rowid AS rid, RiffCID, OwnerJamCID, BPMrnd, CreationTime,
+  const select = `SELECT rowid AS rid, RiffCID, OwnerJamCID, BPMrnd, CreationTime, Root, Scale,
     StemCID_1, StemCID_2, StemCID_3, StemCID_4, StemCID_5, StemCID_6, StemCID_7, StemCID_8
     FROM Riffs`
   const statement = info.indexed
@@ -174,7 +176,9 @@ async function readOwnRiffs(
           riffCID: r.RiffCID,
           ownerJamCID: r.OwnerJamCID,
           bpmRnd: r.BPMrnd,
-          creationTime: r.CreationTime
+          creationTime: r.CreationTime,
+          root: r.Root,
+          scale: r.Scale
         })
       }
       if (performance.now() - started >= SLICE_MS) {

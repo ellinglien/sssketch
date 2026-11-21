@@ -285,6 +285,9 @@ export interface RiffIndexEntry {
   ownerJamCID: string
   bpmRnd: number
   creationTime: number | null
+  /** The riff's key as stored (Riffs.Root, Riffs.Scale); null when it has none. */
+  root: number | null
+  scale: number | null
 }
 
 // `walk` holds what an extension needs (open riffs, rowid watermark --
@@ -2151,6 +2154,8 @@ async function getMaskDiscoverCandidates({
           slotKinds: [kind],
           drumSubRole: (category.DrumSubRole as DrumSubRole | null) ?? null,
           riffBpm: riffInfo.bpmRnd,
+          riffRoot: riffInfo.root,
+          riffScale: riffInfo.scale,
           traitValues: {},
           traitPercentiles: {},
           kindSources: { [kind as DiscoverMaskKind]: sourceByStemCID.get(stemCID) ?? 'confirmed' },
@@ -2502,6 +2507,8 @@ async function getTraitPoolCandidates({
       slotKinds: [...traitKinds],
       drumSubRole: null,
       riffBpm: riffInfo.bpmRnd,
+      riffRoot: riffInfo.root,
+      riffScale: riffInfo.scale,
       traitValues: entry.traitValues,
       traitFieldValues: entry.traitFieldValues,
       traitPercentiles: {},
@@ -2697,6 +2704,8 @@ export async function getRandomLibraryCandidate({
     kindSources: {},
     drumSubRole: null,
     riffBpm: riff.bpmRnd,
+    riffRoot: riff.root,
+    riffScale: riff.scale,
     riffCreationTime: riff.creationTime
   }
 }
@@ -2772,7 +2781,15 @@ async function getRandomOwnStemCandidate(
     )
     if (!stemRow) continue
 
-    let riffRow: { RiffCID: string; BPMrnd: number; CreationTime: number | null } | undefined
+    let riffRow:
+      | {
+          RiffCID: string
+          BPMrnd: number
+          CreationTime: number | null
+          Root: number | null
+          Scale: number | null
+        }
+      | undefined
     try {
       // The side table is part of the answer to "which riff contains this
       // stem", not an afterthought -- a kept group's twelfth stem is in no
@@ -2784,7 +2801,7 @@ async function getRandomOwnStemCandidate(
       const slotParams = Array<string>(extraClause ? 9 : 8).fill(stemRow.StemCID)
       riffRow = db
         .prepare(
-          `SELECT RiffCID, BPMrnd, CreationTime FROM Riffs WHERE OwnerJamCID = ? AND (
+          `SELECT RiffCID, BPMrnd, CreationTime, Root, Scale FROM Riffs WHERE OwnerJamCID = ? AND (
              StemCID_1 = ? OR StemCID_2 = ? OR StemCID_3 = ? OR StemCID_4 = ? OR
              StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?${extraClause}
            ) LIMIT 1`
@@ -2809,6 +2826,8 @@ async function getRandomOwnStemCandidate(
       kindSources: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,
+      riffRoot: riffRow.Root,
+      riffScale: riffRow.Scale,
       riffCreationTime: riffRow.CreationTime
     }
   }

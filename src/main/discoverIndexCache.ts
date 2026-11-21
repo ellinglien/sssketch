@@ -68,14 +68,25 @@ function addColumnsIfMissing(
   }
 }
 
+/** What a saved riff index's entries hold. A copy saved under another version (or before there
+ * was one: NULL) reads as not saved, so the next launch rebuilds it through the usual walk.
+ * 1: entries carry the riff's Root and Scale (2026-11-21). Bump when an entry gains a field. */
+const RIFF_INDEX_VERSION = 1
+
 export function ensureDiscoverIndexWatermarkSchema(ownDb: Database.Database): void {
   if (watermarkSchemaReady.has(ownDb)) return
+  // Adding a nullable column rewrites no rows: instant on a cache of any size.
+  addColumnsIfMissing(ownDb, 'DiscoverRiffIndexCache', [
+    ['Root', 'INTEGER'],
+    ['Scale', 'INTEGER']
+  ])
   addColumnsIfMissing(ownDb, 'DiscoverRiffIndexCacheMeta', [
     ['MaxRowid', 'INTEGER'],
     ['WatermarkRiffCID', 'TEXT'],
     // The entries the copy holds (one per stem in a riff): the total a load
     // of it reports against (2026-10-07). NULL: not known (saved before).
-    ['EntryCount', 'INTEGER']
+    ['EntryCount', 'INTEGER'],
+    ['IndexVersion', 'INTEGER']
   ])
   addColumnsIfMissing(ownDb, 'DiscoverInstrumentRowsCacheMeta', [
     ['MaxRowid', 'INTEGER'],
@@ -110,7 +121,7 @@ export function readRiffIndexMeta(
   const row = ownDb
     .prepare(
       `SELECT RiffCount, MaxRowid, WatermarkRiffCID FROM DiscoverRiffIndexCacheMeta
-       WHERE SourceDbKey = ?`
+       WHERE SourceDbKey = ? AND IndexVersion = ${RIFF_INDEX_VERSION}`
     )
     .get(sourceDbKey) as
     { RiffCount: number; MaxRowid: number | null; WatermarkRiffCID: string | null } | undefined
@@ -128,12 +139,13 @@ function writeRiffIndexMeta(
   ownDb
     .prepare(
       `INSERT INTO DiscoverRiffIndexCacheMeta
-         (SourceDbKey, RiffCount, MaxRowid, WatermarkRiffCID, ComputedAt, EntryCount)
-       VALUES (?, ?, ?, ?, ?, ?)
+         (SourceDbKey, RiffCount, MaxRowid, WatermarkRiffCID, ComputedAt, EntryCount, IndexVersion)
+       VALUES (?, ?, ?, ?, ?, ?, ${RIFF_INDEX_VERSION})
        ON CONFLICT(SourceDbKey) DO UPDATE SET
          RiffCount = excluded.RiffCount, MaxRowid = excluded.MaxRowid,
          WatermarkRiffCID = excluded.WatermarkRiffCID, ComputedAt = excluded.ComputedAt,
-         EntryCount = COALESCE(excluded.EntryCount, EntryCount)`
+         EntryCount = COALESCE(excluded.EntryCount, EntryCount),
+         IndexVersion = excluded.IndexVersion`
     )
     .run(
       sourceDbKey,
@@ -259,11 +271,12 @@ export async function persistRiffIndexPage(
   ensureDiscoverIndexWatermarkSchema(ownDb)
   const upsert = ownDb.prepare(
     `INSERT INTO DiscoverRiffIndexCache
-       (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime)
-     VALUES (?, ?, ?, ?, ?, ?)
+       (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime, Root, Scale)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(SourceDbKey, StemCID) DO UPDATE SET
        RiffCID = excluded.RiffCID, OwnerJamCID = excluded.OwnerJamCID,
-       BPMrnd = excluded.BPMrnd, CreationTime = excluded.CreationTime
+       BPMrnd = excluded.BPMrnd, CreationTime = excluded.CreationTime,
+       Root = excluded.Root, Scale = excluded.Scale
      WHERE excluded.RiffCID < DiscoverRiffIndexCache.RiffCID`
   )
   const open = ownDb.prepare(
@@ -280,7 +293,16 @@ export async function persistRiffIndexPage(
     (i) => {
       if (i < changed.length) {
         const [stemCID, e] = changed[i]
-        upsert.run(sourceDbKey, stemCID, e.riffCID, e.ownerJamCID, e.bpmRnd, e.creationTime)
+        upsert.run(
+          sourceDbKey,
+          stemCID,
+          e.riffCID,
+          e.ownerJamCID,
+          e.bpmRnd,
+          e.creationTime,
+          e.root,
+          e.scale
+        )
       } else if (i < changed.length + opened.length) {
         open.run(sourceDbKey, opened[i - changed.length])
       } else {
@@ -338,10 +360,12 @@ export async function loadCachedRiffIndex(
   onProgress?: (completed: number, total: number) => void,
   totalHint = 0
 ): Promise<Map<string, RiffIndexEntry>> {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
   const index = new Map<string, RiffIndexEntry>()
   // Keyset on the primary key (SourceDbKey, StemCID): no OFFSET re-skip.
   const statement = ownDb.prepare(
-    `SELECT StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime FROM DiscoverRiffIndexCache
+    `SELECT StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime, Root, Scale
+     FROM DiscoverRiffIndexCache
      WHERE SourceDbKey = ? AND StemCID > ? ORDER BY StemCID LIMIT ?`
   )
   let after = ''
@@ -352,6 +376,8 @@ export async function loadCachedRiffIndex(
       OwnerJamCID: string
       BPMrnd: number
       CreationTime: number | null
+      Root: number | null
+      Scale: number | null
     }[]
     countWork('prewarm:rows-loaded.riff-index', page.length)
     for (const row of page) {
@@ -359,7 +385,9 @@ export async function loadCachedRiffIndex(
         riffCID: row.RiffCID,
         ownerJamCID: row.OwnerJamCID,
         bpmRnd: row.BPMrnd,
-        creationTime: row.CreationTime
+        creationTime: row.CreationTime,
+        root: row.Root,
+        scale: row.Scale
       })
     }
     if (page.length < LOAD_PAGE_SIZE) break
@@ -391,14 +419,17 @@ export function saveRiffIndexCache(
   index: Map<string, RiffIndexEntry>,
   riffCount: number
 ): void {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
   const del = ownDb.prepare(`DELETE FROM DiscoverRiffIndexCache WHERE SourceDbKey = ?`)
   const insert = ownDb.prepare(
-    `INSERT INTO DiscoverRiffIndexCache (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO DiscoverRiffIndexCache
+       (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime, Root, Scale)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
+  // (The meta row was just deleted, so a plain insert.)
   const setMeta = ownDb.prepare(
-    `INSERT INTO DiscoverRiffIndexCacheMeta (SourceDbKey, RiffCount, ComputedAt) VALUES (?, ?, ?)
-     ON CONFLICT(SourceDbKey) DO UPDATE SET RiffCount = excluded.RiffCount, ComputedAt = excluded.ComputedAt`
+    `INSERT INTO DiscoverRiffIndexCacheMeta (SourceDbKey, RiffCount, ComputedAt, IndexVersion)
+     VALUES (?, ?, ?, ${RIFF_INDEX_VERSION})`
   )
   // The meta row is replaced, not updated, so a watermark from an earlier
   // walk can't outlive it.
@@ -413,7 +444,9 @@ export function saveRiffIndexCache(
         entry.riffCID,
         entry.ownerJamCID,
         entry.bpmRnd,
-        entry.creationTime
+        entry.creationTime,
+        entry.root,
+        entry.scale
       )
     }
     setMeta.run(sourceDbKey, riffCount, Date.now())
@@ -594,6 +627,8 @@ export function appendRiffIndexRows(
     ownerJamCID: string
     bpmRnd: number
     creationTime: number | null
+    root: number | null
+    scale: number | null
   }[],
   riffCountDelta: number
 ): void {
@@ -603,8 +638,9 @@ export function appendRiffIndexRows(
     .get(sourceDbKey) as { RiffCount: number; MaxRowid: number | null } | undefined
   if (!meta) return
   const insert = ownDb.prepare(
-    `INSERT INTO DiscoverRiffIndexCache (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime)
-     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(SourceDbKey, StemCID) DO NOTHING`
+    `INSERT INTO DiscoverRiffIndexCache
+       (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime, Root, Scale)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(SourceDbKey, StemCID) DO NOTHING`
   )
   let added = 0
   for (const row of rows) {
@@ -614,7 +650,9 @@ export function appendRiffIndexRows(
       row.riffCID,
       row.ownerJamCID,
       row.bpmRnd,
-      row.creationTime
+      row.creationTime,
+      row.root,
+      row.scale
     ).changes
   }
   if (added > 0) {

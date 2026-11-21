@@ -40,6 +40,11 @@ export interface DiscoverCandidate {
    * frequently null in real data -- LORE's own resolveRiff falls back to
    * the riff's BPM for exactly this reason, riffLibraryTypes.ts). */
   riffBpm: number
+  /** The OWNING RIFF's key as Endlesss stored it (Riffs.Root 0-11, Riffs.Scale, an index into
+   * RIFF_LIBRARY_SCALE_NAMES), for rankCandidates' key term (@shared/keyFit). Optional: absent or
+   * null is an unknown key, which is neutral. */
+  riffRoot?: number | null
+  riffScale?: number | null
   /** Raw StemFeatureCache field value per requested TRAIT kind, for
    * rankCandidates' trait terms. {} when the slot has no trait kinds or the
    * stem has no cached features. */

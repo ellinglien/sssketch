@@ -281,6 +281,8 @@ export async function getAdjacentDiscoverCandidates(
         slotKinds: normalizedKinds,
         drumSubRole: null,
         riffBpm: resolved.bpm,
+        riffRoot: resolved.root ?? null,
+        riffScale: resolved.scale ?? null,
         traitValues,
         traitFieldValues,
         // Adjacency stays on pool-relative trait ranking for now (the
