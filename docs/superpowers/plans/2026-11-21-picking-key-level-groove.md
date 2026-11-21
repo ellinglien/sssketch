@@ -1,10 +1,10 @@
-# Better Picks (key, level, groove) Implementation Plan
+# Better Picks (key, level, balance) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Discover and both radios prefer picks that fit the sounding rows' key and the drums' groove, and a new row arrives at a common loudness.
+**Goal:** Discover and both radios prefer picks that fit the sounding rows' key and balance strong parts against sparse ones, and a new row arrives at a common loudness.
 
-**Architecture:** Three optional terms/values beside the existing ones. `keyFit` (pure) feeds a new `key` term in `rankCandidates`; `arrivalGain` (pure) is computed in main and carried on the candidate as the row's starting gain; `grooveTriplet` is a new stored stem feature (measured in the level pass) feeding a `groove` term. Every term is absent-safe: without its input the ranking is exactly today's.
+**Architecture:** Three optional terms/values beside the existing ones. `keyFit` (pure) feeds a new `key` term in `rankCandidates`; `arrivalGain` (pure) is computed in main and carried on the candidate as the row's starting gain; `presence` (from the intensity parts already stored) is carried on the candidate and feeds a `balance` term. Every term is absent-safe: without its input the ranking is exactly today's.
 
 **Tech Stack:** TypeScript, vitest, better-sqlite3 (main), the web radio's Vite index build.
 
@@ -468,147 +468,86 @@ A row created empty keeps `gain: 1` and gets its arrival gain on its first pick 
 
 ---
 
-### Task 8: `grooveTriplet`, measured and stored
+### Task 8: presence, attached to candidates
+
+(Groove moved to design 2: see the spec's "Moved to design 2". Tasks 8 and 9 are the balance.)
 
 **Files:**
-- Modify: `src/shared/onsetRhythm.ts`, `src/shared/onsetRhythm.test.ts`
-- Modify: `src/shared/stemFeatures.ts`, `src/shared/stemAnalysis.ts`, `src/shared/stemLevel.ts` (version), the analysis worker/client (`src/renderer/src/audio/stemAnalysisWorker.ts`, `stemAnalysisClient.ts`, `analyzeStemOnce.ts`), `src/shared/stemAnalysisWrite.ts`
-- Tests: beside each
+- Modify: `src/shared/radioIntensity.ts`, its test
+- Modify: `src/shared/discoverCandidate.ts`
+- Modify: `src/main/discoverCandidates.ts` (the Task 5 attach: one loop adds both values)
+- Web radio: `src/index/buildIndex.ts` (`p`, 2 decimals, omitted when null), `src/radio/pick.ts` `toCandidate`
 
-- [ ] **Step 0: check the one risk first.** The measure needs the stem's tempo. Trace the background scan's job input (`analyzeStemOnce.ts`, the scan targets) and confirm a bpm can ride with each job (scan targets come from the riff index, which has `bpmRnd`). If a job has no way to learn its stem's bpm without a new query per stem, STOP and report BLOCKED with what you found; don't invent a bpm estimate.
-
-- [ ] **Step 1: failing tests** in `onsetRhythm.test.ts`:
-
-```ts
-describe('grooveTriplet', () => {
-  const bpm = 120 // beat = 0.5 s
-  const beats = (positions: number[], bars = 4): number[] =>
-    Array.from({ length: bars * 4 }, (_, b) => positions.map((p) => (b + p) * 0.5)).flat()
-  it('straight sixteenths read 0', () => expect(grooveTriplet(beats([0, 0.25, 0.5, 0.75]), bpm)).toBe(0))
-  it('straight eighths read 0', () => expect(grooveTriplet(beats([0, 0.5]), bpm)).toBe(0))
-  it('a shuffle reads 1', () => expect(grooveTriplet(beats([0, 2 / 3]), bpm)).toBe(1))
-  it('triplets read 1', () => expect(grooveTriplet(beats([0, 1 / 3, 2 / 3]), bpm)).toBe(1))
-  it('a mix reads in between', () => {
-    const v = grooveTriplet([...beats([0, 0.5], 2), ...beats([0, 2 / 3], 2).map((t) => t + 4)], bpm)!
-    expect(v).toBeGreaterThan(0.3)
-    expect(v).toBeLessThan(0.7)
-  })
-  it('tolerates a little timing slop', () =>
-    expect(grooveTriplet(beats([0.01, 0.26, 0.49, 0.76]), bpm)).toBe(0))
-  it('is null with too few off-beat onsets', () => {
-    expect(grooveTriplet(beats([0]), bpm)).toBeNull() // on the beat only
-    expect(grooveTriplet([0.25, 0.75], bpm)).toBeNull()
-  })
-  it('is null without a tempo', () => {
-    expect(grooveTriplet(beats([0, 0.5]), 0)).toBeNull()
-    expect(grooveTriplet(beats([0, 0.5]), NaN)).toBeNull()
-  })
-})
-```
-
-- [ ] **Step 2: implement** in `onsetRhythm.ts`:
-
-```ts
-/** Fewer counted off-beat onsets than this say nothing about the groove. */
-export const GROOVE_MIN_ONSETS = 8
-/** How near a grid point (in beats) an onset must be to count for it. */
-const GROOVE_TOLERANCE = 0.06
-const STRAIGHT = [0.25, 0.5, 0.75]
-const TRIPLET = [1 / 3, 2 / 3]
-
-/** Straight or swung, in [0, 1]: of the onsets that fall off the beat and near a grid point, the
- * share nearer a triplet eighth than a straight sixteenth. 0 = straight, 1 = shuffled/triplets.
- * Null when fewer than GROOVE_MIN_ONSETS count, or without a tempo. `onsetTimes` in seconds from
- * the loop's start. */
-export function grooveTriplet(onsetTimes: readonly number[], bpm: number): number | null {
-  if (!Number.isFinite(bpm) || bpm <= 0) return null
-  const beat = 60 / bpm
-  const nearest = (pos: number, grid: readonly number[]): number =>
-    Math.min(...grid.map((g) => Math.abs(pos - g)))
-  let straight = 0
-  let triplet = 0
-  for (const t of onsetTimes) {
-    if (!Number.isFinite(t) || t < 0) continue
-    const pos = (t / beat) % 1
-    if (Math.min(pos, 1 - pos) <= GROOVE_TOLERANCE) continue // on the beat: says nothing
-    const ds = nearest(pos, STRAIGHT)
-    const dt = nearest(pos, TRIPLET)
-    if (Math.min(ds, dt) > GROOVE_TOLERANCE) continue
-    if (dt < ds) triplet++
-    else straight++
-  }
-  const counted = straight + triplet
-  return counted < GROOVE_MIN_ONSETS ? null : triplet / counted
-}
-```
-
-- [ ] **Step 3: store it in the level pass.** `StemFeatures` gains `grooveTriplet?: number | null` (doc: "onsetRhythm.ts grooveTriplet; written by the level pass from v2"). Bump `STEM_LEVEL_VERSION` to 2 with a comment that v2 added `grooveTriplet` and that the bump re-runs only the level pass on the one decode. The level pass (`stemLevelFeatures` / wherever `levelVersion` is written in `stemAnalysis.ts`) runs `detectOnsetTimes` on the buffer it already has (reuse the onsets when the full analysis already computed them in the same call) and writes `grooveTriplet(onsets, bpm)`. Thread `bpm` through the job input found in Step 0; a job without one writes `null`. Follow `stemAnalysisWrite.ts` so the new field is merged into the row the way the level fields are (a level-only backfill must not drop other fields). Extend the existing tests for the level pass and the write merge: a row at level v1 is reported as needing the level pass (`stemAnalysisNeeds.ts` already compares versions: add the assertion), and after the pass it has `levelVersion: 2` and a `grooveTriplet` key.
-- [ ] **Step 4:** check what else reads `STEM_LEVEL_VERSION` (grep): anything that counts "level current" for progress or the web export's coverage keeps working. The web's index build reads feature rows: it must treat a v1 row as usable for loudness/intensity exactly as before (a v1 row has valid loudness). If any reader discards rows whose level version is old, fix it to discard only rows with none, and say so.
-- [ ] **Step 5:** `npx vitest run src/shared src/main src/renderer`, typecheck, lint.
-- [ ] **Step 6:** commit `feat(picks): measure whether a stem is straight or swung`.
+- [ ] **Step 1:** read `radioIntensity.ts` whole. `stemIntensityScore` builds four parts (`busy`, `low`, `full`, `bright`) from library percentiles. Export `stemPresence(values, tables): number | null`: the mean of the `busy` and `full` parts that are present (one present: that one; neither: null). Reuse the file's `part(...)`; don't copy it.
+- [ ] **Step 2: failing tests first** in the intensity test file, with its existing table fixtures: a busy, loud, always-sounding stem scores above 0.8; a sparse quiet one under 0.2; only loudness known gives the `full` part alone; nothing known gives null.
+- [ ] **Step 3:** `DiscoverCandidate` gains `presence?: number | null` ("how much a stem demands, 0 sparse and quiet to 1 busy and loud (@shared/radioIntensity stemPresence); attached to every roll; absent or null: unknown"). Main: the Task 5 attach computes it from the same values and tables in the same loop (rename it `attachLevelAndPresence`). Extend its test: loud busy stem gets a high `presence`, a stem with no feature row gets none.
+- [ ] **Step 4:** web: `buildIndex` writes `p` from the same function over the exported stems' tables (it already builds them for `x`); `toCandidate` maps `presence: r.p ?? null`. Test the round-trip.
+- [ ] **Step 5:** tests in both repos, typecheck, lint. Commits `feat(picks): a candidate carries its presence` (one per repo).
 
 ---
 
-### Task 9: the groove term
+### Task 9: the balance term
 
 **Files:**
 - Modify: `src/shared/discoverRanking.ts`, its test
-- Modify: `src/shared/discoverCandidate.ts`, `src/main/discoverCandidates.ts` (attach `grooveTriplet` with the arrival gain: same value source, same pass; rename the attach to `attachLevelAndGroove` if it reads better, one loop)
-- Modify: `src/shared/discoverKey.ts` (add `rankGrooveFor`), its test
+- Modify: `src/shared/discoverKey.ts` (add `rankBalanceFor`), its test
 - Modify: `src/renderer/src/components/DiscoverPanel.tsx`
-- Web radio: index field `gt` (2 decimals, omitted when null), `pick.ts`
+- Web radio: `src/radio/pick.ts`
 
-- [ ] **Step 1:** `DiscoverCandidate` gains `grooveTriplet?: number | null` ("straight 0 … swung 1, @shared/onsetRhythm; absent or null: says nothing").
-- [ ] **Step 2: failing ranking tests:**
+- [ ] **Step 1: failing ranking tests:**
 
 ```ts
-describe('groove term', () => {
-  const straight = cand({ stemCID: 'st', riffBpm: 120, grooveTriplet: 0 })
-  const swung = cand({ stemCID: 'sw', riffBpm: 120, grooveTriplet: 1 })
-  const silent = cand({ stemCID: 'none', riffBpm: 120 })
-  it('prefers the drums\' feel', () => {
-    const r = rankCandidates([straight, swung, silent], { targetBpm: 120, groove: { drums: 1 } })
-    expect(r.map((x) => x.candidate.stemCID)).toEqual(['sw', 'none', 'st'])
-    expect(r[0].score).toBeCloseTo(1 + GROOVE_WEIGHT, 5)
-    expect(r[1].score).toBeCloseTo(1, 5) // null: no term
-    expect(r[2].score).toBeCloseTo(1, 5)
+describe('balance term', () => {
+  const strong = cand({ stemCID: 'strong', riffBpm: 120, presence: 0.9 })
+  const sparse = cand({ stemCID: 'sparse', riffBpm: 120, presence: 0.1 })
+  const unknown = cand({ stemCID: 'unknown', riffBpm: 120 })
+  it('a strong bed prefers a sparse pick', () => {
+    const r = rankCandidates([strong, sparse, unknown], { targetBpm: 120, balance: { others: [0.9, 0.3] } })
+    expect(r.map((x) => x.candidate.stemCID)).toEqual(['sparse', 'strong', 'unknown'])
+    expect(r[0].score).toBeCloseTo(1 + BALANCE_WEIGHT * 1, 5) // want 0.1
+    expect(r[1].score).toBeCloseTo(1 + BALANCE_WEIGHT * 0.2, 5)
+    expect(r[2].score).toBeCloseTo(1, 5) // no presence: no term
   })
-  it('absent or null drums: exactly the ranking without it', () => {
-    const plain = rankCandidates([straight, swung], { targetBpm: 120 })
-    expect(rankCandidates([straight, swung], { targetBpm: 120, groove: { drums: null } })).toEqual(plain)
+  it('a sparse bed prefers a strong pick', () => {
+    const r = rankCandidates([sparse, strong], { targetBpm: 120, balance: { others: [0.1] } })
+    expect(r[0].candidate.stemCID).toBe('strong')
   })
-  it('a full clash turns it round', () => {
-    const r = rankCandidates([straight, swung], { targetBpm: 120, groove: { drums: 1, clash: 100 } })
-    expect(r[0].candidate.stemCID).toBe('st')
+  it('no others, or exempt: exactly the ranking without it', () => {
+    const plain = rankCandidates([strong, sparse], { targetBpm: 120 })
+    expect(rankCandidates([strong, sparse], { targetBpm: 120, balance: { others: [] } })).toEqual(plain)
+    expect(
+      rankCandidates([strong, sparse], { targetBpm: 120, balance: { others: [0.9], exempt: true } })
+    ).toEqual(plain)
   })
 })
 ```
 
-- [ ] **Step 3: implement:**
+- [ ] **Step 2: implement:**
 
 ```ts
-// Under a trait term (1): the drums' feel nudges a pick, it doesn't decide it.
-export const GROOVE_WEIGHT = 0.75
+// A trait's weight: balance shapes a pick as much as "bright" does, under key (2) and a
+// favourite (1.5). Spec 2026-11-21-picking-key-level-groove-design, 3.
+export const BALANCE_WEIGHT = 1
 
-/** The sounding drum rows' mean grooveTriplet (null: none sounding, or none measured), and fold
- * mode's clash amount 0..100, which turns the term toward the other feel as it turns `rhythmic`. */
-export interface RankGroove {
-  drums: number | null
-  clash?: number
+/** The presences (@shared/radioIntensity stemPresence) of the rows a pick will sound with that
+ * count toward the balance. `exempt`: the slot being filled doesn't count (drums). */
+export interface RankBalance {
+  others: readonly number[]
+  exempt?: boolean
 }
 ```
 
-In the map: when `groove?.drums` is a finite number and the candidate's `grooveTriplet` is a finite number, `closeness = 1 - |candidate - drums|`; read `radioClash.ts`'s `radioClashTraitScore` to see how it turns a trait score by amount and apply the same turn to `closeness` (call it if its signature allows a kind-less use; otherwise mirror its formula in one line with a comment naming it). `score += GROOVE_WEIGHT * turned`.
+Before the map: `const strongest = balance && !balance.exempt ? Math.max(-Infinity, ...balance.others.filter(Number.isFinite)) : -Infinity`. In the map, when `strongest` is finite and the candidate's `presence` is a finite number: `score += BALANCE_WEIGHT * (1 - Math.abs(candidate.presence - (1 - strongest)))`.
 
-- [ ] **Step 4:** `rankGrooveFor(rows, slotId)` in `discoverKey.ts`: the mean `grooveTriplet` of the other rows whose kinds include drums and whose candidate has a finite value, else `null`. Test it (two drum rows 0 and 1 → 0.5; none → null; the slot itself excluded).
-- [ ] **Step 5:** panel: `groove: { drums: rankGrooveFor(rows, id), clash: clashAmount }` beside the `key` option, same row set. Web: index `gt`, `toCandidate` maps it, `pick.ts` passes `groove` from the other drum layers.
-- [ ] **Step 6:** tests in both repos, typecheck, lint; commits `feat(picks): picks lean toward the drums' feel` (one per repo).
+- [ ] **Step 3:** `rankBalanceFor(rows, slotId, kinds, countDrums = false)` in `discoverKey.ts`: `exempt` when the slot's kinds include drums and `countDrums` is false; `others` = the presences of the other rows holding a stem with a finite `presence`, leaving out drum rows unless `countDrums`. Bass rows count. Tests: drums left out by default and counted with the flag; bass counted; the slot itself excluded; a drums slot exempt. (`KeyRow`'s candidate type gains `presence?: number | null`.)
+- [ ] **Step 4:** panel: `balance: rankBalanceFor(rows, id, kinds)` beside the `key` option, same row set. Web `pick.ts`: the same from the other layers.
+- [ ] **Step 5:** tests in both repos, typecheck, lint; commits `feat(picks): picks balance strong parts against sparse ones` (one per repo).
 
 ---
 
 ### Task 10: docs and the full gates
 
-- [ ] **Step 1:** `CLAUDE.md`: a short "Better picks (key, level, groove)" section after "Four categories": the three terms and where they live (`keyFit.ts`, `discoverKey.ts`, `stemLevel.ts` `arrivalGain`/`rerolledGain`, `onsetRhythm.ts` `grooveTriplet`), the rules (drums exempt from key; unknown key neutral; gain only turns down and is the row's ordinary gain; groove is written by the level pass, so `STEM_LEVEL_VERSION` 2 re-measures the library once in the background; every term absent-safe), and that the web index carries `kr`/`ks`/`g`/`gt`.
+- [ ] **Step 1:** `CLAUDE.md`: a short "Better picks (key, level, balance)" section after "Four categories": the three terms and where they live (`keyFit.ts`, `discoverKey.ts`, `stemLevel.ts` `arrivalGain`/`rerolledGain`, `radioIntensity.ts` `stemPresence`), the rules (drums exempt from key and from the balance, bass counts in the balance; unknown key neutral; gain only turns down and is the row's ordinary gain; every term absent-safe), and that the web index carries `kr`/`ks`/`g`/`p`.
 - [ ] **Step 2:** the spec's Level section says the candidate carries `loudnessLufs`; it carries `arrivalGain` (main computes it, the renderer has no percentile tables). Fix that sentence. Set the spec's status line to "built on `better-picks`, unmerged".
 - [ ] **Step 3:** full gates in both worktrees: `npm run typecheck && npm run lint && npm test`. Report exact counts and any failure verbatim.
 - [ ] **Step 4:** commit `docs(picks): handoff notes; spec matches the build`.

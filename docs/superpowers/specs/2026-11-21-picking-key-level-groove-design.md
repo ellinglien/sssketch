@@ -1,4 +1,4 @@
-# Better picks: key, level, groove
+# Better picks: key, level, balance
 
 Status: design, awaiting review (2026-11-21). Not built.
 
@@ -80,31 +80,44 @@ A new row arrives with its gain already set so that it sits at a common loudness
   gain by hand works as before.
 - It applies to rows radio or a roll fills. A row whose gain you set by hand keeps your gain when
   its stem is rerolled, scaled by the new stem's trim over the old one's, so your balance holds.
-- The candidate carries `loudnessLufs` (attached like `intensity`, for every roll).
+- The candidate carries `arrivalGain` (main computes it, attached for every roll).
 
 **Web radio:** the index record gains the stem's loudness; the layer's gain starts at
 `arrivalGain`.
 
-## 3. Groove
+## 3. Balance
 
-Prefer picks that subdivide the beat the way the drums do.
+Elling, 2026-11-21: "it'd be cool to balance strong elements with each other consciously ...
+lots of loud bits, sparse, low volume ... and how they would match with each other."
 
-- **New measurement,** in the analysis worker beside the onset pass: `grooveTriplet`, 0 to 1 or
-  null. Each onset's position inside its beat (from the riff's bpm) is compared with the nearest
-  straight sixteenth and the nearest triplet eighth; the value is the share of off-beat onsets
-  nearer a triplet. Straight patterns read near 0, shuffles and triplets near 1. Null under 8
-  off-beat onsets (pads, sparse parts): nothing to say.
-- **Cost, stated plainly:** onset times aren't stored, so this needs one more pass over every
-  analysed stem (a version bump that re-runs only this pass on the one decode, as the level pass
-  did). On a library on a USB drive that is hours of background scanning. Until a stem is
-  re-measured it is neutral.
-- **The ranking term:** `GROOVE_WEIGHT * (1 - |candidate - drums|)` with `GROOVE_WEIGHT = 0.75`,
-  where `drums` is the mean `grooveTriplet` of the sounding drum rows. No drums sounding, or a
-  null on either side: no term. Drums candidates are scored against the other drum rows.
-- Fold mode's clash turns this term round the way it turns `rhythmic` (a clash in time is its
-  point).
+- **Presence.** Each stem already has the radio's intensity parts (`radioIntensity.ts`): `busy`
+  (how many attacks, how steady) and `full` (loudness, and how much of the loop sounds). A stem's
+  **presence** is the mean of those two parts, 0 to 1, null when it has neither. Lots of loud hits
+  is high; sparse and quiet is low. No new measurement and no rescan.
+- **The ranking term.** A pick is scored against the rows it will sound with:
+  `want = 1 - (the strongest other row's presence)`, and the term is
+  `BALANCE_WEIGHT * (1 - |candidate's presence - want|)`, `BALANCE_WEIGHT = 1` (a trait's weight).
+  A strong part already sounding pulls sparse picks up; a sparse bed pulls a strong pick up.
+- **Who counts** (Elling: "bass should stay in the balance... drums out of the balance, or ...
+  maybe sometimes"): bass, back and front rows count, both as the pick and as the others. Drums
+  don't: a drums pick gets no term and drum rows aren't among the others. "Sometimes" is design
+  2's rotating focus, where one focus counts drums too; the term takes a `countDrums` flag for it,
+  off here.
+- No other counted row with a presence, or a candidate without one: no term.
+- It runs beside radio's intensity arc, which leans on a stem's rank inside its own pool; the two
+  add.
+- The candidate carries `presence` (attached with the arrival gain, for every roll). The web
+  index carries it as `p`.
 
-Built last of the three, so key and level don't wait for the rescan.
+## Moved to design 2
+
+- **Groove** (straight or swung, like the drums). Elling: "conflicting rhythms and combinations
+  are cool", and "varying the method could be great". So groove is not an always-on rule: it
+  becomes one of radio's rotating matching focuses (in key, locked groove, contrast, space) in the
+  next design, with its measurement and its one-off rescan.
+- **Fewer rows.** Elling finds radio often has a few too many elements, and expects the varied
+  matching and the balance to fix it. The density arc's peak (4 to 5 rows) is left alone here and
+  looked at again after listening.
 
 ## Not in this
 
@@ -124,7 +137,8 @@ are drums). That branch is unmerged and waits for Elling's walkthrough, so this 
   null (unit).
 - `rankCandidates` with `key`: drums exempt, no others = unchanged scores, the 10,000-draw share.
 - `arrivalGain`: never above 1, floor, null, the reroll scaling (unit).
-- `grooveTriplet`: synthetic straight, shuffled and sparse onset lists (unit).
+- The balance term: a strong bed prefers a sparse pick and the reverse, drums exempt, no others
+  = unchanged scores (unit).
 - Web radio: index round-trip of the new fields; `pick.ts` terms.
 - Listening is Elling's: agents can't hear it.
 
@@ -133,4 +147,5 @@ are drums). That branch is unmerged and waits for Elling's walkthrough, so this 
 - Radio for ten minutes at the default matching: melodic layers that come in sound in key with
   the bed far more often than before; hover a row to read its key.
 - New rows no longer jump out loud; the row's gain shows where it was set.
-- After the rescan, a shuffled drum loop draws shuffled parts.
+- With a busy, loud part playing, the parts that join it are sparser; with a thin bed, a
+  stronger part comes in. Drums don't change this.
