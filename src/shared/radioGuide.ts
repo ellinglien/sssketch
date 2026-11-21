@@ -685,7 +685,7 @@ export const RADIO_GUIDE: RadioGuide = {
             },
             {
               key: 'density',
-              text: 'off keeps a steady number of rows. arc grows them to four or five and thins them to two or three, without the big drops. intensity plays the waves',
+              text: 'off keeps a steady number of rows. arc grows them to three or four and thins them to two or three, without the big drops. intensity plays the waves',
               desktop: [{ strip: 'density' }],
               web: ['density', 'off', 'arc', 'intensity']
             }

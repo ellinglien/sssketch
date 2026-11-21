@@ -275,18 +275,18 @@ describe('lengths', () => {
   })
 
   it('a build is raised to fit its adds: one per phrase start after the first', () => {
-    // energy 50 can draw a 2-phrase build; from 2 rows to 5 needs 3 adds, so 4 phrases
+    // energy 50 can draw a 2-phrase build; from 2 rows to 4 needs 2 adds, so 3 phrases
     for (const seed of ['a', 'b', 'c', 'd']) {
       const arc = radioIntensityStarted({
         energy: 60,
         drama: 60,
         min: 2,
-        max: 5,
+        max: 4,
         count: 2,
         random: seededRandom(seed)
       })
-      expect(arc.peakRows).toBe(5)
-      expect(arc.phrases).toBeGreaterThanOrEqual(4)
+      expect(arc.peakRows).toBe(4)
+      expect(arc.phrases).toBeGreaterThanOrEqual(3)
       expect(arc.first).toBe(true)
       expect(arc.big).toBe(false)
     }
@@ -1163,9 +1163,9 @@ describe('radioIntensityTargetAhead: the target where a change lands (option A, 
     loopBars: 4,
     lap: 0,
     phraseLaps: 4,
-    count: 4,
+    count: 3,
     min: 2,
-    max: 5
+    max: 4
   }
   const { lo, hi } = radioIntensityTargets(50, 60, false)
   const building = (phrases: number, done: number): RadioIntensityArc => ({
@@ -1173,7 +1173,7 @@ describe('radioIntensityTargetAhead: the target where a change lands (option A, 
     begun: true,
     first: false,
     untilBig: 3,
-    peakRows: 5,
+    peakRows: 4,
     phrases,
     done
   })
@@ -1272,24 +1272,26 @@ describe('radioIntensityTargetAhead: the target where a change lands (option A, 
       radioIntensityAhead(ride, { ...where, count }, 16)
         .map((t, i) => (t.step ? i : -1))
         .filter((i) => i >= 0)
-    // 5 rows: one stripped at the cycle's top (4), one added back at the next phrase start (8)
-    expect(steps(5)).toEqual([4, 8])
-    // at the fewest rows nothing is stripped, and the build is raised to fit its three adds
-    expect(steps(2)).toEqual([8, 12, 16])
+    // 4 rows: one stripped at the cycle's top (4), one added back at the next phrase start (8)
+    expect(steps(4)).toEqual([4, 8])
+    // rows of his above the peak: one stripped, none added back
+    expect(steps(5)).toEqual([4])
+    // at the fewest rows nothing is stripped, and the build adds its two
+    expect(steps(2)).toEqual([8, 12])
   })
 
   it("radio's change lands past the tops an arc step takes, on its own grid", () => {
     const ride: RadioIntensityArc = { ...building(1, 0), phase: 'drop' }
     // due at the cycle's top (4), which the strip-back takes, then the add's (8): it lands at 12,
     // the build's third phrase (the menu's middle, 3 phrases: the top target)
-    const five = { ...where, count: 5 }
-    expect(radioIntensityLandingTarget(ride, five, 4, 4)).toBeCloseTo(hi, 9)
+    const four = { ...where, count: 4 }
+    expect(radioIntensityLandingTarget(ride, four, 4, 4)).toBeCloseTo(hi, 9)
     // with no phrase grid it takes the next free top: still the build's first phrase
-    expect(radioIntensityLandingTarget(ride, five, 4, 0)).toBeCloseTo(lo + (hi - lo) / 3, 9)
+    expect(radioIntensityLandingTarget(ride, four, 4, 0)).toBeCloseTo(lo + (hi - lo) / 3, 9)
     // (and with nothing stepping there, the build's first phrase too)
-    expect(radioIntensityTargetAhead(ride, five, 4)).toBeCloseTo(lo + (hi - lo) / 3, 9)
+    expect(radioIntensityTargetAhead(ride, four, 4)).toBeCloseTo(lo + (hi - lo) / 3, 9)
     // a top no step takes is where it lands (the build at its peak adds nothing)
-    expect(radioIntensityLandingTarget(building(3, 0), five, 4, 4)).toBeCloseTo(
+    expect(radioIntensityLandingTarget(building(3, 0), four, 4, 4)).toBeCloseTo(
       lo + ((hi - lo) * 2) / 3,
       9
     )

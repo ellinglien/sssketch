@@ -1,9 +1,11 @@
 // src/shared/radioDensity.ts
 //
 // THE DENSITY ARC (Elling, 2026-10-01: "sometimes minimal, grow into
-// maximal", then "5 as the top"). While radio runs, the number of rows
-// grows toward a drawn peak and thins back to a drawn trough, one row per
-// step, each leg 96-192 bars long. First built in the web radio
+// maximal", then "5 as the top"; 2026-11-21: "i find the number of elements
+// in the radio often a bit too many", so the top is now 4 and a peak is 3 or
+// 4 -- spec 2026-11-21-picking-key-level-groove-design, 4). While radio
+// runs, the number of rows grows toward a drawn peak and thins back to a
+// drawn trough, one row per step, each leg 96-192 bars long. First built in the web radio
 // (ell.ing/radio src/radio/step.ts); these are the pure rules, shared.
 //
 // Discover is not the web radio: Elling adds, removes and padlocks rows by
@@ -38,9 +40,14 @@ export {
 
 /** Fewest and most rows the arc aims for; an empty panel starts at MIN. */
 export const DENSITY_MIN = 2 // Elling: slow arc 2→5
-export const DENSITY_MAX = 5 // Elling: slow arc 2→5 ("5 as the top")
-/** Each leg's top and bottom, drawn (whole rows, both inclusive). */
-export const DENSITY_PEAK = { min: 4, max: 5 } as const
+// Elling, 2026-10-01: slow arc 2→5 ("5 as the top"). 2026-11-21: "i find the number of elements
+// in the radio often a bit too many" -- 4. Only the arcs' own ceiling (the density arc's adds, the
+// intensity arc's peaks): rows he adds by hand are never capped by it.
+export const DENSITY_MAX = 4
+/** Each leg's top and bottom, drawn (whole rows, both inclusive). The peak was 4 or 5 until
+ * 2026-11-21 (Elling: "often a bit too many"); the intensity arc's ordinary peaks are the same
+ * two numbers (radioIntensityArc's nextBuild). */
+export const DENSITY_PEAK = { min: 3, max: 4 } as const
 export const DENSITY_TROUGH = { min: 2, max: 3 } as const
 /** Bars a leg (up, or down) takes, drawn. */
 export const DENSITY_LEG_BARS: readonly [number, number] = [96, 192]
@@ -55,13 +62,20 @@ export interface DensityLeg {
   stepBars: number
 }
 
-/** A new leg from `count` rows: up to a drawn peak, or down to a drawn trough. */
+/** A new leg from `count` rows: up to a drawn peak, or down to a drawn trough. A peak of 3 can
+ * follow a trough of 3, so the draw leaves out ends that go nowhere: a growing leg's target is
+ * above `count` and a thinning leg's below it, wherever the window has such a row (past the
+ * window, its nearest end: the leg turns at its first step, as it always did). */
 export function newDensityLeg(
   phase: DensityLeg['phase'],
   count: number,
   random: () => number = Math.random
 ): DensityLeg {
-  const window = phase === 'growing' ? DENSITY_PEAK : DENSITY_TROUGH
+  const whole = phase === 'growing' ? DENSITY_PEAK : DENSITY_TROUGH
+  const window =
+    phase === 'growing'
+      ? { min: Math.max(whole.min, Math.min(whole.max, count + 1)), max: whole.max }
+      : { min: whole.min, max: Math.min(whole.max, Math.max(whole.min, count - 1)) }
   const target = Math.min(
     DENSITY_MAX,
     Math.max(DENSITY_MIN, nextRadioIntervalBarsInWindow(window, random))
@@ -110,7 +124,7 @@ export function advanceDensityLeg(
 }
 
 /** The kind a growing arc adds: the first place in radio's starter order
- * (drums, bass, lead, warm, drums) the rows do not already fill -- his rows
+ * (drums, bass, front, back; a second drums until 2026-11-21) the rows do not already fill -- his rows
  * included, and a combination row counting for each of its kinds. Null
  * once the first DENSITY_MAX places are all filled. */
 export function nextArcKind(

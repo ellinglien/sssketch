@@ -4,6 +4,8 @@ import {
   DENSITY_LEG_BARS,
   DENSITY_MAX,
   DENSITY_MIN,
+  DENSITY_PEAK,
+  DENSITY_TROUGH,
   advanceDensityLeg,
   arcExitingRow,
   densityArrival,
@@ -27,22 +29,47 @@ describe('normalizeRadioDensity', () => {
 })
 
 describe('newDensityLeg', () => {
-  it('grows to a peak of 4 or 5 and thins to a trough of 2 or 3', () => {
-    expect(newDensityLeg('growing', 2, fixed(0)).target).toBe(4)
-    expect(newDensityLeg('growing', 2, fixed(0.99)).target).toBe(5)
+  it('grows to a peak of 3 or 4 and thins to a trough of 2 or 3', () => {
+    expect(DENSITY_PEAK).toEqual({ min: 3, max: 4 })
+    expect(DENSITY_TROUGH).toEqual({ min: 2, max: 3 })
+    expect(newDensityLeg('growing', 2, fixed(0)).target).toBe(3)
+    expect(newDensityLeg('growing', 2, fixed(0.99)).target).toBe(4)
     expect(newDensityLeg('thinning', 5, fixed(0)).target).toBe(2)
     expect(newDensityLeg('thinning', 5, fixed(0.99)).target).toBe(3)
   })
 
+  it('a growing leg never heads for 5, wherever it starts', () => {
+    for (let count = 0; count <= 8; count++) {
+      for (let r = 0; r < 1; r += 0.05) {
+        expect([3, 4]).toContain(newDensityLeg('growing', count, fixed(r)).target)
+        expect([2, 3]).toContain(newDensityLeg('thinning', count, fixed(r)).target)
+      }
+    }
+  })
+
+  it('a leg goes somewhere: up from 3 is 4, down from 3 is 2', () => {
+    for (let r = 0; r < 1; r += 0.05) {
+      expect(newDensityLeg('growing', 3, fixed(r)).target).toBe(4)
+      expect(newDensityLeg('thinning', 3, fixed(r)).target).toBe(2)
+    }
+    // already at the window's end or past it: that end, and the leg turns at its first step
+    expect(newDensityLeg('growing', 4, fixed(0)).target).toBe(4)
+    expect(newDensityLeg('growing', 7, fixed(0)).target).toBe(4)
+    expect(newDensityLeg('thinning', 2, fixed(0.99)).target).toBe(2)
+  })
+
   it('spreads the leg over its steps', () => {
-    const leg = newDensityLeg('growing', 2, fixed(0))
+    const draws = [0.99, 0] // the target, then the leg's bars
+    const leg = newDensityLeg('growing', 2, () => draws.shift()!)
     // target 4, leg 96 bars, two steps
     expect(leg.stepBars).toBe(DENSITY_LEG_BARS[0] / 2)
     expect(leg.bars).toBe(0)
   })
 
   it('never divides by zero when already at the target', () => {
-    const leg = newDensityLeg('growing', 4, fixed(0))
+    const draws = [0.99, 0]
+    const leg = newDensityLeg('growing', 4, () => draws.shift()!)
+    expect(leg.target).toBe(4)
     expect(leg.stepBars).toBe(DENSITY_LEG_BARS[0])
   })
 })
@@ -121,11 +148,10 @@ describe('advanceDensityLeg', () => {
 })
 
 describe('nextArcKind', () => {
-  it('follows the starter order: drums, bass, front, back, a second drums', () => {
+  it('follows the starter order: drums, bass, front, back', () => {
     expect(nextArcKind([])).toBe('drums')
     expect(nextArcKind([['drums'], ['bass']])).toBe('front')
     expect(nextArcKind([['drums'], ['bass'], ['front']])).toBe('back')
-    expect(nextArcKind([['drums'], ['bass'], ['front'], ['back']])).toBe('drums')
   })
 
   it("fills the first gap, whoever's rows they are", () => {
@@ -138,8 +164,8 @@ describe('nextArcKind', () => {
   })
 
   it('is null once the first DENSITY_MAX of the order are all on the bed', () => {
-    expect(DENSITY_MAX).toBe(5)
-    expect(nextArcKind([['drums'], ['bass'], ['front'], ['back'], ['drums']])).toBeNull()
+    expect(DENSITY_MAX).toBe(4)
+    expect(nextArcKind([['drums'], ['bass'], ['front'], ['back']])).toBeNull()
   })
 })
 

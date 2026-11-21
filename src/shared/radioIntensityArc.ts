@@ -36,6 +36,7 @@
 // length (and a cycle's countdown) is drawn where it lands.
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
+import { DENSITY_PEAK } from './radioDensity'
 import type { RadioHookThrow } from './radioHooks'
 import { drawThrowBeats, drawThrowEcho } from './radioThrows'
 import type { TurnaroundArc } from './radioTurnaround'
@@ -507,7 +508,12 @@ function nextBuild(
     }
   }
   const lo = Math.max(1, input.min)
-  const peak = big ? input.max : clamp01(input.energy / 100) < 0.5 ? 4 : 5
+  // an ordinary peak is the density arc's: 3 or 4 rows since 2026-11-21 (4 or 5 before)
+  const peak = big
+    ? input.max
+    : clamp01(input.energy / 100) < 0.5
+      ? DENSITY_PEAK.min
+      : DENSITY_PEAK.max
   const peakRows = Math.min(input.max, Math.max(lo, peak))
   const adds = Math.max(0, peakRows - count)
   const drawn = drawLength(INTENSITY_PHRASES.build[energyBand(input.energy)], input.random)
