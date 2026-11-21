@@ -6,6 +6,7 @@ import {
   kWeightingHighPass,
   kWeightingShelf,
   rerolledGain,
+  rowGainFor,
   stemLevelFeatures,
   type Biquad
 } from './stemLevel'
@@ -206,5 +207,33 @@ describe('rerolledGain', () => {
   it('stays in 0..1', () => {
     expect(rerolledGain(1, 0.25, 1)).toBe(1)
     expect(rerolledGain(0, 0.5, 1)).toBe(0)
+  })
+})
+
+describe('rowGainFor', () => {
+  const quiet = { stemCID: 'stem-a', arrivalGain: 0.5 }
+  const loud = { stemCID: 'stem-b', arrivalGain: 0.25 }
+  const plain = { stemCID: 'stem-c' }
+  it("a fresh row takes its first stem's arrival gain", () =>
+    expect(rowGainFor({ gain: 1, candidate: null }, quiet)).toBe(0.5))
+  it('an untouched row follows the new stem', () =>
+    expect(rowGainFor({ gain: 0.5, candidate: quiet }, loud)).toBeCloseTo(0.25, 9))
+  it('a balance set by hand is carried to the new stem', () =>
+    expect(rowGainFor({ gain: 0.25, candidate: quiet }, plain)).toBeCloseTo(0.5, 9))
+  it("the row's own stem plays at the row's gain, exactly", () =>
+    expect(rowGainFor({ gain: 0.3, candidate: quiet }, { ...quiet })).toBe(0.3))
+  it('the outgoing stem keeps the gain it had while the new pick resolves', () => {
+    const before = { gain: 0.4, candidate: quiet }
+    const after = { gain: rowGainFor(before, loud), candidate: loud }
+    expect(rowGainFor(after, quiet)).toBeCloseTo(0.4, 9)
+  })
+  it('a seeded row (no candidate) keeps its gain for its seed and scales it for a pick', () => {
+    expect(rowGainFor({ gain: 0.8, candidate: null }, null)).toBe(0.8)
+    expect(rowGainFor({ gain: 0.8, candidate: null }, quiet)).toBeCloseTo(0.4, 9)
+  })
+  it('a row left with no stem gives the trim back, so the next pick does not trim twice', () => {
+    const emptied = { gain: rowGainFor({ gain: 0.5, candidate: quiet }, null), candidate: null }
+    expect(emptied.gain).toBe(1)
+    expect(rowGainFor(emptied, loud)).toBe(0.25)
   })
 })

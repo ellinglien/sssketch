@@ -476,6 +476,7 @@ import {
 } from '@shared/toolkit'
 import type { RiserClip } from '@shared/riser'
 import { masterScaledCurve, masterScaledGains, masterSendsFor } from '@shared/performanceDeck'
+import { rowGainFor } from '@shared/stemLevel'
 import { MASTER_LIVE_PARAM_KEY } from '@shared/liveParam'
 import { scheduleLiveParamSync } from './liveParamSync'
 import { radioPaceRowsThisChange } from '@shared/radioPace'
@@ -766,12 +767,33 @@ function newArmId(): string {
  * passed in rather than read at send time because by then the build has
  * taken a few milliseconds and the position has moved, and the number
  * worth printing is where in the lap the decision was made. */
+/** A preview project's stem numbering, live or staged (currentPreviewMappingRef, radioStageRef). */
+interface PreviewMapping {
+  groupId: string
+  slotIndexById: Map<string, number>
+  /** The candidate each row's stem in that project came from (null: a seed). A row's live
+   * volume is rowGainFor(row, this): right while the project and the row disagree, as when a
+   * staged swap has gone live a moment before its commit, or a pick has landed and is resolving. */
+  candidateById: Map<string, DiscoverCandidate | null>
+}
+
+/** One row's stem in a preview project being built, with the candidate it came from. */
+interface PreviewMember {
+  id: string
+  stem: ResolvedCandidateStem
+  candidate: DiscoverCandidate | null
+  gain: number
+}
+
 interface RadioStageRequest {
   token: number
   /** Every row whose stem changes at this wrap -- radio's own held change
    * and, from Task 3 of the 2026-09-29 manual-changes plan, every manual
    * one. See mergeStageChanges. */
   changes: { slotId: string; stem: ResolvedCandidateStem }[]
+  /** The pick each change lands (by row): the staged project plays its stem at the gain the row
+   * will have once it lands (rowGainFor), so the level does not step after the landing. */
+  incoming: Map<string, DiscoverCandidate | null>
   /** Rows not in the live mix yet (added or duplicated while radio ran),
    * joined into the staged member list. */
   joining: string[]
@@ -1345,6 +1367,9 @@ export function DiscoverPanel({
   // Web-Audio-backed version there's no separate already-stretched map to
   // keep in sync with this one.
   const resolvedStemsRef = useRef<Map<string, ResolvedCandidateStem>>(new Map())
+  /** The candidate each resolvedStemsRef entry was resolved from (null: a seed). Written and
+   * dropped with it. A row's stem plays at rowGainFor(row, this). */
+  const resolvedCandidatesRef = useRef<Map<string, DiscoverCandidate | null>>(new Map())
   // Reactive (unlike resolvedStemsRef) so the row waveforms -- see
   // DiscoverSlotRow's own discoverWindowLayout usage below -- re-render
   // when a slot resolves/re-resolves/clears. Direct report: every slot's
@@ -1603,10 +1628,7 @@ export function DiscoverPanel({
   // so this is what lets a live gain-drag update (updateSlotGain, below)
   // address the right `stemKey(groupId, slot)` without waiting for a full
   // rebuild. Null while no preview is loaded.
-  const currentPreviewMappingRef = useRef<{
-    groupId: string
-    slotIndexById: Map<string, number>
-  } | null>(null)
+  const currentPreviewMappingRef = useRef<PreviewMapping | null>(null)
   // Per-call generation counter guarding syncPreviewToEngine's own async
   // build-and-send chain (candidate resolve already happened by the time
   // this runs; this guards buildEngineProject's own stretch-resolution
@@ -1981,7 +2003,8 @@ export function DiscoverPanel({
     if (!mapping) return
     const slotGains = new Map<string, number>()
     for (const [slotId, slotIndex] of mapping.slotIndexById) {
-      const gain = slotsRef.current.find((sl) => sl.id === slotId)?.gain ?? 1
+      const slot = slotsRef.current.find((sl) => sl.id === slotId)
+      const gain = slot ? rowGainFor(slot, mapping.candidateById.get(slotId) ?? null) : 1
       slotGains.set(stemKey(mapping.groupId, slotIndex), gain)
     }
     for (const [key, value] of masterScaledGains(slotGains, masterLevelRef.current / 100)) {
@@ -2264,13 +2287,17 @@ export function DiscoverPanel({
         // the row goes on saying "a change is coming" for the lap, the
         // undo stack and the UI are untouched, and the engine is the only
         // thing holding the future.
-        const stem =
-          stage?.changes.find((c) => c.slotId === id)?.stem ?? resolvedStemsRef.current.get(id)
+        const staged = stage?.changes.find((c) => c.slotId === id)
+        const stem = staged?.stem ?? resolvedStemsRef.current.get(id)
         if (!stem) return null
-        const gain = slots.find((s) => s.id === id)?.gain ?? 1
-        return { id, stem, gain }
+        // The stem's own candidate, not the row's: an incoming stem plays at the gain its row
+        // will have once it lands, and an outgoing one still here keeps the gain it had.
+        const candidate =
+          (staged ? stage?.incoming.get(id) : resolvedCandidatesRef.current.get(id)) ?? null
+        const slot = slots.find((s) => s.id === id)
+        return { id, stem, candidate, gain: slot ? rowGainFor(slot, candidate) : 1 }
       })
-      .filter((x): x is { id: string; stem: ResolvedCandidateStem; gain: number } => x !== null)
+      .filter((x): x is PreviewMember => x !== null)
 
     if (members.length === 0) {
       // A stage with nothing in the mix is not a swap, it is a teardown --
@@ -2828,7 +2855,8 @@ export function DiscoverPanel({
         radioStageRef.current.sent = true
         radioStageRef.current.mapping = {
           groupId: rifff.groupId,
-          slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1]))
+          slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1])),
+          candidateById: new Map(members.map(({ id, candidate }) => [id, candidate]))
         }
         radioTraceStageSent(stage.token, stage.label, stage.atPos, stage.loopBars) // TEMP
         await window.rifffApi.engineStageProject(stage.token, project, stage.atBars)
@@ -2888,7 +2916,8 @@ export function DiscoverPanel({
 
       currentPreviewMappingRef.current = {
         groupId: rifff.groupId,
-        slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1]))
+        slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1])),
+        candidateById: new Map(members.map(({ id, candidate }) => [id, candidate]))
       }
       // A project without a throw curve is now live, so a clear owed for an ended throw
       // (radioThrowClearOwedRef) has been paid by this push: no extra one after a stage lands.
@@ -3054,7 +3083,11 @@ export function DiscoverPanel({
   //
   // There's no separate async stretch step anymore -- buildEngineProject
   // (via syncPreviewToEngine) resolves that internally, every call.
-  function reportSlotResolution(id: string, stem: ResolvedCandidateStem | null): void {
+  function reportSlotResolution(
+    id: string,
+    stem: ResolvedCandidateStem | null,
+    candidate: DiscoverCandidate | null
+  ): void {
     if (stem) {
       radioTraceMark('resolved') // TEMP (2026-09-28), remove with radioTrace.ts
       // The swap this slot's commit was holding every push for has landed.
@@ -3064,6 +3097,7 @@ export function DiscoverPanel({
       // exactly the window the hold exists to cover.
       releaseSyncHold(id)
       resolvedStemsRef.current.set(id, stem)
+      resolvedCandidatesRef.current.set(id, candidate)
       resolvedBarLengthsRef.current = new Map(resolvedBarLengthsRef.current).set(id, stem.barLength)
       setResolvedBarLengths((prev) => {
         const next = new Map(prev)
@@ -3195,12 +3229,17 @@ export function DiscoverPanel({
     const mapping = currentPreviewMappingRef.current
     const slotIndex = mapping?.slotIndexById.get(id)
     if (mapping && slotIndex !== undefined) {
+      // For the stem the engine has: the row's own, but for the moment a pick is resolving.
+      const slot = slotsRef.current.find((s) => s.id === id)
+      const live = slot
+        ? rowGainFor({ ...slot, gain }, mapping.candidateById.get(id) ?? null)
+        : gain
       // Times the master, or dragging one slot while the master is down
       // would push that one slot back up to its unscaled gain.
       scheduleLiveParamSync(
         'volume',
         stemKey(mapping.groupId, slotIndex),
-        gain * (masterLevelRef.current / 100)
+        live * (masterLevelRef.current / 100)
       )
     }
   }
@@ -3921,7 +3960,7 @@ export function DiscoverPanel({
      * fader and filter can be re-asserted against the RIGHT stem keys the
      * moment it goes live. A fresh groupId is minted on every build, so
      * the live mapping still describes the outgoing project until then. */
-    mapping: { groupId: string; slotIndexById: Map<string, number> } | null
+    mapping: PreviewMapping | null
   } | null>(null)
   // Monotonic, never reused. The token exists because EngineClient
   // matches replies by message TYPE rather than by request id, so two
@@ -3938,7 +3977,7 @@ export function DiscoverPanel({
    * is where the branch leaves those for it. */
   const radioStageLandedRef = useRef<{
     token: number
-    mapping: { groupId: string; slotIndexById: Map<string, number> } | null
+    mapping: PreviewMapping | null
   } | null>(null)
   /** The held change the engine has ALREADY swapped in, when its
    * project-applied beat the wrap tick here.
@@ -7186,9 +7225,17 @@ export function DiscoverPanel({
           : radioGestureRef.current.length > 0
             ? 'led'
             : 'cut'
+    // Radio's own and its companions' first: a manual change on a row wins it (mergeStageChanges).
+    const incoming = new Map<string, DiscoverCandidate | null>()
+    if (readyLed !== null) {
+      incoming.set(readyLed.slotId, readyLed.pick.candidate)
+      for (const k of radioStagedCompanions(readyLed)) incoming.set(k.slotId, k.pick.candidate)
+    }
+    for (const [slotId, m] of stagedManual ?? []) incoming.set(slotId, m.pick.candidate)
     void syncPreviewToEngine(previewingSlotIdsRef.current, {
       token,
       changes: merged.changes,
+      incoming,
       joining: merged.joining,
       ...(leaving.length > 0 && { leaving }),
       gestures: merged.arrivals.map((a) => ({
@@ -9357,6 +9404,7 @@ export function DiscoverPanel({
       setSoloedSlotId(null)
     }
     resolvedStemsRef.current.delete(id)
+    resolvedCandidatesRef.current.delete(id)
     if (resolvedBarLengthsRef.current.has(id)) {
       const next = new Map(resolvedBarLengthsRef.current)
       next.delete(id)
@@ -9566,7 +9614,10 @@ export function DiscoverPanel({
           pickBar: candidate !== null ? slot.pickBar : undefined,
           reclassified: candidate !== null ? slot.reclassified : undefined,
           hasRerolled: false,
-          gain: slot.gain
+          // The copy lands the source's stem at the source's gain: its balance without the
+          // stem's arrival gain, which the landing puts back (rowGainFor). Not clamped, or a
+          // row turned up past its arrival gain would land lower; the copy has no stem till then.
+          gain: slot.gain / (candidate?.arrivalGain ?? 1)
         }
       ])
       if (immediate) commitSlotPick(copyId, pick)
@@ -9658,7 +9709,15 @@ export function DiscoverPanel({
     }
     setSlots((prev) =>
       prev.map((s) =>
-        s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
+        s.id === id
+          ? {
+              ...s,
+              candidate,
+              gain: rowGainFor(s, candidate),
+              hasRerolled: true,
+              seedStem: undefined
+            }
+          : s
       )
     )
     // The direct write (radio off): a turn for its member, as commitSlotPick counts one.
@@ -10248,6 +10307,8 @@ export function DiscoverPanel({
           ? {
               ...s,
               candidate: pick.candidate,
+              // the row arrives at its stem's gain, a balance set by hand carried over
+              gain: rowGainFor(s, pick.candidate),
               ...(pick.unranked
                 ? {}
                 : {
@@ -10482,7 +10543,15 @@ export function DiscoverPanel({
       } else {
         setSlots((prev) =>
           prev.map((s) =>
-            s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
+            s.id === id
+              ? {
+                  ...s,
+                  candidate,
+                  gain: rowGainFor(s, candidate),
+                  hasRerolled: true,
+                  seedStem: undefined
+                }
+              : s
           )
         )
         noteArtistLanding(candidate)
@@ -14396,7 +14465,7 @@ export function DiscoverPanel({
               onRerollRandom={(immediate) => void rerollRandomSlot(slot.id, immediate)}
               onTogglePreview={() => toggleSlotPreview(slot.id)}
               onToggleSolo={() => toggleSlotSolo(slot.id)}
-              onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
+              onResolvedChange={(stem, candidate) => reportSlotResolution(slot.id, stem, candidate)}
               onSlotResolutionAbandoned={() => abandonSlotResolution(slot.id)}
               onGainChange={(gain) => updateSlotGain(slot.id, gain)}
               onSwapFromNearby={(candidate, immediate) =>

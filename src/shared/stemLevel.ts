@@ -215,3 +215,22 @@ export function rerolledGain(rowGain: number, oldArrival: number, newArrival: nu
   const old = oldArrival > 0 ? oldArrival : 1
   return Math.min(1, Math.max(0, (rowGain / old) * newArrival))
 }
+
+/** What rowGainFor reads of a stem: a DiscoverCandidate, or a web radio layer's record. */
+export interface LevelledStem {
+  stemCID: string
+  arrivalGain?: number
+}
+
+/** The gain a row plays `stem` at. Its own stem (the row's candidate): the row's gain. Any other
+ * stem -- a pick about to land, or the outgoing one still sounding while the pick resolves -- the
+ * row's balance carried to that stem's arrival gain (rerolledGain). Null is a stem with no
+ * arrival gain (a seed, or none). So a landing pick's gain and the gain the engine is sent for it
+ * ahead of the landing are one number. */
+export function rowGainFor(
+  row: { gain: number; candidate: LevelledStem | null },
+  stem: LevelledStem | null
+): number {
+  if (stem?.stemCID === row.candidate?.stemCID) return row.gain
+  return rerolledGain(row.gain, row.candidate?.arrivalGain ?? 1, stem?.arrivalGain ?? 1)
+}

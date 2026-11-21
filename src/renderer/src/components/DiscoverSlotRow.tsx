@@ -445,7 +445,11 @@ export function DiscoverSlotRow({
    * resolvedStemsRef and any currently-playing mix this slot is part of
    * stay in sync with what's actually showing on screen, rather than
    * DiscoverPanel needing to re-resolve candidates itself. */
-  onResolvedChange: (stem: ResolvedCandidateStem | null) => void
+  /** `candidate`: the one `stem` was resolved from (null for a seed, or with no stem). */
+  onResolvedChange: (
+    stem: ResolvedCandidateStem | null,
+    candidate: DiscoverCandidate | null
+  ) => void
   /** DiscoverPanel's own forgetSlotResolution(id) (plus the matching
    * previewing-mix cleanup) -- called once when this row's own resolution
    * hits a TERMINAL failure state (resolveFailed or noMatchFound, both
@@ -834,8 +838,8 @@ export function DiscoverSlotRow({
   // re-render instead of only when THIS row's own resolvedStem actually
   // changes.
   useEffect(() => {
-    onResolvedChange(resolvedStem)
-    return () => onResolvedChange(null)
+    onResolvedChange(resolvedStem, resolvedStem ? (resolvedForCurrent?.candidate ?? null) : null)
+    return () => onResolvedChange(null, null)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
   }, [resolvedStem])
 
