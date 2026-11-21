@@ -176,7 +176,7 @@ describe('key term', () => {
   const MINOR = 5, MAJOR = 0
   const bed = [{ root: 9, scale: MINOR }]
   const fit = cand({ stemCID: 'fit', riffBpm: 120, riffRoot: 9, riffScale: MINOR })
-  const clash = cand({ stemCID: 'clash', riffBpm: 120, riffRoot: 10, riffScale: MAJOR })
+  const clash = cand({ stemCID: 'clash', riffBpm: 120, riffRoot: 6, riffScale: MAJOR })
   const unknown = cand({ stemCID: 'unknown', riffBpm: 120 })
 
   it('ranks a fitting key over an unknown one over a clash', () => {
@@ -200,13 +200,13 @@ describe('key term', () => {
   it('scores against the mean of the others', () => {
     const r = rankCandidates([fit], {
       targetBpm: 120,
-      key: { others: [...bed, { root: 10, scale: MAJOR }] }
+      key: { others: [...bed, { root: 6, scale: MAJOR }] }
     })
     expect(r[0].score).toBeCloseTo(1 + KEY_WEIGHT * 0.5, 5) // fits one fully, clashes with one
   })
   it('at the default matching a fitting stem is drawn about three times as often', () => {
     const pool = Array.from({ length: 100 }, (_, i) =>
-      cand({ stemCID: `s${i}`, riffBpm: 120, riffRoot: i % 2 ? 9 : 10, riffScale: i % 2 ? MINOR : MAJOR })
+      cand({ stemCID: `s${i}`, riffBpm: 120, riffRoot: i % 2 ? 9 : 6, riffScale: i % 2 ? MINOR : MAJOR })
     )
     const ranked = rankCandidates(pool, { targetBpm: 120, key: { others: bed } })
     let seed = 7
