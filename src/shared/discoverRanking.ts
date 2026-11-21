@@ -8,7 +8,20 @@ import {
 import { isDialKind, type DiscoverRankKind, type DiscoverTraitKind } from './discoverSlotKind'
 import { radioClashBedScore, radioClashTraitScore, type RankClash } from './radioClash'
 import { DIG_WEIGHT, radioDigCloseness, type RankDig } from './radioDig'
+import { hasKey, keyFit, type RiffKey } from './keyFit'
 import { intensityTerms, type RankIntensity } from './radioIntensity'
+
+// A fitting key outweighs a favourite (1.5): a strong lean, not a rule (spec 2026-11-21, 1). At
+// the default matching a fitting stem is drawn about three times as often as a clashing one of
+// the same tempo; discoverRanking.test.ts measures it.
+export const KEY_WEIGHT = 2
+
+/** The keys a pick will sound with (every other row that isn't drums). `exempt`: the slot
+ * being filled is drums, which has no key. */
+export interface RankKey {
+  others: readonly RiffKey[]
+  exempt?: boolean
+}
 
 export interface RankedCandidate {
   candidate: DiscoverCandidate
@@ -86,7 +99,8 @@ export function rankCandidates(
     targetTraits = [],
     clash,
     dig,
-    intensity
+    intensity,
+    key
   }: {
     targetBpm: number
     favouriteStemCIDs?: ReadonlySet<string>
@@ -112,6 +126,10 @@ export function rankCandidates(
      * - target|), an unscored one the neutral 0.5 closeness. Absent: no term, exactly the ranking
      * without it. */
     intensity?: RankIntensity
+    /** The key lean (@shared/keyFit, spec 2026-11-21, 1): every candidate gains KEY_WEIGHT * its
+     * mean keyFit to the sounding rows' keys. Absent, exempt, or no other row with a known key:
+     * no term, exactly the ranking without it. */
+    key?: RankKey
   }
 ): RankedCandidate[] {
   // Pool-relative values per kind, for candidates without a library
@@ -156,6 +174,7 @@ export function rankCandidates(
 
   const boost = FAVOURITE_BOOST * clampWeight(favouriteScale)
   const leaned = intensity ? intensityTerms(candidates, intensity) : null
+  const keyOthers = key && !key.exempt ? key.others.filter(hasKey) : []
   return candidates
     .map((candidate, i) => {
       const bpmDistance = Math.abs(candidate.riffBpm - targetBpm)
@@ -183,6 +202,12 @@ export function rankCandidates(
       }
       if (clash) score += radioClashBedScore(candidate.traitPercentiles ?? {}, clash)
       if (dig) score += DIG_WEIGHT * radioDigCloseness(dig, candidate)
+      if (keyOthers.length > 0) {
+        const own = { root: candidate.riffRoot ?? null, scale: candidate.riffScale ?? null }
+        let sum = 0
+        for (const other of keyOthers) sum += keyFit(own, other)
+        score += KEY_WEIGHT * (sum / keyOthers.length)
+      }
       if (leaned) score += leaned[i]
       return { candidate, score }
     })
