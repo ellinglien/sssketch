@@ -90,4 +90,7 @@ export interface DiscoverCandidate {
   /** The gain a row holding this stem starts at (@shared/stemLevel arrivalGain), (0, 1]. Main
    * attaches it to every roll; absent (older constructors, an unmeasured stem): 1. */
   arrivalGain?: number
+  /** How much a stem demands, 0 sparse and quiet to 1 busy and loud (@shared/radioIntensity
+   * stemPresence); attached to every roll; absent or null: unknown. */
+  presence?: number | null
 }

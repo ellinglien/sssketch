@@ -146,6 +146,16 @@ export function stemIntensityScore(
   return sum / weight
 }
 
+/** How much a stem demands (spec 2026-11-21-picking-key-level-groove-design, 3): the mean of its
+ * `busy` and `full` parts, 0 sparse and quiet to 1 busy and loud. One part missing: the other
+ * alone; both: null. */
+export function stemPresence(values: IntensityValues, tables: TraitQuantileTables): number | null {
+  const busy = part(values, tables, PART_INPUTS.busy)
+  const full = part(values, tables, PART_INPUTS.full)
+  if (busy === null || full === null) return busy ?? full
+  return (busy + full) / 2
+}
+
 /** The score rounded to 3 places (the web index's `x`), or null. */
 export function roundIntensity(score: number | null): number | null {
   return score === null || !Number.isFinite(score) ? null : Math.round(score * 1000) / 1000

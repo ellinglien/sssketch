@@ -1917,7 +1917,7 @@ describe('getDiscoverCandidates (kind sets)', () => {
     for (const c of await roll(false)) expect('intensity' in c).toBe(false)
   })
 
-  it('every roll: a loud stem carries the gain its row arrives at; a quiet or unmeasured one none', async () => {
+  it('every roll: a loud stem carries the gain its row arrives at, a measured one its presence', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['loud', 'quiet', 'none'])
     seedStem(own, 'loud', 'jam1', { instrument: DRUM })
@@ -1937,7 +1937,10 @@ describe('getDiscoverCandidates (kind sets)', () => {
       })
 
     // Before the library's values are in memory a roll reads nothing for it: rows arrive at 1.
-    for (const c of await roll()) expect('arrivalGain' in c).toBe(false)
+    for (const c of await roll()) {
+      expect('arrivalGain' in c).toBe(false)
+      expect('presence' in c).toBe(false)
+    }
 
     await prewarmTraitQuantileTables(own)
     const pool = await roll()
@@ -1945,6 +1948,10 @@ describe('getDiscoverCandidates (kind sets)', () => {
     expect(of('loud').arrivalGain).toBeCloseTo(10 ** (-6 / 20), 5)
     expect('arrivalGain' in of('quiet')).toBe(false)
     expect('arrivalGain' in of('none')).toBe(false)
+    // Presence rides the same loop: the loud busy stem demands most, an unmeasured one is unknown.
+    expect(of('loud').presence).toBeGreaterThan(0.8)
+    expect(of('quiet').presence).toBeLessThan(0.2)
+    expect('presence' in of('none')).toBe(false)
   })
 
   it('an empty kind set returns []', async () => {

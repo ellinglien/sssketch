@@ -15,6 +15,7 @@ import {
   roundIntensity,
   stemIntensityParts,
   stemIntensityScore,
+  stemPresence,
   type IntensityValues
 } from './radioIntensity'
 import { buildQuantileTable, type TraitQuantileTables } from './traitQuantiles'
@@ -121,6 +122,43 @@ describe('stemIntensityScore', () => {
     expect(roundIntensity(0.123456)).toBe(0.123)
     expect(roundIntensity(null)).toBeNull()
     expect(roundIntensity(Number.NaN)).toBeNull()
+  })
+})
+
+describe('stemPresence', () => {
+  it('a busy, loud, always-sounding stem is high', () => {
+    const strong = {
+      transientDensity: 95,
+      rhythmicStrength: 90,
+      loudnessLufs: 90,
+      activeFraction: 100
+    }
+    expect(stemPresence(strong, TABLES)).toBeGreaterThan(0.8)
+  })
+
+  it('a sparse quiet one is low', () => {
+    const sparse = {
+      transientDensity: 5,
+      rhythmicStrength: 10,
+      loudnessLufs: 10,
+      activeFraction: 15
+    }
+    expect(stemPresence(sparse, TABLES)).toBeLessThan(0.2)
+  })
+
+  it('is the mean of the busy and full parts, whatever low and bright say', () => {
+    const parts = stemIntensityParts(ALL, TABLES)
+    expect(stemPresence(ALL, TABLES)).toBeCloseTo((parts.busy! + parts.full!) / 2, 9)
+  })
+
+  it('only loudness known: the full part alone', () => {
+    expect(stemPresence({ loudnessLufs: 30 }, TABLES)).toBeCloseTo(0.3, 9)
+  })
+
+  it('nothing known: null', () => {
+    expect(stemPresence({}, TABLES)).toBeNull()
+    expect(stemPresence({ bassEnergyRatio: 50, spectralCentroidHz: 50 }, TABLES)).toBeNull()
+    expect(stemPresence(ALL, {})).toBeNull()
   })
 })
 

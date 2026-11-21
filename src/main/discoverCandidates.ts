@@ -35,6 +35,7 @@ import {
 import {
   INTENSITY_INPUT_FIELDS,
   stemIntensityScore,
+  stemPresence,
   type IntensityValues
 } from '@shared/radioIntensity'
 import {
@@ -1629,7 +1630,7 @@ export async function getDiscoverCandidates({
     alsoTraits,
     scope: { ownStemsOf }
   })
-  const levelled = await attachArrivalGain(ownDb, pool)
+  const levelled = await attachLevelAndPresence(ownDb, pool)
   return alsoIntensity ? attachDiscoverIntensity(ownDb, levelled) : levelled
 }
 
@@ -1785,17 +1786,19 @@ export async function attachDiscoverIntensity(
   return out
 }
 
-/** The gain each candidate's row should arrive at (spec 2026-11-21-picking-key-level-groove-design
- * 2), for EVERY roll and for the adjacency walk (discoverAdjacency.ts): arrivalGain of the stem's
- * loudness against the library's quieter quarter (ARRIVAL_TARGET_PERCENTILE of the loudnessLufs
- * quantile table; no table yet: ARRIVAL_TARGET_FALLBACK_LUFS). Set only when below 1.
+/** The gain each candidate's row should arrive at and the candidate's presence (spec
+ * 2026-11-21-picking-key-level-groove-design 2 and 3), for EVERY roll and for the adjacency walk
+ * (discoverAdjacency.ts). The gain: arrivalGain of the stem's loudness against the library's
+ * quieter quarter (ARRIVAL_TARGET_PERCENTILE of the loudnessLufs quantile table; no table yet:
+ * ARRIVAL_TARGET_FALLBACK_LUFS), set only when below 1. The presence: stemPresence over the same
+ * values and tables, set only when known.
  *
  * It reads the in-memory value table ONLY. While that table isn't current (before the startup
  * prewarm, or after it lost track of the feature rows) the pool is returned as it is and rows
- * arrive at 1, as before: attachDiscoverIntensity's SQL fallback would put a chunked read and a
+ * arrive at 1 with no presence, as before: attachDiscoverIntensity's SQL fallback would put a chunked read and a
  * JSON parse of every candidate's feature row, on a library that is often on a USB drive, into
  * every roll. Same order, same length; yields like attachTraitPercentiles. */
-export async function attachArrivalGain<C extends DiscoverCandidate>(
+export async function attachLevelAndPresence<C extends DiscoverCandidate>(
   ownDb: Database.Database,
   pool: C[]
 ): Promise<C[]> {
@@ -1811,8 +1814,14 @@ export async function attachArrivalGain<C extends DiscoverCandidate>(
   let sinceYield = 0
   const slice = newSlice()
   for (const c of pool) {
-    const gain = arrivalGain(valuesOf(c.stemCID)?.loudnessLufs, target)
-    out.push(gain < 1 ? { ...c, arrivalGain: gain } : c)
+    const values = valuesOf(c.stemCID)
+    const gain = arrivalGain(values?.loudnessLufs, target)
+    const presence = values === null ? null : stemPresence(values, tables)
+    out.push(
+      gain < 1 || presence !== null
+        ? { ...c, ...(gain < 1 && { arrivalGain: gain }), ...(presence !== null && { presence }) }
+        : c
+    )
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
       sinceYield = 0
