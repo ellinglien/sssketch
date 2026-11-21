@@ -41,6 +41,7 @@ import {
 } from '@shared/discoverMatchMeter'
 import type { ArrangeRole } from '@shared/stemRole'
 import { discoverWindowLayout } from '@shared/discoverWindowLayout'
+import { rowKeyLabel } from '@shared/discoverKey'
 import { startPointerDrag } from './dragUtils'
 import { type Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
@@ -1175,7 +1176,9 @@ export function DiscoverSlotRow({
                 : null,
               creatorInTooltip && slot.candidate?.creatorUserName
                 ? `by ${slot.candidate.creatorUserName}`
-                : null
+                : null,
+              // the riff's key (Endlesss's own root and scale), when it says something
+              rowKeyLabel(slot.candidate?.riffRoot, slot.candidate?.riffScale) ?? null
             ]
               .filter((p): p is string => p !== null)
               .join(' · ') || undefined

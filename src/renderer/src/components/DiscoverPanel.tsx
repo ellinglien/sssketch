@@ -61,6 +61,7 @@ import {
   type DensityLeg
 } from '@shared/radioDensity'
 import { DEFAULT_DISCOVER_CHAOS, rankCandidates, pickReroll } from '@shared/discoverRanking'
+import { rankKeyFor } from '@shared/discoverKey'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { heartFetchLabel } from '@shared/radioHearts'
 import { heartsButtonShown } from '@shared/features'
@@ -10105,6 +10106,13 @@ export function DiscoverPanel({
         // so a "warm" roll ranked by BPM alone. Every trait kind in the set
         // now adds its library percentile (rankCandidates).
         targetTraits,
+        // The key lean (@shared/discoverKey): against the rows sounding with this pick, the
+        // same rows as the clash bed below, so a muted or absent row doesn't pull the key.
+        key: rankKeyFor(
+          slotsRef.current.filter((s) => s.id !== id && previewingSlotIdsRef.current.has(s.id)),
+          id,
+          kinds
+        ),
         ...(clashAmount > 0
           ? {
               clash: {
