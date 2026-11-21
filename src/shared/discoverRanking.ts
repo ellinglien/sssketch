@@ -23,6 +23,18 @@ export interface RankKey {
   exempt?: boolean
 }
 
+// A trait's weight: balance shapes a pick as much as "bright" does, under key (2) and a
+// favourite (1.5). Spec 2026-11-21-picking-key-level-groove-design, 3.
+export const BALANCE_WEIGHT = 1
+
+/** The presences (a candidate's `presence`, 0 sparse and quiet to 1 busy and loud) of the rows a
+ * pick will sound with that count toward the balance. `exempt`: the slot being filled doesn't
+ * count (drums). */
+export interface RankBalance {
+  others: readonly number[]
+  exempt?: boolean
+}
+
 export interface RankedCandidate {
   candidate: DiscoverCandidate
   score: number
@@ -100,7 +112,8 @@ export function rankCandidates(
     clash,
     dig,
     intensity,
-    key
+    key,
+    balance
   }: {
     targetBpm: number
     favouriteStemCIDs?: ReadonlySet<string>
@@ -130,6 +143,11 @@ export function rankCandidates(
      * mean keyFit to the sounding rows' keys. Absent, exempt, or no other row with a known key:
      * no term, exactly the ranking without it. */
     key?: RankKey
+    /** The balance lean (spec 2026-11-21, 3): a candidate with a presence gains BALANCE_WEIGHT *
+     * (1 - |its presence - (1 - the strongest other row's)|), so a strong bed pulls sparse picks
+     * up and a sparse bed strong ones. Absent, exempt, no other row with a presence, or a
+     * candidate without one: no term, exactly the ranking without it. */
+    balance?: RankBalance
   }
 ): RankedCandidate[] {
   // Pool-relative values per kind, for candidates without a library
@@ -175,6 +193,10 @@ export function rankCandidates(
   const boost = FAVOURITE_BOOST * clampWeight(favouriteScale)
   const leaned = intensity ? intensityTerms(candidates, intensity) : null
   const keyOthers = key && !key.exempt ? key.others.filter(hasKey) : []
+  const strongest =
+    balance && !balance.exempt
+      ? Math.max(-Infinity, ...balance.others.filter(Number.isFinite))
+      : NaN
   return candidates
     .map((candidate, i) => {
       const bpmDistance = Math.abs(candidate.riffBpm - targetBpm)
@@ -207,6 +229,9 @@ export function rankCandidates(
         let sum = 0
         for (const other of keyOthers) sum += keyFit(own, other)
         score += KEY_WEIGHT * (sum / keyOthers.length)
+      }
+      if (Number.isFinite(strongest) && Number.isFinite(candidate.presence)) {
+        score += BALANCE_WEIGHT * (1 - Math.abs(candidate.presence! - (1 - strongest)))
       }
       if (leaned) score += leaned[i]
       return { candidate, score }

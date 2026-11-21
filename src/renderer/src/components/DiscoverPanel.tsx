@@ -61,7 +61,7 @@ import {
   type DensityLeg
 } from '@shared/radioDensity'
 import { DEFAULT_DISCOVER_CHAOS, rankCandidates, pickReroll } from '@shared/discoverRanking'
-import { rankKeyFor } from '@shared/discoverKey'
+import { rankBalanceFor, rankKeyFor } from '@shared/discoverKey'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { heartFetchLabel } from '@shared/radioHearts'
 import { heartsButtonShown } from '@shared/features'
@@ -10168,6 +10168,12 @@ export function DiscoverPanel({
         // The key lean (@shared/discoverKey): against the rows sounding with this pick, the
         // same rows as the clash bed below, so a muted or absent row doesn't pull the key.
         key: rankKeyFor(
+          slotsRef.current.filter((s) => s.id !== id && previewingSlotIdsRef.current.has(s.id)),
+          id,
+          kinds
+        ),
+        // The balance lean, against the same rows: a strong part sounding pulls a sparse pick up.
+        balance: rankBalanceFor(
           slotsRef.current.filter((s) => s.id !== id && previewingSlotIdsRef.current.has(s.id)),
           id,
           kinds

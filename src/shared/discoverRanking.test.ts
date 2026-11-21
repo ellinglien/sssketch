@@ -1,6 +1,12 @@
 // src/shared/discoverRanking.test.ts
 import { describe, expect, it, vi } from 'vitest'
-import { rankCandidates, pickReroll, KEY_WEIGHT, DEFAULT_DISCOVER_CHAOS } from './discoverRanking'
+import {
+  rankCandidates,
+  pickReroll,
+  BALANCE_WEIGHT,
+  KEY_WEIGHT,
+  DEFAULT_DISCOVER_CHAOS
+} from './discoverRanking'
 import type { DiscoverCandidate } from './discoverCandidate'
 import { favesBoostScale } from './discoverFaves'
 
@@ -561,5 +567,45 @@ describe('key term', () => {
     // top 75: 50 fitting at 3, 25 clashing at 1 -> 150/175 = 0.857
     expect(fits / 10000).toBeGreaterThan(0.83)
     expect(fits / 10000).toBeLessThan(0.88)
+  })
+})
+
+describe('balance term', () => {
+  const cand = candidate
+  const strong = cand({ stemCID: 'strong', riffBpm: 120, presence: 0.9 })
+  const sparse = cand({ stemCID: 'sparse', riffBpm: 120, presence: 0.1 })
+  const unknown = cand({ stemCID: 'unknown', riffBpm: 120 })
+  it('a strong bed prefers a sparse pick', () => {
+    const r = rankCandidates([strong, sparse, unknown], {
+      targetBpm: 120,
+      balance: { others: [0.9, 0.3] }
+    })
+    expect(r.map((x) => x.candidate.stemCID)).toEqual(['sparse', 'strong', 'unknown'])
+    expect(r[0].score).toBeCloseTo(1 + BALANCE_WEIGHT * 1, 5) // want 0.1
+    expect(r[1].score).toBeCloseTo(1 + BALANCE_WEIGHT * 0.2, 5)
+    expect(r[2].score).toBeCloseTo(1, 5) // no presence: no term
+  })
+  it('a sparse bed prefers a strong pick', () => {
+    const r = rankCandidates([sparse, strong], { targetBpm: 120, balance: { others: [0.1] } })
+    expect(r[0].candidate.stemCID).toBe('strong')
+  })
+  it('no others, only unusable others, or exempt: exactly the ranking without it', () => {
+    const plain = rankCandidates([strong, sparse], { targetBpm: 120 })
+    expect(rankCandidates([strong, sparse], { targetBpm: 120, balance: { others: [] } })).toEqual(
+      plain
+    )
+    expect(
+      rankCandidates([strong, sparse], { targetBpm: 120, balance: { others: [NaN, Infinity] } })
+    ).toEqual(plain)
+    expect(
+      rankCandidates([strong, sparse], { targetBpm: 120, balance: { others: [0.9], exempt: true } })
+    ).toEqual(plain)
+  })
+  it('a candidate with a null presence gets no term', () => {
+    const r = rankCandidates([cand({ riffBpm: 120, presence: null })], {
+      targetBpm: 120,
+      balance: { others: [0.9] }
+    })
+    expect(r[0].score).toBeCloseTo(1, 5)
   })
 })
