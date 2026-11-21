@@ -191,3 +191,27 @@ export function stemLevelFeatures(
     activeFraction: round(active / blocks.length, 3)
   }
 }
+
+/** The loudness a new Discover/radio row arrives at when the library has no percentile yet. */
+export const ARRIVAL_TARGET_FALLBACK_LUFS = -23
+/** The library percentile of loudnessLufs rows are trimmed toward: the quieter quarter. */
+export const ARRIVAL_TARGET_PERCENTILE = 0.25
+export const ARRIVAL_GAIN_FLOOR = 0.25
+
+/** A new row's starting gain (spec 2026-11-21-picking-key-level-groove-design, 2): down to
+ * `targetLufs`, never up (row gains are 0..1 and a stem at unity is already loud), never under
+ * the floor. An unmeasured stem arrives at 1. */
+export function arrivalGain(loudnessLufs: number | null | undefined, targetLufs: number): number {
+  if (typeof loudnessLufs !== 'number' || !Number.isFinite(loudnessLufs)) return 1
+  if (!Number.isFinite(targetLufs)) return 1
+  const gain = Math.pow(10, (targetLufs - loudnessLufs) / 20)
+  return Math.min(1, Math.max(ARRIVAL_GAIN_FLOOR, gain))
+}
+
+/** A row's gain after its stem changes: the row's gain relative to the old stem's arrival gain,
+ * carried to the new stem's. A fresh row (1, 1) takes the new arrival gain; a balance set by hand
+ * holds. */
+export function rerolledGain(rowGain: number, oldArrival: number, newArrival: number): number {
+  const old = oldArrival > 0 ? oldArrival : 1
+  return Math.min(1, Math.max(0, (rowGain / old) * newArrival))
+}

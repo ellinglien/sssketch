@@ -1917,6 +1917,36 @@ describe('getDiscoverCandidates (kind sets)', () => {
     for (const c of await roll(false)) expect('intensity' in c).toBe(false)
   })
 
+  it('every roll: a loud stem carries the gain its row arrives at; a quiet or unmeasured one none', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['loud', 'quiet', 'none'])
+    seedStem(own, 'loud', 'jam1', { instrument: DRUM })
+    seedStem(own, 'quiet', 'jam1', { instrument: DRUM })
+    seedStem(own, 'none', 'jam1', { instrument: DRUM })
+    seedFeatures(own, 'loud', JSON.stringify({ transientDensity: 9, loudnessLufs: -24 }))
+    seedFeatures(own, 'quiet', JSON.stringify({ transientDensity: 1, loudnessLufs: -40 }))
+    // The rest of the library: its quieter quarter sits at -30 LUFS.
+    for (let i = 0; i < 9; i++) {
+      seedFeatures(own, `lib${i}`, JSON.stringify({ transientDensity: 4, loudnessLufs: -30 }))
+    }
+    const roll = (): ReturnType<typeof getDiscoverCandidates> =>
+      getDiscoverCandidates({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums']
+      })
+
+    // Before the library's values are in memory a roll reads nothing for it: rows arrive at 1.
+    for (const c of await roll()) expect('arrivalGain' in c).toBe(false)
+
+    await prewarmTraitQuantileTables(own)
+    const pool = await roll()
+    const of = (id: string): (typeof pool)[number] => pool.find((c) => c.stemCID === id)!
+    expect(of('loud').arrivalGain).toBeCloseTo(10 ** (-6 / 20), 5)
+    expect('arrivalGain' in of('quiet')).toBe(false)
+    expect('arrivalGain' in of('none')).toBe(false)
+  })
+
   it('an empty kind set returns []', async () => {
     const own = freshDb()
     expect(

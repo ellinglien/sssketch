@@ -143,6 +143,19 @@ export function percentileOf(
   return (a - 1 + (value - below) / (above - below)) / last
 }
 
+/** percentileOf's inverse: the value at percentile `p` (clamped to [0, 1]), interpolated between
+ * breakpoints. Monotone non-decreasing in `p`. null for a missing/empty table or a non-finite p. */
+export function valueAtPercentile(
+  table: QuantileTable | null | undefined,
+  p: number
+): number | null {
+  if (!table || table.length === 0 || !Number.isFinite(p)) return null
+  const pos = Math.min(1, Math.max(0, p)) * (table.length - 1)
+  const lo = Math.floor(pos)
+  const hi = Math.min(table.length - 1, lo + 1)
+  return table[lo] + (table[hi] - table[lo]) * (pos - lo)
+}
+
 /** Turns a stem's TraitValues into TraitPercentiles for exactly the kinds
  * present in `values` (the requested ones -- traitValuesFromFeatures only
  * sets those). {} for {}.

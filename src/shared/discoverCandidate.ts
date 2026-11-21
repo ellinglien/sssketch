@@ -87,4 +87,7 @@ export interface DiscoverCandidate {
    * when the stem is unscored. Attached only when a roll asks for it (getDiscoverCandidates'
    * `alsoIntensity`, the web index's `x`): absent on every other roll. */
   intensity?: number | null
+  /** The gain a row holding this stem starts at (@shared/stemLevel arrivalGain), (0, 1]. Main
+   * attaches it to every roll; absent (older constructors, an unmeasured stem): 1. */
+  arrivalGain?: number
 }

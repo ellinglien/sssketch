@@ -1,6 +1,14 @@
 // The loudness measurement (spec 2026-10-05-radio-intensity-arc-design section 7): stemLevel.ts.
 import { describe, expect, it } from 'vitest'
-import { kWeightingHighPass, kWeightingShelf, stemLevelFeatures, type Biquad } from './stemLevel'
+import {
+  ARRIVAL_GAIN_FLOOR,
+  arrivalGain,
+  kWeightingHighPass,
+  kWeightingShelf,
+  rerolledGain,
+  stemLevelFeatures,
+  type Biquad
+} from './stemLevel'
 
 /** A sine of `seconds` at `hz`, peak `dbfs`, at `fs`. */
 function sine(hz: number, dbfs: number, seconds: number, fs: number): Float32Array {
@@ -174,5 +182,29 @@ describe('stemLevelFeatures: edges (Task 12 review follow-ups)', () => {
       const b = stemLevelFeatures([sine(hz, -12, 6, 48000)], 48000).lowLevelDb!
       expect(Math.abs(a - b), `${hz} Hz`).toBeLessThanOrEqual(0.1)
     }
+  })
+})
+
+describe('arrivalGain', () => {
+  it('turns a loud stem down to the target', () =>
+    expect(arrivalGain(-17, -23)).toBeCloseTo(10 ** (-6 / 20), 5))
+  it('never turns up', () => expect(arrivalGain(-30, -23)).toBe(1))
+  it('has a floor', () => expect(arrivalGain(0, -23)).toBe(ARRIVAL_GAIN_FLOOR))
+  it('is 1 for an unmeasured stem', () => {
+    expect(arrivalGain(null, -23)).toBe(1)
+    expect(arrivalGain(undefined, -23)).toBe(1)
+    expect(arrivalGain(NaN, -23)).toBe(1)
+  })
+})
+
+describe('rerolledGain', () => {
+  it("a fresh row takes the new stem's arrival gain", () =>
+    expect(rerolledGain(1, 1, 0.5)).toBe(0.5))
+  it('an untouched row follows the new stem', () =>
+    expect(rerolledGain(0.5, 0.5, 0.8)).toBeCloseTo(0.8, 5))
+  it('a hand-set balance is kept', () => expect(rerolledGain(0.25, 0.5, 0.8)).toBeCloseTo(0.4, 5))
+  it('stays in 0..1', () => {
+    expect(rerolledGain(1, 0.25, 1)).toBe(1)
+    expect(rerolledGain(0, 0.5, 1)).toBe(0)
   })
 })

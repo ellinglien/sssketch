@@ -26,13 +26,22 @@ import {
   type TraitFieldValues,
   type TraitValues
 } from '@shared/discoverTraits'
-import { traitPercentilesFromValues } from '@shared/traitQuantiles'
+import { traitPercentilesFromValues, valueAtPercentile } from '@shared/traitQuantiles'
+import {
+  ARRIVAL_TARGET_FALLBACK_LUFS,
+  ARRIVAL_TARGET_PERCENTILE,
+  arrivalGain
+} from '@shared/stemLevel'
 import {
   INTENSITY_INPUT_FIELDS,
   stemIntensityScore,
   type IntensityValues
 } from '@shared/radioIntensity'
-import { getTraitQuantileTables, getTraitValueTable } from './traitQuantileCache'
+import {
+  getTraitQuantileTables,
+  getTraitValueTable,
+  type TraitValueTable
+} from './traitQuantileCache'
 import { countWork } from './workCounters'
 import { getFrontScores } from './frontScoreCache'
 import { dialFor, withDial } from '@shared/stemCategoryDial'
@@ -1620,7 +1629,8 @@ export async function getDiscoverCandidates({
     alsoTraits,
     scope: { ownStemsOf }
   })
-  return alsoIntensity ? attachDiscoverIntensity(ownDb, pool) : pool
+  const levelled = await attachArrivalGain(ownDb, pool)
+  return alsoIntensity ? attachDiscoverIntensity(ownDb, levelled) : levelled
 }
 
 async function getDiscoverCandidatesPool({
@@ -1775,35 +1785,81 @@ export async function attachDiscoverIntensity(
   return out
 }
 
+/** The gain each candidate's row should arrive at (spec 2026-11-21-picking-key-level-groove-design
+ * 2), for EVERY roll and for the adjacency walk (discoverAdjacency.ts): arrivalGain of the stem's
+ * loudness against the library's quieter quarter (ARRIVAL_TARGET_PERCENTILE of the loudnessLufs
+ * quantile table; no table yet: ARRIVAL_TARGET_FALLBACK_LUFS). Set only when below 1.
+ *
+ * It reads the in-memory value table ONLY. While that table isn't current (before the startup
+ * prewarm, or after it lost track of the feature rows) the pool is returned as it is and rows
+ * arrive at 1, as before: attachDiscoverIntensity's SQL fallback would put a chunked read and a
+ * JSON parse of every candidate's feature row, on a library that is often on a USB drive, into
+ * every roll. Same order, same length; yields like attachTraitPercentiles. */
+export async function attachArrivalGain<C extends DiscoverCandidate>(
+  ownDb: Database.Database,
+  pool: C[]
+): Promise<C[]> {
+  if (pool.length === 0) return pool
+  const table = getTraitValueTable(ownDb)
+  if (!table) return pool
+  const tables = await getTraitQuantileTables(ownDb)
+  const target =
+    valueAtPercentile(tables.loudnessLufs, ARRIVAL_TARGET_PERCENTILE) ??
+    ARRIVAL_TARGET_FALLBACK_LUFS
+  const valuesOf = valueTableIntensitySource(table)
+  const out: C[] = []
+  let sinceYield = 0
+  const slice = newSlice()
+  for (const c of pool) {
+    const gain = arrivalGain(valuesOf(c.stemCID)?.loudnessLufs, target)
+    out.push(gain < 1 ? { ...c, arrivalGain: gain } : c)
+    sinceYield += 1
+    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+      sinceYield = 0
+      await yieldIfSliceSpent(slice)
+    }
+  }
+  return out
+}
+
+/** A feature row's intensity inputs (the finite ones). */
+function pickIntensityValues(f: Record<string, unknown>): IntensityValues {
+  const v: IntensityValues = {}
+  for (const field of INTENSITY_INPUT_FIELDS) {
+    const x = f[field]
+    if (typeof x === 'number' && Number.isFinite(x)) v[field] = x
+  }
+  return v
+}
+
+/** Each stem's intensity inputs from the in-memory value table. Null: no row. */
+function valueTableIntensitySource(
+  table: TraitValueTable
+): (stemCID: string) => IntensityValues | null {
+  return (stemCID) => {
+    const row = table.rowOf(stemCID)
+    return row === undefined
+      ? null
+      : pickIntensityValues(table.features(row) as unknown as Record<string, unknown>)
+  }
+}
+
 /** Each stem's intensity inputs: from the value table when it is current, else read from ownDb's
  * StemFeatureCache (chunked, as attachTraitValues' fallback). Null: no (parseable) row. */
 function intensityValueSource(
   ownDb: Database.Database,
   stemCIDs: readonly string[]
 ): (stemCID: string) => IntensityValues | null {
-  const pick = (f: Record<string, unknown>): IntensityValues => {
-    const v: IntensityValues = {}
-    for (const field of INTENSITY_INPUT_FIELDS) {
-      const x = f[field]
-      if (typeof x === 'number' && Number.isFinite(x)) v[field] = x
-    }
-    return v
-  }
   const table = getTraitValueTable(ownDb)
-  if (table) {
-    return (stemCID) => {
-      const row = table.rowOf(stemCID)
-      return row === undefined
-        ? null
-        : pick(table.features(row) as unknown as Record<string, unknown>)
-    }
-  }
+  if (table) return valueTableIntensitySource(table)
   const rows = featureRowsByStemCID(ownDb, stemCIDs)
   return (stemCID) => {
     const f = rows.get(stemCID)
     // A row that parses to something other than an object reads as no row (as the value table's
     // build leaves it out).
-    return f && typeof f === 'object' ? pick(f as unknown as Record<string, unknown>) : null
+    return f && typeof f === 'object'
+      ? pickIntensityValues(f as unknown as Record<string, unknown>)
+      : null
   }
 }
 

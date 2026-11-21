@@ -37,6 +37,7 @@ import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
 import {
   attachDiscoverDial,
+  attachArrivalGain,
   attachDiscoverIntensity,
   attachDiscoverTraits,
   getRiffIndexForDb,
@@ -328,13 +329,18 @@ export async function getAdjacentDiscoverCandidates(
     )
   }
 
-  const traited = await attachAdjacentTraits(
+  const traitedOnly = await attachAdjacentTraits(
     ownDb,
     result,
     normalizedKinds,
     traitKinds,
     options.percentileTraits
   )
+  // A row filled from here arrives at its gain like one a roll fills.
+  const traited = {
+    newer: await attachArrivalGain(ownDb, traitedOnly.newer),
+    older: await attachArrivalGain(ownDb, traitedOnly.older)
+  }
   if (options.intensity !== true) return traited
   const withIntensity = async (
     list: AdjacentDiscoverCandidate[]
