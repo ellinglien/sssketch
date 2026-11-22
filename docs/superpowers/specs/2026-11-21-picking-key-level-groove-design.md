@@ -75,6 +75,8 @@ A new row arrives with its gain already set so that it sits at a common loudness
 - `TARGET` is the library's 25th percentile of `loudnessLufs` from the trait quantile cache, so
   three stems in four are trimmed toward the quieter quarter. Fixed fallback: -23 LUFS.
 - An unmeasured stem arrives at 1.
+- **Drums aren't trimmed** (2026-11-22): a stem rolled for a drums row arrives at 1. Trimming
+  them weakened the drum pump and lowered the level into the master glue.
 - It is the row's **ordinary, visible gain**: the same control you drag on the waveform. Nothing
   hidden, and a kept or added row carries it into the project with no new plumbing. Changing the
   gain by hand works as before.
