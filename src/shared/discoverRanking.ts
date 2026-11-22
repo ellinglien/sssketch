@@ -10,6 +10,7 @@ import { radioClashBedScore, radioClashTraitScore, type RankClash } from './radi
 import { DIG_WEIGHT, radioDigCloseness, type RankDig } from './radioDig'
 import { hasKey, keyFit, type RiffKey } from './keyFit'
 import { intensityTerms, type RankIntensity } from './radioIntensity'
+import { coverOf, mixCovered, type Cover } from './radioCover'
 
 // A fitting key outweighs a favourite (1.5): a strong lean, not a rule (spec 2026-11-21, 1). At
 // the default matching a fitting stem is drawn about three times as often as a clashing one of
@@ -33,6 +34,19 @@ export const BALANCE_WEIGHT = 1
 export interface RankBalance {
   others: readonly number[]
   exempt?: boolean
+}
+
+// No long silence (@shared/radioCover): the fewest candidates the cover rule may leave. Under it
+// the pool is too small to draw from without repeats (the intensity band's own floor), so the
+// whole pool stays and leans to the fuller stems instead.
+export const COVER_POOL_MIN = 8
+// That lean: as strong as a fitting key.
+export const COVER_WEIGHT = 2
+
+/** The covers (a candidate's `cover`; null: unknown) of the rows a pick will sound with, drums
+ * among them. */
+export interface RankCover {
+  others: readonly Cover[]
 }
 
 export interface RankedCandidate {
@@ -113,7 +127,8 @@ export function rankCandidates(
     dig,
     intensity,
     key,
-    balance
+    balance,
+    cover
   }: {
     targetBpm: number
     favouriteStemCIDs?: ReadonlySet<string>
@@ -148,6 +163,11 @@ export function rankCandidates(
      * up and a sparse bed strong ones. Absent, exempt, no other row with a presence, or a
      * candidate without one: no term, exactly the ranking without it. */
     balance?: RankBalance
+    /** No long silence (@shared/radioCover): a candidate that would leave the mix covering less
+     * than MIN_MIX_COVER is left out of the ranking. Fewer than COVER_POOL_MIN left (or than the
+     * whole pool, when it is smaller): nobody is left out, and every candidate gains COVER_WEIGHT
+     * * its cover. Absent, or no candidate with a measured cover: exactly the ranking without it. */
+    cover?: RankCover
   }
 ): RankedCandidate[] {
   // Pool-relative values per kind, for candidates without a library
@@ -197,6 +217,12 @@ export function rankCandidates(
     balance && !balance.exempt
       ? Math.max(-Infinity, ...balance.others.filter(Number.isFinite))
       : NaN
+  const fills =
+    cover && candidates.some((c) => Number.isFinite(c.cover))
+      ? candidates.map((c) => mixCovered([...cover.others, c.cover]))
+      : null
+  const coverBars =
+    fills !== null && fills.filter(Boolean).length >= Math.min(COVER_POOL_MIN, candidates.length)
   return candidates
     .map((candidate, i) => {
       const bpmDistance = Math.abs(candidate.riffBpm - targetBpm)
@@ -234,8 +260,10 @@ export function rankCandidates(
         score += BALANCE_WEIGHT * (1 - Math.abs(candidate.presence! - (1 - strongest)))
       }
       if (leaned) score += leaned[i]
+      if (fills !== null && !coverBars) score += COVER_WEIGHT * coverOf(candidate.cover)
       return { candidate, score }
     })
+    .filter((_, i) => !coverBars || fills[i])
     .sort((a, b) => b.score - a.score)
 }
 

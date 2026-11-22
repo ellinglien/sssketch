@@ -36,6 +36,7 @@
 // length (and a cycle's countdown) is drawn where it lands.
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
+import { coverOf, mixCovered, type Cover } from './radioCover'
 import { DENSITY_PEAK } from './radioDensity'
 import type { RadioHookThrow } from './radioHooks'
 import { drawThrowBeats, drawThrowEcho } from './radioThrows'
@@ -264,6 +265,9 @@ export interface RadioIntensityRow {
   /** The arc may rest it: not locked, not soloed or outside the solo, not muted by the user, no
    * manual change or swap-now for the line, not resting for a hook. */
   restable: boolean
+  /** How much of its loop its stem sounds (a candidate's `cover`; null: unknown), for the
+   * no-long-silence rule (radioCover). Absent on every row: no such rule. */
+  cover?: number | null
 }
 
 const isLow = (kinds: readonly DiscoverSlotKind[]): boolean =>
@@ -293,13 +297,16 @@ export function radioCarryKind(
  *   - full: every drums and every bass row.
  * A row is low when its kinds include drums or bass (a combination row counts; bassHeavy and
  * rhythmic do not). With no carrier, a carry row joins when `carryReady`; else `full` falls to
- * `thin`. Last: if nothing would sound, the lowest-scored low row keeps sounding. An empty rest
- * reads as `swell`. The throw goes on the first resting drums row in row order.
+ * `thin`. Last: if nothing would sound, the lowest-scored low row keeps sounding; and no long
+ * silence (radioCover): while the rows left sounding (the carry row by `carryCover`) would cover
+ * too little, the resting row with the most cover stays. An empty rest reads as `swell`. The
+ * throw goes on the first resting drums row in row order.
  */
 export function radioBreakdownRests(
   rows: readonly RadioIntensityRow[],
   depth: RadioBreakdownDepth,
-  carryReady: boolean
+  carryReady: boolean,
+  carryCover?: number | null
 ): { depth: RadioBreakdownDepth; rest: string[]; carry: boolean; throwRowId: string | null } {
   const none = { depth: 'swell' as const, rest: [], carry: false, throwRowId: null }
   if (depth === 'swell') return none
@@ -335,6 +342,16 @@ export function radioBreakdownRests(
   if (!stillSounding && !carry && rest.length > 0) {
     const keep = sparsest(rest)
     rest = rest.filter((r) => r !== keep)
+  }
+  if (rows.some((r) => r.cover !== undefined)) {
+    const left = (): Cover[] => [
+      ...rows.filter((r) => r.sounding && !rest.includes(r)).map((r) => r.cover),
+      ...(carry ? [carryCover] : [])
+    ]
+    while (rest.length > 0 && !mixCovered(left())) {
+      const keep = rest.reduce((a, b) => (coverOf(b.cover) > coverOf(a.cover) ? b : a))
+      rest = rest.filter((r) => r !== keep)
+    }
   }
   if (rest.length === 0) return { ...none, carry: false }
   const thrown = rest.find((r) => r.kinds.includes('drums'))
@@ -430,6 +447,9 @@ export interface RadioIntensityStepInput {
   canStrip: boolean
   /** The carry row prepared for this breakdown is warm and has a place. */
   carryReady: boolean
+  /** That carry row's cover (its pick's `cover`), for the breakdown's no-long-silence check.
+   * Absent or null: unknown. */
+  carryCover?: number | null
   /** A returning drums or bass row's fresh pick is warm. */
   renewReady: (rowId: string) => boolean
   /** A heavy drums or bass row's light pick, prepared for the next build's start, is warm (option
@@ -633,7 +653,8 @@ function breakdownEvent(
   const r = radioBreakdownRests(
     input.rows,
     radioBreakdownDepth(input.drama, arc.big),
-    input.carryReady
+    input.carryReady,
+    input.carryCover
   )
   const shape: RadioHookThrow | null =
     r.throwRowId === null

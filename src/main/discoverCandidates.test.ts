@@ -1923,7 +1923,11 @@ describe('getDiscoverCandidates (kind sets)', () => {
     seedStem(own, 'loud', 'jam1', { instrument: DRUM })
     seedStem(own, 'quiet', 'jam1', { instrument: DRUM })
     seedStem(own, 'none', 'jam1', { instrument: DRUM })
-    seedFeatures(own, 'loud', JSON.stringify({ transientDensity: 9, loudnessLufs: -24 }))
+    seedFeatures(
+      own,
+      'loud',
+      JSON.stringify({ transientDensity: 9, loudnessLufs: -24, activeFraction: 0.9 })
+    )
     seedFeatures(own, 'quiet', JSON.stringify({ transientDensity: 1, loudnessLufs: -40 }))
     // The rest of the library: its quieter quarter sits at -30 LUFS.
     for (let i = 0; i < 9; i++) {
@@ -1940,6 +1944,7 @@ describe('getDiscoverCandidates (kind sets)', () => {
     for (const c of await roll()) {
       expect('arrivalGain' in c).toBe(false)
       expect('presence' in c).toBe(false)
+      expect('cover' in c).toBe(false)
     }
 
     await prewarmTraitQuantileTables(own)
@@ -1952,6 +1957,10 @@ describe('getDiscoverCandidates (kind sets)', () => {
     expect(of('loud').presence).toBeGreaterThan(0.8)
     expect(of('quiet').presence).toBeLessThan(0.2)
     expect('presence' in of('none')).toBe(false)
+    // Cover is the stem's activeFraction: absent when it has no level measurement yet.
+    expect(of('loud').cover).toBe(0.9)
+    expect('cover' in of('quiet')).toBe(false)
+    expect('cover' in of('none')).toBe(false)
   })
 
   it('an empty kind set returns []', async () => {

@@ -1791,7 +1791,8 @@ export async function attachDiscoverIntensity(
  * (discoverAdjacency.ts). The gain: arrivalGain of the stem's loudness against the library's
  * quieter quarter (ARRIVAL_TARGET_PERCENTILE of the loudnessLufs quantile table; no table yet:
  * ARRIVAL_TARGET_FALLBACK_LUFS), set only when below 1. The presence: stemPresence over the same
- * values and tables, set only when known.
+ * values and tables, set only when known. The cover (@shared/radioCover): the stem's
+ * activeFraction from the same values, set only when measured.
  *
  * It reads the in-memory value table ONLY. While that table isn't current (before the startup
  * prewarm, or after it lost track of the feature rows) the pool is returned as it is and rows
@@ -1817,9 +1818,15 @@ export async function attachLevelAndPresence<C extends DiscoverCandidate>(
     const values = valuesOf(c.stemCID)
     const gain = arrivalGain(values?.loudnessLufs, target)
     const presence = values === null ? null : stemPresence(values, tables)
+    const cover = values?.activeFraction
     out.push(
-      gain < 1 || presence !== null
-        ? { ...c, ...(gain < 1 && { arrivalGain: gain }), ...(presence !== null && { presence }) }
+      gain < 1 || presence !== null || cover !== undefined
+        ? {
+            ...c,
+            ...(gain < 1 && { arrivalGain: gain }),
+            ...(presence !== null && { presence }),
+            ...(cover !== undefined && { cover })
+          }
         : c
     )
     sinceYield += 1

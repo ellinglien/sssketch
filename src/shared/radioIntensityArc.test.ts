@@ -541,6 +541,33 @@ describe('the breakdown', () => {
     })
   })
 
+  it('no long silence: a rest that would leave the mix mostly silent stays, the fullest first', () => {
+    const bed = [
+      R('d', ['drums'], { cover: 0.9 }),
+      R('b', ['bass'], { cover: 0.6 }),
+      R('l', ['front'], { cover: 0.3 })
+    ]
+    // the front row alone is mostly silent: the drums stay
+    expect(radioBreakdownRests(bed, 'full', false)).toMatchObject({
+      depth: 'full',
+      rest: ['b'],
+      throwRowId: null
+    })
+    // a front row that fills the time carries it alone, as does an unmeasured one
+    const full = [bed[0], bed[1], R('l', ['front'], { cover: 0.8 })]
+    expect(radioBreakdownRests(full, 'full', false).rest).toEqual(['d', 'b'])
+    const blind = [bed[0], bed[1], R('l', ['front'], { cover: null })]
+    expect(radioBreakdownRests(blind, 'full', false).rest).toEqual(['d', 'b'])
+    // the carry row counts by its own cover (unknown: enough)
+    const low = [bed[0], bed[1]]
+    expect(radioBreakdownRests(low, 'full', true).rest).toEqual(['d', 'b'])
+    expect(radioBreakdownRests(low, 'full', true, 0.9).rest).toEqual(['d', 'b'])
+    expect(radioBreakdownRests(low, 'full', true, 0.2)).toMatchObject({ rest: ['b'], carry: true })
+    // nothing may rest: a swell
+    const thin = [R('d', ['drums'], { cover: 0.5 }), R('l', ['front'], { cover: 0.3 })]
+    expect(radioBreakdownRests(thin, 'full', false)).toMatchObject({ depth: 'swell', rest: [] })
+  })
+
   it('counts a combination row as low; bassHeavy and rhythmic are not', () => {
     const bed = [R('db', ['drums', 'bass']), R('h', ['bassHeavy']), R('r', ['rhythmic'])]
     expect(radioBreakdownRests(bed, 'full', false).rest).toEqual(['db'])

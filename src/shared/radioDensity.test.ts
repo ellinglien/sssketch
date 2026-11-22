@@ -183,6 +183,22 @@ describe('pickArcRemoval', () => {
     ...over
   })
 
+  it('no long silence: never a row whose going would leave the mix mostly silent', () => {
+    const sparse = row('sparse', { cover: 0.3, staleness: 1 })
+    const full = row('full', { cover: 0.9, staleness: 9 })
+    // the stalest would leave the sparse one alone: the sparse one goes instead
+    expect(pickArcRemoval([sparse, full])).toBe('sparse')
+    // neither can go: nothing this step
+    expect(pickArcRemoval([sparse, row('thin', { cover: 0.4 })])).toBeNull()
+    // an unheard row fills nothing
+    expect(pickArcRemoval([sparse, full, row('rest', { cover: 0.9, heard: false })])).toBe('sparse')
+    // drums fill time like any row; unknown covers never hold a row back
+    expect(pickArcRemoval([row('d', { kinds: ['drums'], cover: 0.9 }), full])).toBe('full')
+    expect(
+      pickArcRemoval([row('a', { cover: null }), row('b', { cover: null, staleness: 2 })])
+    ).toBe('b')
+  })
+
   it('takes the stalest row radio added', () => {
     expect(pickArcRemoval([row('a', { staleness: 1 }), row('b', { staleness: 5 })])).toBe('b')
   })

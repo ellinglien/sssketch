@@ -28,6 +28,7 @@ import {
 } from './radioSchedule'
 import { pickTransition, type RadioTransitionKind, type RadioTransitions } from './radioTransition'
 import { radioGestureBeats } from './radioManualChanges'
+import { mixCovered } from './radioCover'
 
 // The setting itself lives with the rest of RadioSettings (radioSchedule),
 // re-exported here so the arc's rules read in one place.
@@ -165,6 +166,9 @@ export interface ArcRow {
   /** Its stem's intensity score (radioIntensity; null or absent: unknown, read as 0.5), for the
    * intensity arc's strip-back (pickArcRemoval's `heavy`). */
   score?: number | null
+  /** How much of its loop its stem sounds (a candidate's `cover`; null: unknown; 0 for a row not
+   * in the mix), for the no-long-silence rule (radioCover). Absent on every row: no such rule. */
+  cover?: number | null
 }
 
 /** A thinning arc's row on its way out (sssketch's arcExitRef): waiting for its drop-out to be
@@ -187,7 +191,8 @@ export function arcExitingRow(exit: ArcExit | null, lap: number, heldBack: boole
 
 /** Which row a thinning arc removes: the stalest it is allowed to, or null. `heavy` (the intensity
  * arc's strip-back at a build's start, option C, Elling 2026-10-06): the busiest by score among the
- * same rows (unknown 0.5), ties to the stalest, so the build starts from a lighter bed. */
+ * same rows (unknown 0.5), ties to the stalest, so the build starts from a lighter bed. No long
+ * silence (radioCover): never a row whose going would leave the heard rows covering too little. */
 export function pickArcRemoval(
   rows: readonly ArcRow[],
   by: 'stale' | 'heavy' = 'stale'
@@ -198,10 +203,14 @@ export function pickArcRemoval(
         (k === 'drums' || k === 'bass') &&
         !rows.some((o) => o.id !== r.id && o.heard !== false && o.kinds.includes(k))
     )
+  const covers = rows.some((r) => r.cover !== undefined)
+  const leavesSilence = (r: ArcRow): boolean =>
+    covers &&
+    !mixCovered(rows.filter((o) => o.id !== r.id && o.heard !== false).map((o) => o.cover))
   let best: ArcRow | null = null
   for (const r of rows) {
     if (!r.radioAdded || r.locked || r.soloed || r.held || r.busy || r.shrinksLoop) continue
-    if (lastOfItsKind(r)) continue
+    if (lastOfItsKind(r) || leavesSilence(r)) continue
     if (best === null) best = r
     else if (by === 'heavy') {
       const a = arcRowScore(r)
