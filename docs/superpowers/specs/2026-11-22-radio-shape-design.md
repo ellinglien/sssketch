@@ -120,4 +120,6 @@ Design 1 (`better-picks`), unmerged. Groove needs the rescan; the other three se
    yours.)
 5. **The groove rescan:** worth hours of background scanning for one focus of four? It could
    wait, and the rotation would run with three.
-6. ~~Drums and the pump~~ Done 2026-11-22: drum stems are left untrimmed on `better-picks`.
+6. **Drums and the pump (carried over from design 1's review):** turning loud drum stems down
+   also weakens the drum pump and lowers the level into the master glue. Options: leave drums
+   untrimmed (my suggestion), or trim them and retune the pump.
