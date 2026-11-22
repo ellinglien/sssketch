@@ -378,7 +378,9 @@ exactly what it was.
   percentile of `loudnessLufs`, never up, floor 0.25) and `presence` to every roll
   (`attachLevelAndPresence`). It reads only the in-memory trait value table: when that table isn't
   current the attach is skipped (rows arrive at 1, no presence) so a roll never pays disk reads.
-  A row's gain is the ordinary visible one: `rowGainFor(row, stem)` gives the gain a row has for a
+  A row's gain is the ordinary visible one. A row also keeps its `balance` (its gain over its
+  stem's arrival gain, unclamped, set when the gain is dragged), so a boost survives rerolls and a
+  hook's return; `landedLevel` applies it at a landing. `rowGainFor(row, stem)` gives the gain a row has for a
   given stem, and every landing goes through it (`commitSlotPick`), as do the staged engine project
   and `pushMasterLevel`, so an incoming stem is staged at the gain its row will have. Anything new
   that writes a stem's volume from row state must use `rowGainFor` with the stem actually sounding.
