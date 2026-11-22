@@ -41,10 +41,10 @@ function waitFor(condition: () => boolean, timeoutMs = 10000, intervalMs = 5): P
 
 afterEach(async () => {
   if (server) {
-    // close() waits for every connection to end; a test that leaves the server's side of one
-    // open (a disconnect it never answers) hung this hook on the release build's runner
-    server.closeAllConnections()
-    await new Promise<void>((resolve) => server!.close(() => resolve()))
+    // Not awaited: close()'s callback waits for every connection to end, and a test that leaves
+    // the server's side of one open (a disconnect it never answers) hung this hook on the
+    // release build's runner. Listening stops at once either way.
+    server.close()
     server = undefined
   }
 })
