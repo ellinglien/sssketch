@@ -9320,6 +9320,17 @@ export function DiscoverPanel({
   // top-design.md). `immediate` goes to whichever addSlot the click makes.
   //
   const [pendingAddKinds, setPendingAddKinds] = useState<DiscoverSlotKind[]>([])
+  // The pad waiting for a row (HeldStemsStrip's number): a click on a row saves its stem there,
+  // the mouse's shift + number. Escape, or the number again, lets it go.
+  const [armedPad, setArmedPad] = useState<number | null>(null)
+  useEffect(() => {
+    if (armedPad === null) return
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key === 'Escape') setArmedPad(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [armedPad])
 
   function handleAddRowKindClick(
     kind: DiscoverSlotKind,
@@ -14765,6 +14776,18 @@ export function DiscoverPanel({
               onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
               onRemove={() => removeSlot(slot.id)}
               onDuplicate={(immediate) => duplicateSlot(slot.id, immediate)}
+              padSave={
+                armedPad === null || slot.candidate === null
+                  ? null
+                  : {
+                      label: `save to pad ${armedPad + 1}`,
+                      onSave: () => {
+                        if (slot.candidate === null) return
+                        void onHoldStem(armedPad, heldStemFromRow(slot.candidate, slot.kinds))
+                        setArmedPad(null)
+                      }
+                    }
+              }
               onReroll={(immediate) => void rerollSlot(slot.id, immediate)}
               onRerollRandom={(immediate) => void rerollRandomSlot(slot.id, immediate)}
               onTogglePreview={() => toggleSlotPreview(slot.id)}
@@ -14869,6 +14892,8 @@ export function DiscoverPanel({
       >
         <HeldStemsStrip
           held={heldStems}
+          armed={armedPad}
+          onArm={(index) => setArmedPad((prev) => (prev === index ? null : index))}
           onPlay={playHeldStem}
           onClear={(index) => void onHoldStem(index, null)}
         />

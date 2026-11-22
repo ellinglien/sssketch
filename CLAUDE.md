@@ -376,6 +376,10 @@ Nine slots, each holding one Discover candidate, to drop a known loop in quickly
   gain, radio may turn its stem over like any unlocked row, and the density arc may thin it
   (the arc removes only `radioAdded` rows).
 
+On screen they are **pads**. The mouse's way to save: click a pad's number (`armedPad` in
+`DiscoverPanel.tsx`), then a row; while a pad is armed each row with a stem shows a full-row
+"save to pad N" button (`padSave`, `DiscoverSlotRow.tsx`). Escape or the number again cancels.
+
 ### Metronome
 
 On/off and volume (`metronomeVolume`, drag the metronome button up/down) are app state, not saved
