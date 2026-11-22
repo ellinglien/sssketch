@@ -1,6 +1,6 @@
 # Better picks: key, level, balance
 
-Status: design, awaiting review (2026-11-21). Not built.
+Status: built on the `better-picks` branch (2026-11-21), unmerged; awaiting the final review and a listening walkthrough.
 
 First of three designs from Elling's "make the matching and the transitions more natural"
 (2026-11-18). The other two come after this one and get their own specs:
