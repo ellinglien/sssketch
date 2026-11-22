@@ -87,6 +87,16 @@ namespace sssketch
          * between callbacks, never while one runs). */
         LapClock lapClockForTest() const { return lapClock(); }
         bool isPlaying() const { return playing.load(); }
+        /** Playing, or a Play is published and the audio thread hasn't taken it yet (up to one
+         * device block). For the staged swap's "is a wrap coming" question: a stage that
+         * arrives just after a Play (a Solo's halt-and-resume) must wait for its boundary, not
+         * be applied at once as if nothing were playing. */
+        bool isPlayingOrStarting() const
+        {
+            const auto kind = static_cast<TransportCommandKind>(
+                desiredTransportCommand.load(std::memory_order_acquire) & 0x3ULL);
+            return playing.load() || kind == TransportCommandKind::Play;
+        }
         unsigned long long completedHaltGeneration() const
         {
             return completedHaltCommandGeneration.load();
