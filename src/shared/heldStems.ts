@@ -1,13 +1,11 @@
 // src/shared/heldStems.ts -- held stems: nine slots on keys 1 to 9, each holding one Discover
-// candidate (spec 2026-11-22-held-stems-design). Pure: the key to slot map, the slot's category,
+// candidate (spec 2026-11-22-held-stems-design). Pure: the key to slot map, a held stem's kinds,
 // assign and clear, which row holds a stem, and the saved shape's normalising. Saved with the app
 // (DiscoverSettings.heldStems), not the project.
 import type { DiscoverCandidate } from './discoverCandidate'
-import type { DiscoverSlotKind } from './discoverSlotKind'
+import { normalizeSlotKinds, parseSlotKind, type DiscoverSlotKind } from './discoverSlotKind'
 
 export const HELD_SLOT_COUNT = 9
-/** Slots 1 to 5 are drums; the rest are front. */
-export const HELD_DRUM_SLOTS = 5
 
 /** Slot 0 is key `1`, slot 8 is key `9`. Always HELD_SLOT_COUNT long. */
 export type HeldStems = readonly (DiscoverCandidate | null)[]
@@ -25,10 +23,26 @@ export function heldSlotLabel(index: number): string {
   return String(index + 1)
 }
 
-/** The category of the row a slot adds, whatever row its stem was assigned from: 1 to 5 are
- * drums, 6 to 9 are front. */
-export function heldSlotKinds(index: number): DiscoverSlotKind[] {
-  return index < HELD_DRUM_SLOTS ? ['drums'] : ['front']
+function cleanKinds(raw: unknown): DiscoverSlotKind[] {
+  if (!Array.isArray(raw)) return []
+  return normalizeSlotKinds(raw.map(parseSlotKind).filter((k) => k !== null))
+}
+
+/** A stem as it is held: with the kinds of the row it was saved from (the slots have none of
+ * their own), kept in the candidate's own `slotKinds`. */
+export function heldStemFromRow(
+  candidate: DiscoverCandidate,
+  rowKinds: readonly DiscoverSlotKind[]
+): DiscoverCandidate {
+  const kinds = cleanKinds(rowKinds)
+  return kinds.length > 0 ? { ...candidate, slotKinds: kinds } : candidate
+}
+
+/** The kinds of the row a held stem adds: those it was saved with. A stem saved with none (a
+ * damaged file) joins as front: the category that stays in the key and balance terms. */
+export function heldStemKinds(stem: DiscoverCandidate): DiscoverSlotKind[] {
+  const kinds = cleanKinds(stem.slotKinds)
+  return kinds.length > 0 ? kinds : ['front']
 }
 
 /** Assign (a filled slot is replaced) or, with null, clear. */
@@ -65,7 +79,7 @@ function normalizeHeldStem(value: unknown): DiscoverCandidate | null {
     ...(value as unknown as DiscoverCandidate),
     presetName: typeof value.presetName === 'string' ? value.presetName : '',
     creatorUserName: typeof value.creatorUserName === 'string' ? value.creatorUserName : '',
-    slotKinds: Array.isArray(value.slotKinds) ? (value.slotKinds as DiscoverSlotKind[]) : [],
+    slotKinds: cleanKinds(value.slotKinds),
     drumSubRole: (value.drumSubRole as DiscoverCandidate['drumSubRole'] | undefined) ?? null,
     traitValues: isRecord(value.traitValues) ? value.traitValues : {},
     traitPercentiles: isRecord(value.traitPercentiles) ? value.traitPercentiles : {},

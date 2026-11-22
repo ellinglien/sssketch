@@ -342,8 +342,10 @@ Nine slots, each holding one Discover candidate, to drop a known loop in quickly
   app, not the project; read through `normalizeHeldStems` (a bad or old file gives nine empty
   slots). App's `holdStem(index, candidate | null)` assigns or clears, merged onto the latest
   settings. The pure rules are in `src/shared/heldStems.ts`.
-- **Slots 1 to 5 are drums, 6 to 9 are front** (`heldSlotKinds`): the slot decides the new row's
-  kinds and the played candidate's `slotKinds`, whatever row the stem was assigned from.
+- **A slot has no kind of its own.** A held stem keeps the kinds of the row it was saved from,
+  in its candidate's `slotKinds` (`heldStemFromRow`), and the row it adds takes them
+  (`heldStemKinds`; a saved stem with none joins as `front`). So a stem saved from a bass row
+  comes back as a bass row, and radio treats it as bass.
 - **Keys** (`handleHeldKey` in `DiscoverPanel.tsx`, by `e.code`, not in a text field, no
   repeats): shift + number assigns the candidate of the row under the pointer (found by
   `[data-slot-row]:hover`, an attribute on `DiscoverSlotRow`'s root); a plain number plays;

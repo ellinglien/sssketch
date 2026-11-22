@@ -5,7 +5,13 @@ import { Dial } from './Dial'
 import { RadioMixActions, RadioStrip, type RadioMixBundle } from './RadioStrip'
 import type { RadioStripContext } from '@shared/radioStripModel'
 import { radioViewTopIds, type RadioView } from '@shared/radioView'
-import { heldSlotForCode, heldSlotKinds, rowHoldingStem, type HeldStems } from '@shared/heldStems'
+import {
+  heldSlotForCode,
+  heldStemFromRow,
+  heldStemKinds,
+  rowHoldingStem,
+  type HeldStems
+} from '@shared/heldStems'
 import { HeldStemsStrip } from './HeldStemsStrip'
 import { RadioTopLine, RedoIcon, UndoIcon } from './RadioTopLine'
 import { DiceIcon } from './DiceIcon'
@@ -9672,8 +9678,8 @@ export function DiscoverPanel({
 
   /** Held stems (spec 2026-11-22-held-stems-design): play slot `index` (its key, or its tile).
    * A row that holds the stem, playing or still waiting to land, leaves, as its remove control
-   * removes it. Otherwise the stem joins as its own new row of the SLOT's category, whatever row
-   * it was assigned from: at the loop top while radio runs (queueManualChange, as a duplicate
+   * removes it. Otherwise the stem joins as its own new row, with the kinds of the row it was
+   * saved from (heldStemKinds): at the loop top while radio runs (queueManualChange, as a duplicate
    * does), at once with Cmd or with radio off. The row starts at gain 1 with no balance, so it
    * lands at the stem's levelled gain (landedLevel), and is `radioAdded`: an ordinary radio row
    * from then on, one the arc may thin as well as one radio may turn over. */
@@ -9691,7 +9697,7 @@ export function DiscoverPanel({
       held.stemCID
     )
     if (holding !== null) return removeSlot(holding)
-    const kinds = heldSlotKinds(index)
+    const kinds = heldStemKinds(held)
     const pick: SlotPick = {
       candidate: { ...held, slotKinds: kinds },
       barUsed: null,
@@ -9709,7 +9715,8 @@ export function DiscoverPanel({
     else queueManualChange(id, pick, true, undoSequence.latest())
   }
 
-  /** Held stems' keys. Shift + 1..9 over a row with a stem assigns it to that slot (the row
+  /** Held stems' keys. Shift + 1..9 over a row with a stem saves it, with the row's kinds, in
+   * that slot (the row
    * under the pointer: its root carries data-slot-row); a plain 1..9 plays the slot; Cmd + 1..9
    * plays it at once. `0` is no slot (and Cmd-0 is App's). */
   function handleHeldKey(e: KeyboardEvent): void {
@@ -9729,10 +9736,10 @@ export function DiscoverPanel({
       const rowId = rowsRef.current
         ?.querySelector<HTMLElement>('[data-slot-row]:hover')
         ?.getAttribute('data-slot-row')
-      const candidate = slots.find((s) => s.id === rowId)?.candidate ?? null
-      if (candidate === null) return
+      const row = slots.find((s) => s.id === rowId)
+      if (!row || row.candidate === null) return
       e.preventDefault()
-      void onHoldStem(index, candidate)
+      void onHoldStem(index, heldStemFromRow(row.candidate, row.kinds))
       return
     }
     if ((heldStems[index] ?? null) === null) return

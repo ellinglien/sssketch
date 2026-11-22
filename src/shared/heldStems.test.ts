@@ -4,8 +4,9 @@ import {
   EMPTY_HELD_STEMS,
   HELD_SLOT_COUNT,
   heldSlotForCode,
-  heldSlotKinds,
   heldSlotLabel,
+  heldStemFromRow,
+  heldStemKinds,
   normalizeHeldStems,
   rowHoldingStem,
   setHeldStem
@@ -43,10 +44,26 @@ describe('heldStems: keys and slots', () => {
       '123456789'
     )
   })
+})
 
-  it('slots 1 to 5 are drums, 6 to 9 are front', () => {
-    for (let i = 0; i < 5; i++) expect(heldSlotKinds(i)).toEqual(['drums'])
-    for (let i = 5; i < HELD_SLOT_COUNT; i++) expect(heldSlotKinds(i)).toEqual(['front'])
+describe('heldStems: a held stem keeps the kinds of the row it was saved from', () => {
+  it('takes the row kinds over the kinds it was rolled for', () => {
+    const held = heldStemFromRow(candidate('s1'), ['warm', 'drums'])
+    expect(held.slotKinds).toEqual(['drums', 'warm'])
+    expect(heldStemKinds(held)).toEqual(['drums', 'warm'])
+    expect(candidate('s1').slotKinds).toEqual(['bass'])
+  })
+
+  it('falls back to its own kinds, then to front', () => {
+    expect(heldStemKinds(heldStemFromRow(candidate('s1'), []))).toEqual(['bass'])
+    expect(heldStemKinds({ ...candidate('s1'), slotKinds: [] })).toEqual(['front'])
+    expect(heldStemKinds({ ...candidate('s1'), slotKinds: ['nonsense'] as never })).toEqual([
+      'front'
+    ])
+  })
+
+  it('reads the old name of front', () => {
+    expect(heldStemKinds({ ...candidate('s1'), slotKinds: ['lead'] as never })).toEqual(['front'])
   })
 })
 
@@ -115,6 +132,11 @@ describe('heldStems: the stored shape', () => {
         [good]
       ])
     ).toEqual(EMPTY_HELD_STEMS)
+  })
+
+  it('keeps the saved kinds that are real ones', () => {
+    const out = normalizeHeldStems([{ ...candidate('s1'), slotKinds: ['bass', 'zzz', 'lead'] }])
+    expect(out[0]?.slotKinds).toEqual(['bass', 'front'])
   })
 
   it('fills the fields a row reads when a saved stem lacks them', () => {
