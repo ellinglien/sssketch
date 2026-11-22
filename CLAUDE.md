@@ -361,6 +361,36 @@ nothing trains on device, so a label write wakes nothing. The old centroid, near
 zero-shot guessers are gone. The web radio imports `src/shared`, so renaming a shared export breaks
 its build, and its branch `four-categories` in `ell.ing/radio` must merge together with this one.
 
+### Better picks (key, level, balance)
+
+Spec `docs/superpowers/specs/2026-11-21-picking-key-level-groove-design.md`. Three things ride
+on every Discover and radio pick (`pickForSlot` in `DiscoverPanel.tsx`, the one `rankCandidates`
+call; the web radio's `pick.ts` does the same), each absent-safe: without its input the ranking is
+exactly what it was.
+
+- **Key.** A candidate carries its riff's `Riffs.Root`/`Scale` (`riffRoot`, `riffScale`; the riff
+  index stores them, `RIFF_INDEX_VERSION` in `discoverIndexCache.ts` rebuilds an older saved index
+  once). `keyFit` (`src/shared/keyFit.ts`) scores two keys by shared notes; `rankCandidates`' `key`
+  term (`KEY_WEIGHT` 2, a strong lean, not a rule) is the mean fit against the other sounding rows
+  (`rankKeyFor`, `src/shared/discoverKey.ts`). Drums are exempt both ways. An unknown or chromatic
+  key is neutral (0.5), never a clash: the stored key is evidence, not proof.
+- **Level.** Main attaches `arrivalGain` (`stemLevel.ts`: down toward the library's 25th
+  percentile of `loudnessLufs`, never up, floor 0.25) and `presence` to every roll
+  (`attachLevelAndPresence`). It reads only the in-memory trait value table: when that table isn't
+  current the attach is skipped (rows arrive at 1, no presence) so a roll never pays disk reads.
+  A row's gain is the ordinary visible one: `rowGainFor(row, stem)` gives the gain a row has for a
+  given stem, and every landing goes through it (`commitSlotPick`), as do the staged engine project
+  and `pushMasterLevel`, so an incoming stem is staged at the gain its row will have. Anything new
+  that writes a stem's volume from row state must use `rowGainFor` with the stem actually sounding.
+- **Balance.** `presence` (`stemPresence`, `radioIntensity.ts`: the mean of the intensity score's
+  `busy` and `full` parts) is how much a stem demands. The `balance` term (`BALANCE_WEIGHT` 1) wants
+  `1 - the strongest other row's presence`. Bass, back and front count; drums don't
+  (`rankBalanceFor`, whose `countDrums` flag is for the next design's rotating focus).
+
+Radio's density arc peaks at 3 or 4 rows (`DENSITY_PEAK`, `DENSITY_MAX` 4; the intensity arc's
+ordinary peak follows), and a leg always aims at least one row away from where it starts. The web
+index carries the same values as `kr`, `ks`, `g` and `p`, all optional.
+
 ### Previews, Cmd+Z and the mixer rail (renderer conventions)
 
 - **Web Audio previews** connect to `previewOutput(ctx)` (`audio/previewOutput.ts`), never to
