@@ -62,7 +62,7 @@ import {
   type DensityLeg
 } from '@shared/radioDensity'
 import { DEFAULT_DISCOVER_CHAOS, rankCandidates, pickReroll } from '@shared/discoverRanking'
-import { rankBalanceFor, rankKeyFor } from '@shared/discoverKey'
+import { rankBalanceFor, rankKeyFor, rowsForFit, type FitChanges } from '@shared/discoverKey'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { heartFetchLabel } from '@shared/radioHearts'
 import { heartsButtonShown } from '@shared/features'
@@ -10176,6 +10176,9 @@ export function DiscoverPanel({
         console.log(`[radio-intensity] band too small for ${slotKindsKey(kinds)}: the whole pool`)
       }
       const barred = band === null ? traitBarred : band.pool
+      // The rows this pick will sound with, each holding the stem it will hold then (read now,
+      // after the awaits above: an earlier pick of the same pass is in).
+      const fitRows = rowsForFit(slotsRef.current, id, fitChangesNow())
       const ranked = rankCandidates(barred, {
         targetBpm: bpm,
         // The faves dial's lean: faves/100 of the favourites boost (0 in artist mode, above).
@@ -10187,26 +10190,14 @@ export function DiscoverPanel({
         targetTraits,
         // The key lean (@shared/discoverKey): against the rows sounding with this pick, the
         // same rows as the clash bed below, so a muted or absent row doesn't pull the key.
-        key: rankKeyFor(
-          slotsRef.current.filter((s) => s.id !== id && previewingSlotIdsRef.current.has(s.id)),
-          id,
-          kinds
-        ),
+        key: rankKeyFor(fitRows, id, kinds),
         // The balance lean, against the same rows: a strong part sounding pulls a sparse pick up.
-        balance: rankBalanceFor(
-          slotsRef.current.filter((s) => s.id !== id && previewingSlotIdsRef.current.has(s.id)),
-          id,
-          kinds
-        ),
+        balance: rankBalanceFor(fitRows, id, kinds),
         ...(clashAmount > 0
           ? {
               clash: {
                 amount: clashAmount,
-                bed: radioClashBed(
-                  slotsRef.current
-                    .filter((s) => s.id !== id && previewingSlotIdsRef.current.has(s.id))
-                    .map((s) => s.candidate?.traitPercentiles ?? {})
-                )
+                bed: radioClashBed(fitRows.map((s) => s.candidate?.traitPercentiles ?? {}))
               }
             }
           : {}),
@@ -10260,6 +10251,72 @@ export function DiscoverPanel({
         })
       }
     }
+  }
+
+  /** Several rows picked in one pass (radio's change and its companions, a course change), in
+   * flight: the rows, and each one's pick once made. fitChangesNow reads them. */
+  const pickPassesRef = useRef(
+    new Set<{ rows: ReadonlySet<string>; picks: Map<string, DiscoverCandidate> }>()
+  )
+  /** Picks for rows that change together, one after another, so each is scored against the
+   * picks before it instead of the stems they replace (rowsForFit); the rows still to be picked
+   * count for nothing meanwhile, their stems being on the way out. One at a time costs little:
+   * main answers picks one at a time anyway. Same order as `rows`; null where pickForSlot's is. */
+  async function pickRowsInPass(
+    rows: readonly { id: string; kinds: DiscoverSlotKind[] }[],
+    opts: Parameters<typeof pickForSlot>[2]
+  ): Promise<(SlotPick | null)[]> {
+    const pass = { rows: new Set(rows.map((r) => r.id)), picks: new Map() }
+    pickPassesRef.current.add(pass)
+    try {
+      const out: (SlotPick | null)[] = []
+      for (const row of rows) {
+        const pick = await pickForSlot(row.id, row.kinds, opts)
+        // found nothing: the row keeps its stem, and counts as it is
+        if (pick?.candidate == null) pass.rows.delete(row.id)
+        else pass.picks.set(row.id, pick.candidate)
+        out.push(pick)
+      }
+      return out
+    } finally {
+      pickPassesRef.current.delete(pass)
+    }
+  }
+  /** What is about to change in the mix, as far as it is known now, for a pick's key, balance
+   * and clash (rowsForFit). A later source wins a row: radio's armed pick, its held change, the
+   * density arc's held add, the queued manual changes (a hook's and the intensity arc's landings
+   * among them; a resting exit leaves), a roll-all's batch, a pass in flight. Left out as too far
+   * off or not sure to land: the spares, a hook exit's substitute before its exit is decided, the
+   * arc's add after next (intensityNextAddRef), a re-arm before it is swapped in. */
+  function fitChangesNow(): FitChanges<DiscoverCandidate> {
+    const sounding = previewingSlotIdsRef.current
+    const incoming = new Map<string, { candidate: DiscoverCandidate | null; joining?: boolean }>()
+    const leaving = new Set<string>()
+    for (const change of [radioPendingRef.current, radioLedChangeRef.current]) {
+      if (change === null) continue
+      for (const k of change.companions ?? []) incoming.set(k.slotId, k.pick)
+      incoming.set(change.slotId, change.pick)
+    }
+    const adding = arcAddingRef.current
+    if (adding?.held !== undefined) {
+      incoming.set(adding.slotId, { candidate: adding.held.pick.candidate, joining: true })
+    }
+    if (arcExitRef.current !== null) leaving.add(arcExitRef.current.slotId)
+    for (const [slotId, m] of manualChangesRef.current) {
+      if (m.rest === true) leaving.add(slotId)
+      else incoming.set(slotId, { candidate: m.pick.candidate, joining: m.joining })
+    }
+    for (const [slotId, candidate] of artistBatchPicksRef.current) {
+      incoming.set(slotId, { candidate, joining: !sounding.has(slotId) })
+    }
+    for (const pass of pickPassesRef.current) {
+      for (const slotId of pass.rows) {
+        const candidate = pass.picks.get(slotId)
+        if (candidate !== undefined) incoming.set(slotId, { candidate })
+        else if (!incoming.has(slotId)) leaving.add(slotId)
+      }
+    }
+    return { sounding, incoming, leaving }
   }
 
   /** Writes a pick onto a slot. The ONE place a rolled candidate lands, so
@@ -11244,9 +11301,9 @@ export function DiscoverPanel({
       const s = slotsRef.current.find((x) => x.id === id)
       return s ? [s] : []
     })
-    // ONE in-flight token for the whole set: every pick is awaited together (in parallel, so a
-    // companion costs no extra wait), and the arm is either current when they have all returned
-    // or writes nothing. A slow pick holds the arm back as a slow primary always has -- the due
+    // ONE in-flight token for the whole set: the picks are made one after another, each scored
+    // against the ones before it (pickRowsInPass), and the arm is either current when they have
+    // all returned or writes nothing. A slow pick holds the arm back as a slow primary always has -- the due
     // branch leaves an arm in flight alone, and nothing is pending meanwhile, so nothing can land
     // late on its account.
     radioArmInFlightRef.current = myArm
@@ -11255,10 +11312,10 @@ export function DiscoverPanel({
     let pick: Awaited<ReturnType<typeof pickForSlot>>
     let morePicks: Awaited<ReturnType<typeof pickForSlot>>[]
     try {
-      ;[pick, ...morePicks] = await Promise.all([
-        pickForSlot(slotId, slot.kinds, { avoidOwnStem: true, intensity: lean }),
-        ...moreSlots.map((s) => pickForSlot(s.id, s.kinds, { avoidOwnStem: true, intensity: lean }))
-      ])
+      ;[pick, ...morePicks] = await pickRowsInPass([slot, ...moreSlots], {
+        avoidOwnStem: true,
+        intensity: lean
+      })
     } finally {
       if (radioArmInFlightRef.current === myArm) radioArmInFlightRef.current = null
     }
@@ -12708,10 +12765,7 @@ export function DiscoverPanel({
     })
     if (slot === undefined) return stays('its row is gone')
     const opts = { avoidOwnStem: true, yieldRow: true, intensity: lean }
-    const [pick, ...more] = await Promise.all([
-      pickForSlot(slot.id, slot.kinds, opts),
-      ...comps.map((s) => pickForSlot(s.id, s.kinds, opts))
-    ])
+    const [pick, ...more] = await pickRowsInPass([slot, ...comps], opts)
     if (!live()) {
       if (intensityRearmRef.current === me) intensityRearmRef.current = null
       return
@@ -13197,11 +13251,15 @@ export function DiscoverPanel({
       void armRadioPick()
       return
     }
+    // Every row changes together: picked in one pass, each against the picks before it.
+    const changing = eligible.flatMap((id) => {
+      const slot = slotsRef.current.find((s) => s.id === id)
+      return slot ? [slot] : []
+    })
+    const picked = await pickRowsInPass(changing, { avoidOwnStem: true })
     const picks = await Promise.all(
-      eligible.map(async (id): Promise<{ slotId: string; pick: SlotPick } | null> => {
-        const slot = slotsRef.current.find((s) => s.id === id)
-        if (!slot) return null
-        const pick = await pickForSlot(id, slot.kinds, { avoidOwnStem: true })
+      changing.map(async ({ id }, i): Promise<{ slotId: string; pick: SlotPick } | null> => {
+        const pick = picked[i]
         if (pick === null || pick.candidate === null) return null
         // A null resolve (network hiccup, since-deleted riff) deletes its
         // own cache entry; the pick still commits and that one row simply

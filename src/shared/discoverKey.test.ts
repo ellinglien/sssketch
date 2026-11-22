@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { rankBalanceFor, rankKeyFor, rowKeyLabel } from './discoverKey'
+import { rankBalanceFor, rankKeyFor, rowKeyLabel, rowsForFit } from './discoverKey'
 import type { DiscoverSlotKind } from './discoverSlotKind'
 
 const row = (
@@ -81,5 +81,64 @@ describe('rankBalanceFor', () => {
   })
   it('leaves out a presence that is not a finite number', () => {
     expect(rankBalanceFor([p('g', ['bass'], NaN)], 'new', ['front']).others).toEqual([])
+  })
+})
+
+describe('rowsForFit', () => {
+  const stem = (root: number): { riffRoot: number; riffScale: number } => ({
+    riffRoot: root,
+    riffScale: 0
+  })
+  const rows = [
+    { id: 'a', kinds: ['bass' as const], candidate: stem(0) },
+    { id: 'b', kinds: ['back' as const], candidate: stem(2) },
+    { id: 'c', kinds: ['front' as const], candidate: stem(4) },
+    { id: 'd', kinds: ['back' as const], candidate: stem(5) }
+  ]
+  const sounding = new Set(['a', 'b', 'c'])
+  const none = { sounding, incoming: new Map(), leaving: new Set<string>() }
+
+  it('with nothing coming: the other sounding rows, as they are', () =>
+    expect(rowsForFit(rows, 'a', none)).toEqual([rows[1], rows[2]]))
+  it('a row counts by its incoming pick, not the stem about to leave', () => {
+    const incoming = new Map([['b', { candidate: stem(7) }]])
+    expect(rowsForFit(rows, 'a', { ...none, incoming })).toEqual([
+      { ...rows[1], candidate: stem(7) },
+      rows[2]
+    ])
+  })
+  it('a muted row is ignored, with a pick coming or not', () => {
+    const incoming = new Map([['d', { candidate: stem(7) }]])
+    expect(rowsForFit(rows, 'a', { ...none, incoming }).map((r) => r.id)).toEqual(['b', 'c'])
+  })
+  it('a row joining the mix with its pick counts', () => {
+    const incoming = new Map([['d', { candidate: stem(7), joining: true }]])
+    expect(rowsForFit(rows, 'a', { ...none, incoming })).toEqual([
+      rows[1],
+      rows[2],
+      { ...rows[3], candidate: stem(7) }
+    ])
+  })
+  it('a row leaving with no replacement is dropped', () =>
+    expect(rowsForFit(rows, 'a', { ...none, leaving: new Set(['c']) }).map((r) => r.id)).toEqual([
+      'b'
+    ]))
+  it('a pick known for a row said to be leaving: the pick stands', () => {
+    const incoming = new Map([['c', { candidate: stem(9) }]])
+    expect(rowsForFit(rows, 'a', { sounding, incoming, leaving: new Set(['c']) })).toEqual([
+      rows[1],
+      { ...rows[2], candidate: stem(9) }
+    ])
+  })
+  it('never the row being filled, whatever is coming for it', () => {
+    const incoming = new Map([['a', { candidate: stem(9), joining: true }]])
+    expect(rowsForFit(rows, 'a', { ...none, incoming }).map((r) => r.id)).toEqual(['b', 'c'])
+  })
+  it('feeds rankKeyFor the incoming key', () => {
+    const incoming = new Map([['b', { candidate: stem(7) }]])
+    expect(rankKeyFor(rowsForFit(rows, 'a', { ...none, incoming }), 'a', ['bass']).others).toEqual([
+      { root: 7, scale: 0 },
+      { root: 4, scale: 0 }
+    ])
   })
 })

@@ -54,6 +54,41 @@ export function rankBalanceFor(
   return { exempt: !countDrums && isDrums(kinds), others }
 }
 
+/** What is about to change in the mix, for rowsForFit. */
+export interface FitChanges<C> {
+  /** The rows in the mix now (not muted). */
+  sounding: ReadonlySet<string>
+  /** A pick already known to land on a row (radio's armed or held change and its companions, a
+   * queued manual change, an earlier pick of the same pass). `joining`: its landing brings the
+   * row into the mix. */
+  incoming: ReadonlyMap<string, { candidate: C | null; joining?: boolean }>
+  /** Rows leaving the mix, or whose stem is going with its replacement not picked yet. */
+  leaving: ReadonlySet<string>
+}
+
+/** The rows a pick for `slotId` will sound with, for rankKeyFor and rankBalanceFor: each other
+ * row that will be in the mix, holding the stem it will hold. A row with a pick coming counts by
+ * that pick, not by the stem about to leave (it must be sounding, or join with the pick); a row
+ * with none counts as it is while it sounds and is not leaving. Rows several picks change
+ * together would otherwise each be scored against stems that are gone when they land. */
+export function rowsForFit<C, R extends { id: string; candidate: C | null }>(
+  rows: readonly R[],
+  slotId: string,
+  { sounding, incoming, leaving }: FitChanges<C>
+): R[] {
+  const out: R[] = []
+  for (const r of rows) {
+    if (r.id === slotId) continue
+    const next = incoming.get(r.id)
+    if (next === undefined) {
+      if (sounding.has(r.id) && !leaving.has(r.id)) out.push(r)
+    } else if (sounding.has(r.id) || next.joining === true) {
+      out.push(next.candidate === r.candidate ? r : { ...r, candidate: next.candidate })
+    }
+  }
+  return out
+}
+
 /** "f minor (aeolian)", or undefined when the key says nothing. */
 export function rowKeyLabel(
   root: number | null | undefined,
