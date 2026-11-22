@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { drawManualTransitions, mergeStageChanges, radioGestureBeats } from './radioManualChanges'
+import {
+  drawManualTransitions,
+  mergeStageChanges,
+  radioGestureBeats,
+  stagedIncoming
+} from './radioManualChanges'
 import type { RadioTransitionKind } from './radioTransition'
 
 /** A pick that returns the given kind for every row. */
@@ -374,4 +379,30 @@ describe('mergeStageChanges: the pace slider companions', () => {
     const manual = new Map([['a', { stem: 'A2', joining: false, arrival: null }]])
     expect(mergeStageChanges(led, manual).changes).toEqual([{ slotId: 'a', stem: 'A2' }])
   })
+})
+
+describe('stagedIncoming', () => {
+  const changes = [{ slotId: 'a' }, { slotId: 'b' }, { slotId: 'c' }]
+  it('names the pick of each staged change: a manual one wins its row', () => {
+    const radio = new Map([
+      ['a', 'radio-a'],
+      ['b', 'radio-b']
+    ])
+    const manual = new Map([
+      ['b', 'manual-b'],
+      ['c', 'manual-c']
+    ])
+    expect([...stagedIncoming(changes, radio, manual)]).toEqual([
+      ['a', 'radio-a'],
+      ['b', 'manual-b'],
+      ['c', 'manual-c']
+    ])
+  })
+  it('leaves out a pick that is not in the stage (still resolving, or a resting exit)', () => {
+    const radio = new Map([['a', 'radio-a']])
+    const manual = new Map([['z', 'manual-z']])
+    expect([...stagedIncoming([{ slotId: 'a' }], radio, manual)]).toEqual([['a', 'radio-a']])
+  })
+  it('a staged change with no pick known is left out', () =>
+    expect(stagedIncoming(changes, new Map(), new Map()).size).toBe(0))
 })

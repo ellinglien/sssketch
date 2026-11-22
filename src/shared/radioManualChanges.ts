@@ -156,3 +156,21 @@ export function mergeStageChanges<S>(
   }
   return { changes, joining, arrivals }
 }
+
+/** The pick each change of a stage lands, by row: the staged project plays an incoming stem at
+ * the gain its row will have once it lands. Only rows in `changes` (mergeStageChanges' own), so
+ * a manual pick that is not in the stage (still resolving, or a resting exit) names nothing --
+ * on a row radio is changing, radio's pick stands. `manual` is the READY manual picks, which
+ * win their row as they do in the merge. */
+export function stagedIncoming<C>(
+  changes: readonly { slotId: string }[],
+  radio: ReadonlyMap<string, C>,
+  manual: ReadonlyMap<string, C>
+): Map<string, C> {
+  const out = new Map<string, C>()
+  for (const { slotId } of changes) {
+    const pick = manual.has(slotId) ? manual.get(slotId) : radio.get(slotId)
+    if (pick !== undefined) out.set(slotId, pick)
+  }
+  return out
+}

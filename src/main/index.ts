@@ -101,6 +101,7 @@ import {
 } from './riffLibraryStore'
 import {
   getDiscoverCandidates,
+  attachLevelAndPresence,
   getRandomLibraryCandidate,
   getInstrumentMaskLookup,
   prewarmDiscoverCandidateCaches,
@@ -1815,14 +1816,17 @@ app.whenReady().then(async () => {
       soundSource?: DiscoverSoundSourceFilter
     ): Promise<DiscoverCandidate | null> => {
       await whenAllTableCountsSettled()
-      return getRandomLibraryCandidate({
-        ownDb: openOwnRiffLibraryDb(),
+      const ownDb = openOwnRiffLibraryDb()
+      const candidate = await getRandomLibraryCandidate({
+        ownDb,
         jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
         kinds,
         onlyOwnStems,
         targetUser,
         soundSource
       })
+      // Levelled as every other roll is: its row arrives at its gain, and it counts in the balance.
+      return candidate === null ? null : (await attachLevelAndPresence(ownDb, [candidate]))[0]
     }
   )
 

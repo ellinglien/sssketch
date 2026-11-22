@@ -46,6 +46,7 @@ import {
   drawManualTransitions,
   mergeStageChanges,
   radioGestureBeats,
+  stagedIncoming,
   type ManualArrival
 } from '@shared/radioManualChanges'
 import { stemsToAvoid } from '@shared/discoverPickAvoid'
@@ -476,7 +477,7 @@ import {
 } from '@shared/toolkit'
 import type { RiserClip } from '@shared/riser'
 import { masterScaledCurve, masterScaledGains, masterSendsFor } from '@shared/performanceDeck'
-import { rowGainFor } from '@shared/stemLevel'
+import { balanceForGain, landedLevel, rowBalance, rowGainFor } from '@shared/stemLevel'
 import { MASTER_LIVE_PARAM_KEY } from '@shared/liveParam'
 import { scheduleLiveParamSync } from './liveParamSync'
 import { radioPaceRowsThisChange } from '@shared/radioPace'
@@ -582,6 +583,11 @@ export interface DiscoverSlot {
    * the universal `state.vol[key] ?? 1` read convention used everywhere
    * else in this codebase. */
   gain: number
+  /** The row's level relative to its stem's arrival gain (@shared/stemLevel LevelledRow), not
+   * clamped: what carries a gain set by hand from stem to stem, a boost past the stem's arrival
+   * gain included. Set by a gain drag and at each landing; absent, the gain implies it. Slot
+   * state like `gain`: in undo snapshots, never saved. */
+  balance?: number
   /** Radio laid this row down (the bed on an empty panel) or the density
    * arc added it -- the only rows the arc may remove. A duplicate of one is
    * his, not radio's. */
@@ -3225,14 +3231,22 @@ export function DiscoverPanel({
   // Direct request, 2026-09-15: "dragging envelope/volume shouldn't
   // retrigger start of samples... should not affect playhead."
   function updateSlotGain(id: string, gain: number): void {
-    setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, gain } : s)))
+    // A gain set by hand is the row's balance from here on, for the stem it holds.
+    setSlots((prev) =>
+      prev.map((s) =>
+        s.id === id ? { ...s, gain, balance: balanceForGain(gain, s.candidate) } : s
+      )
+    )
     const mapping = currentPreviewMappingRef.current
     const slotIndex = mapping?.slotIndexById.get(id)
     if (mapping && slotIndex !== undefined) {
       // For the stem the engine has: the row's own, but for the moment a pick is resolving.
       const slot = slotsRef.current.find((s) => s.id === id)
       const live = slot
-        ? rowGainFor({ ...slot, gain }, mapping.candidateById.get(id) ?? null)
+        ? rowGainFor(
+            { ...slot, gain, balance: balanceForGain(gain, slot.candidate) },
+            mapping.candidateById.get(id) ?? null
+          )
         : gain
       // Times the master, or dragging one slot while the master is down
       // would push that one slot back up to its unscaled gain.
@@ -7173,13 +7187,18 @@ export function DiscoverPanel({
     >()
     // The queue entries themselves, by identity, for the applied guard.
     const stagedEntries = new Map<string, object>()
+    // The ready manual picks: the ones in the stage (stagedIncoming).
+    const manualIncoming = new Map<string, DiscoverCandidate | null>()
     // A hook's resting exit changes no stem: its row leaves the staged mix (plan Task 11).
     const leaving: string[] = []
     if (stagedManual !== null) {
       for (const [slotId, m] of stagedManual) {
         if (m.stem !== null) {
           if (m.rest === true) leaving.push(slotId)
-          else readyManual.set(slotId, { stem: m.stem, joining: m.joining, arrival: m.arrival })
+          else {
+            readyManual.set(slotId, { stem: m.stem, joining: m.joining, arrival: m.arrival })
+            manualIncoming.set(slotId, m.pick.candidate)
+          }
           stagedEntries.set(slotId, m)
         }
       }
@@ -7225,13 +7244,14 @@ export function DiscoverPanel({
           : radioGestureRef.current.length > 0
             ? 'led'
             : 'cut'
-    // Radio's own and its companions' first: a manual change on a row wins it (mergeStageChanges).
-    const incoming = new Map<string, DiscoverCandidate | null>()
+    const radioIncoming = new Map<string, DiscoverCandidate | null>()
     if (readyLed !== null) {
-      incoming.set(readyLed.slotId, readyLed.pick.candidate)
-      for (const k of radioStagedCompanions(readyLed)) incoming.set(k.slotId, k.pick.candidate)
+      for (const k of radioStagedCompanions(readyLed)) {
+        radioIncoming.set(k.slotId, k.pick.candidate)
+      }
+      radioIncoming.set(readyLed.slotId, readyLed.pick.candidate)
     }
-    for (const [slotId, m] of stagedManual ?? []) incoming.set(slotId, m.pick.candidate)
+    const incoming = stagedIncoming(merged.changes, radioIncoming, manualIncoming)
     void syncPreviewToEngine(previewingSlotIdsRef.current, {
       token,
       changes: merged.changes,
@@ -9614,10 +9634,10 @@ export function DiscoverPanel({
           pickBar: candidate !== null ? slot.pickBar : undefined,
           reclassified: candidate !== null ? slot.reclassified : undefined,
           hasRerolled: false,
-          // The copy lands the source's stem at the source's gain: its balance without the
-          // stem's arrival gain, which the landing puts back (rowGainFor). Not clamped, or a
-          // row turned up past its arrival gain would land lower; the copy has no stem till then.
-          gain: slot.gain / (candidate?.arrivalGain ?? 1)
+          // The source's balance with its gain: the copy lands the source's stem at the
+          // source's gain (rowGainFor), and follows later stems as the source does.
+          gain: slot.gain,
+          balance: rowBalance(slot)
         }
       ])
       if (immediate) commitSlotPick(copyId, pick)
@@ -9713,7 +9733,7 @@ export function DiscoverPanel({
           ? {
               ...s,
               candidate,
-              gain: rowGainFor(s, candidate),
+              ...landedLevel(s, candidate),
               hasRerolled: true,
               seedStem: undefined
             }
@@ -10314,7 +10334,7 @@ export function DiscoverPanel({
               ...s,
               candidate: pick.candidate,
               // the row arrives at its stem's gain, a balance set by hand carried over
-              gain: rowGainFor(s, pick.candidate),
+              ...landedLevel(s, pick.candidate),
               ...(pick.unranked
                 ? {}
                 : {
@@ -10553,7 +10573,7 @@ export function DiscoverPanel({
               ? {
                   ...s,
                   candidate,
-                  gain: rowGainFor(s, candidate),
+                  ...landedLevel(s, candidate),
                   hasRerolled: true,
                   seedStem: undefined
                 }
