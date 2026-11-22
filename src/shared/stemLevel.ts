@@ -212,7 +212,6 @@ export function arrivalGain(loudnessLufs: number | null | undefined, targetLufs:
 export interface LevelledStem {
   stemCID: string
   arrivalGain?: number
-  slotKinds?: readonly string[]
 }
 
 /** What they read of a row. `balance` is the row's level relative to its stem's arrival gain,
@@ -226,9 +225,6 @@ export interface LevelledRow {
 }
 
 function arrivalOf(stem: LevelledStem | null): number {
-  // drums stay at unity (Elling's "proceed", 2026-11-22): trimming them weakens the drum pump
-  // and lowers the level into the master glue
-  if (stem?.slotKinds?.includes('drums')) return 1
   const arrival = stem?.arrivalGain
   return arrival !== undefined && arrival > 0 ? arrival : 1
 }
