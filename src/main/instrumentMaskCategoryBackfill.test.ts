@@ -3,7 +3,7 @@ import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { backfillInstrumentMaskCategories } from './instrumentMaskCentroidBackfill'
+import { backfillInstrumentMaskCategories } from './instrumentMaskCategoryBackfill'
 
 let musicDir: string
 let userDataDir: string

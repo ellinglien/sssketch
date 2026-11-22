@@ -136,6 +136,21 @@ namespace sssketch
                 tone.deleteFile();
             }
 
+            beginTest("a published Play counts as starting before the audio thread takes it, and a Stop ends that");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
+                expect(! transport.isPlayingOrStarting());
+                transport.play(0.0);
+                expect(! transport.isPlaying());
+                expect(transport.isPlayingOrStarting());
+                transport.stop();
+                expect(! transport.isPlayingOrStarting());
+            }
+
             beginTest("play() fades in from silence when starting in the middle of a waveform");
             {
                 auto tone = writeConstantToneWav("sssketch_transport_play_fade.wav", 44100);

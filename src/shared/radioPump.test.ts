@@ -6,9 +6,9 @@ import { stemKey } from './types'
 describe('pumpRoleFor', () => {
   it('drums key the pump, bass is left alone, everything else is pumped', () => {
     expect(pumpRoleFor(['drums'])).toBe('key')
-    expect(pumpRoleFor(['drums', 'lead'])).toBe('key')
+    expect(pumpRoleFor(['drums', 'front'])).toBe('key')
     expect(pumpRoleFor(['bass'])).toBe('none')
-    expect(pumpRoleFor(['lead'])).toBe('pumped')
+    expect(pumpRoleFor(['front'])).toBe('pumped')
     expect(pumpRoleFor(['warm'])).toBe('pumped')
     expect(pumpRoleFor([])).toBe('pumped')
   })
@@ -29,7 +29,7 @@ describe('discoverStemPumpRoles (the preview rows, by slot kinds)', () => {
     const slots = [
       { id: 'a', kinds: ['drums'] as const },
       { id: 'b', kinds: ['bass'] as const },
-      { id: 'c', kinds: ['lead'] as const },
+      { id: 'c', kinds: ['front'] as const },
       { id: 'd', kinds: [] as const }
     ]
     // members in their own order: stem i + 1 is memberSlotIds[i]

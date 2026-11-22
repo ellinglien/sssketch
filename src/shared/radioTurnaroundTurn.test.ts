@@ -30,7 +30,7 @@ function row(
 const BED: TurnaroundRow[] = [
   row('d', ['drums']),
   row('b', ['bass']),
-  row('l', ['lead']),
+  row('l', ['front']),
   row('w', ['warm'])
 ]
 
@@ -102,7 +102,7 @@ describe("force.move: a chip's move", () => {
   })
 
   it('never ignores the guards or the cap', () => {
-    const noDrums = [row('b', ['bass']), row('l', ['lead'])]
+    const noDrums = [row('b', ['bass']), row('l', ['front'])]
     expect(rollTurnaround(input({ rows: noDrums, force: { move: 'drum drop' } }))).toBeNull()
     // a 1-bar loop caps at 2 beats: a wash (4 beats at its shortest) cannot fit
     expect(rollTurnaround(input({ loopBars: 1, force: { move: 'wash' } }))).toBeNull()
@@ -165,10 +165,10 @@ describe('turnaroundMoveCanSound', () => {
     { rows: [row('d', ['drums'])], loopBars: 8 },
     { rows: [row('d', ['drums']), row('b', ['bass'])], loopBars: 8 },
     {
-      rows: [row('d', ['drums']), row('l', ['lead'], { inFilterIn: true })],
+      rows: [row('d', ['drums']), row('l', ['front'], { inFilterIn: true })],
       loopBars: 8
     },
-    { rows: [row('l', ['lead'], { audible: false })], loopBars: 8 },
+    { rows: [row('l', ['front'], { audible: false })], loopBars: 8 },
     { rows: BED, loopBars: 0 }
   ]
 
@@ -191,7 +191,7 @@ describe('turnaroundMoveCanSound', () => {
     expect(turnaroundMoveCanSound({ rows: low, leavingRowId: null, loopBars: 8 }, 'stop')).toBe(
       false
     )
-    const noDrums = [row('b', ['bass']), row('l', ['lead'])]
+    const noDrums = [row('b', ['bass']), row('l', ['front'])]
     expect(
       turnaroundMoveCanSound({ rows: noDrums, leavingRowId: null, loopBars: 8 }, 'drum drop')
     ).toBe(false)

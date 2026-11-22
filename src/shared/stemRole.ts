@@ -1,4 +1,5 @@
 import type { BusId, SoundType, Stem } from './types'
+import { categoryOfRole } from './stemCategory'
 import { guessArrangeRoleFromPresetName } from './presetNames'
 
 /** Arrangement-oriented role taxonomy for the auto-arrange role-confirmation
@@ -81,25 +82,16 @@ const BUS_ID_TO_ARRANGE_ROLE: Record<BusId, ArrangeRole> = {
   aux: 'aux'
 }
 
-/** The real Ableton export bus each of ArrangeRole's 8 values routes a stem
- * to -- BusId only has 5 values, so the 3 that ArrangeRole adds on top
- * (textureFx/fill/vocal) have no bus of their own and route to 'aux', same
- * as the generic aux catch-all. Added for ClusterStemsBrowser.tsx's own
- * Tidy Up picker (2026-09-14, direct request): picking one of those 3
- * there still needs a real busId to assign (Tidy Up's whole export model is
- * bus-based), while ALSO recording the finer arrangeRole via
- * upsertStemCategoryRole so it isn't lost and still trains the arrangeRole
- * classifier. The inverse of BUS_ID_TO_ARRANGE_ROLE above for the 5 shared
- * values; the 3 extras are the only genuinely new mappings. */
+/** The bus a role tidies to: always one of the role's own category (stemCategory.ts). */
 export const ARRANGE_ROLE_TO_BUS: Record<ArrangeRole, BusId> = {
   drums: 'drums',
   bass: 'bass',
   lead: 'lead',
   backing: 'backing',
   aux: 'aux',
-  textureFx: 'aux',
-  fill: 'aux',
-  vocal: 'aux'
+  textureFx: 'backing',
+  fill: 'drums',
+  vocal: 'lead'
 }
 
 // Exported (not just used internally by resolveStemRole below) so
@@ -167,9 +159,8 @@ export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null
   // against), so this was the single most common source of a confidently-
   // wrong-looking suggestion. Still defaults the dropdown to 'vocal' below
   // (an OK starting guess, just no longer asserted as a confident one) --
-  // the centroid classifier (categoryCentroids.ts) can still override this
-  // default with a real suggestion once it has enough diverse training data,
-  // same as it already can for 'fx'.
+  // the stored model guess (the overnight classifier) can still override this
+  // default with a real suggestion, same as it already can for 'fx'.
   const uncertain =
     (stem.type === 'fx' || stem.type === 'audioIn') && busId === null && presetGuess === null
   const arrangeRole =
@@ -191,7 +182,8 @@ export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null
 /** What autoArrangeEngine.ts should actually treat this stem's "role" as,
  * for diversity-weighting/candidate-labeling purposes: the drum sub-role
  * (if arrangeRole is 'drums' and one was manually picked) instead of the
- * generic 'drums' bucket, otherwise the plain arrangeRole. The engine's own
+ * generic 'drums' bucket, otherwise the role's category
+ * (stemCategory.ts: back/front/drums/bass). The engine's own
  * roleDiversityBonus only ever compares role strings for equality -- it has
  * no idea what a "sub-role" is and needs no changes at all for this to
  * work: three drums-typed stems tagged kick/snare/hihat now correctly read
@@ -203,5 +195,5 @@ export function resolveStemRole(stem: Stem, stemKey: string, busId: BusId | null
  * own identity. */
 export function engineRoleFor(role: StemRoleInfo): string {
   if (role.arrangeRole === 'drums' && role.drumSubRole) return role.drumSubRole
-  return role.arrangeRole
+  return categoryOfRole(role.arrangeRole)
 }

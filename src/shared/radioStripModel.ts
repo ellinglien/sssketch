@@ -184,7 +184,7 @@ export const RADIO_STRIP_HINTS = {
     'transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop'
   ],
   density: [
-    'density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added',
+    'density arc grows the rows to three or four and thins them to two or three, only ever removing rows radio added',
     'intensity builds, breaks down and drops, led by drums and bass'
   ],
   turnarounds: ['turnarounds mark the end of each phrase'],

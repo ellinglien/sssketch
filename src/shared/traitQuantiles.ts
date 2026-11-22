@@ -15,7 +15,7 @@ import {
   type TraitFieldValues,
   type TraitValues
 } from './discoverTraits'
-import type { DiscoverTraitKind } from './discoverSlotKind'
+import type { DiscoverRankKind, DiscoverTraitKind } from './discoverSlotKind'
 
 /** 0th..100th percentile, inclusive. */
 export const QUANTILE_BREAKPOINTS = 101
@@ -69,7 +69,7 @@ export type TraitQuantileTables = Partial<Record<QuantileField, QuantileTable>>
 /** Library percentile per requested trait kind, in [0, 1], already
  * direction-adjusted (warm = low centroid -> high percentile). null = the
  * stem has no value for it, or no table exists yet. */
-export type TraitPercentiles = Partial<Record<DiscoverTraitKind, number | null>>
+export type TraitPercentiles = Partial<Record<DiscoverRankKind, number | null>>
 
 /** Builds a 101-breakpoint quantile table (linear interpolation between
  * sorted values). Non-finite values are ignored; null when nothing is
@@ -141,6 +141,19 @@ export function percentileOf(
   const below = table[a - 1]
   const above = table[a]
   return (a - 1 + (value - below) / (above - below)) / last
+}
+
+/** percentileOf's inverse: the value at percentile `p` (clamped to [0, 1]), interpolated between
+ * breakpoints. Monotone non-decreasing in `p`. null for a missing/empty table or a non-finite p. */
+export function valueAtPercentile(
+  table: QuantileTable | null | undefined,
+  p: number
+): number | null {
+  if (!table || table.length === 0 || !Number.isFinite(p)) return null
+  const pos = Math.min(1, Math.max(0, p)) * (table.length - 1)
+  const lo = Math.floor(pos)
+  const hi = Math.min(table.length - 1, lo + 1)
+  return table[lo] + (table[hi] - table[lo]) * (pos - lo)
 }
 
 /** Turns a stem's TraitValues into TraitPercentiles for exactly the kinds

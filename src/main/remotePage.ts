@@ -143,8 +143,8 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
 </html>`
 }
 
-/** The seven chips, in the desktop add row's own order and with its own
- * playful labels, plus which of the two groups each belongs to (mask kinds
+/** The eight chips, in the desktop add row's own order and with its own
+ * labels, plus which of the two groups each belongs to (mask kinds
  * filter, trait kinds rank -- the desktop draws a divider between them and
  * so does this). Generated from the shared list, so a new kind appears on
  * the phone by existing. */
@@ -1504,7 +1504,7 @@ input {
   // A selection is a bitmask over KINDS, and the only thing that ever
   // changes it is a KIND_TOGGLE lookup. Tapping is not add-to-a-list: it is
   // the mac's own toggleSlotKind, so tapping sparkly with buttery already on
-  // swaps them, and tapping drummy then rhythmic keeps both.
+  // swaps them, and tapping drums then rhythmic keeps both.
   var pendingMask = 0
   var chipEls = []
 

@@ -9,19 +9,20 @@
 // One row per (stem, training): the training it was tried under
 // (trainingFingerprintOf, stemAutoClassify.ts), the Instrument mask it had
 // then and when. The classifier leaves a stem out of its pending lists while
-// a row under the current fingerprint still has the stem's current mask; a
-// new confirmation or centroid retrain moves the fingerprint, and a mask
+// a row under the current fingerprint still has the stem's current mask; new
+// weights or a CLASSIFIER_VERSION bump move the fingerprint, and a mask
 // arriving moves that stem's own mask. A placed stem's rows are deleted (every
 // fingerprint); a store rewriting its embedding or feature row forgets them
 // too (stemAutoClassifyWake.ts), since a re-extraction can change the answer.
 //
 // Keyed on (StemCID, TrainingFingerprint), not StemCID alone (review of
-// 0adc41ca): the dev and the packaged app share the own db but each has its
-// own busCentroids.json, so their fingerprints differ, and with one row per
+// 0adc41ca): the dev and the packaged app share the own db but each could
+// carry a different model version, so their fingerprints differ, and with one row per
 // stem each app's record overwrote the other's -- every switch between them
 // re-tried the whole residue. A stem keeps its MAX_TRIED_FINGERPRINTS_PER_STEM
-// newest rows, so training that moves on doesn't grow the table without bound.
+// newest rows, so a model that moves on doesn't grow the table without bound.
 import type Database from 'better-sqlite3'
+import { currentAutoCategorySql } from './stemAutoCategoryStore'
 
 /** Shared by riffLibrarySchema.ts and the tests' fixture dbs. sssketch-only,
  * on the own db, like StemAutoCategory. Mask is NULL for a stem with no mask
@@ -140,7 +141,8 @@ export const TRIED_PRUNE_SLICE = 2000
 
 /** Drops, from the rows after rowid `after` (up to `limit` of them), those no
  * classifier will read again (review of 0adc41ca): the stem was placed by
- * another source (StemAutoCategory: the zero-shot pass, the other app),
+ * another source (a current StemAutoCategory row, currentAutoCategorySql
+ * for `modelSource`; an older app's or older model's guess doesn't count),
  * confirmed by hand (StemCategories), or has neither an embedding nor a
  * feature row left. The classifier calls it once per pending-list rebuild
  * (a launch, a training change, the 10-minute safety wake), so the whole
@@ -149,6 +151,7 @@ export const TRIED_PRUNE_SLICE = 2000
  * classifier's tables); one autocommitted DELETE. */
 export function pruneStemsTriedSlice(
   db: Database.Database,
+  modelSource: string,
   after: number,
   limit = TRIED_PRUNE_SLICE
 ): number {
@@ -162,7 +165,8 @@ export function pruneStemsTriedSlice(
   if (slice.n === 0 || slice.last === null) return 0
   db.prepare(
     `DELETE FROM StemAutoClassifyTried AS t WHERE t.rowid > ? AND t.rowid <= ? AND (
-       EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = t.StemCID)
+       EXISTS (SELECT 1 FROM StemAutoCategory a
+               WHERE a.StemCID = t.StemCID AND ${currentAutoCategorySql(modelSource)})
        OR EXISTS (SELECT 1 FROM StemCategories c
                   WHERE c.StemCID = t.StemCID AND c.ArrangeRole IS NOT NULL)
        OR (NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = t.StemCID)

@@ -5,6 +5,7 @@ import type { CoachSlotSnapshot } from './coachClimax'
 import {
   DISCOVER_SLOT_KIND_OPTIONS,
   normalizeSlotKinds,
+  parseSlotKind,
   slotKindsLabel,
   type DiscoverSlotKind
 } from './discoverSlotKind'
@@ -506,9 +507,8 @@ export function parseRemoteSlotKinds(value: unknown): DiscoverSlotKind[] | null 
   if (value.length === 0 || value.length > DISCOVER_SLOT_KIND_OPTIONS.length) return null
   const kinds: DiscoverSlotKind[] = []
   for (const entry of value) {
-    if (typeof entry !== 'string') return null
-    const kind = DISCOVER_SLOT_KIND_OPTIONS.find((k) => k === entry)
-    if (kind === undefined) return null
+    const kind = parseSlotKind(entry)
+    if (kind === null) return null
     kinds.push(kind)
   }
   const normalized = normalizeSlotKinds(kinds)

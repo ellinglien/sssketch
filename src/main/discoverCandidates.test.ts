@@ -32,6 +32,8 @@ import { bumpTableWriteVersion } from './tableWriteVersion'
 import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { countWork } from './workCounters'
 import { instrumentMaskToSoundType, soundSourceMatchesFilter } from '@shared/riffLibraryTypes'
+import { categoryOfRole } from '@shared/stemCategory'
+import type { ArrangeRole } from '@shared/stemRole'
 
 /** tableChangeSignal.ts's cheap half of a table's change signal (MAX(rowid)
  * + data_version): not a read of the table's rows, so the query-count tests
@@ -69,7 +71,7 @@ function freshDb(): Database.Database {
     );
     CREATE TABLE StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
-      ComputedAt INTEGER NOT NULL
+      ComputedAt INTEGER NOT NULL, FrontScore REAL
     );
     CREATE TABLE DiscoverRiffIndexCache (
       SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL, RiffCID TEXT NOT NULL,
@@ -111,17 +113,18 @@ function seedUnavailable(db: Database.Database, stemCID: string): void {
  * thresholds) is stemAutoClassify's own concern and is tested there.
  * Since 2026-09-22 (direct request: audio-in/mic stems never appeared
  * under drums/bass/lead), a MASK kind's pool reads this table again -- but
- * only for stems the Endlesss instrument mask can't place (no mask, or
- * audio-in); an Endlesss drums/bass/notes mask stays ground truth. */
+ * only for stems the Endlesss instrument mask can't place (no mask, notes,
+ * or audio-in); an Endlesss drums/bass mask stays ground truth. */
 function seedAutoCategory(
   db: Database.Database,
   stemCID: string,
   arrangeRole: string,
-  source: 'embedding' | 'centroid' = 'embedding'
+  source = 'model:2.1',
+  frontScore: number | null = null
 ): void {
   db.prepare(
-    `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt) VALUES (?, ?, ?, 1000)`
-  ).run(stemCID, arrangeRole, source)
+    `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt, FrontScore) VALUES (?, ?, ?, 1000, ?)`
+  ).run(stemCID, arrangeRole, source, frontScore)
 }
 
 function seedRiff(
@@ -272,6 +275,29 @@ describe('getDiscoverCandidates', () => {
       presetName: '808 kick',
       creatorUserName: 'elling',
       slotKinds: ['drums']
+    })
+  })
+
+  it("carries the owning riff's Root and Scale (null when the riff has none)", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 140, ['s1'])
+    seedRiff(own, 'r2', 'jam1', 140, ['s2'])
+    own.prepare(`UPDATE Riffs SET Root = 4, Scale = 5 WHERE RiffCID = 'r1'`).run()
+    for (const s of ['s1', 's2']) {
+      seedStem(own, s, 'jam1')
+      seedCategory(own, s, { arrangeRole: 'drums', busId: 'drums' })
+    }
+    expect((await getRiffIndexForDb(own)).get('s1')).toMatchObject({ root: 4, scale: 5 })
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['drums']
+    })
+    expect(candidates.find((c) => c.stemCID === 's1')).toMatchObject({ riffRoot: 4, riffScale: 5 })
+    expect(candidates.find((c) => c.stemCID === 's2')).toMatchObject({
+      riffRoot: null,
+      riffScale: null
     })
   })
 
@@ -968,7 +994,19 @@ describe('prewarmDiscoverCandidateCaches', () => {
     saveRiffIndexCache(
       own,
       own.name,
-      new Map([['s1', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128, creationTime: 1000 }]]),
+      new Map([
+        [
+          's1',
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'jam1',
+            bpmRnd: 128,
+            creationTime: 1000,
+            root: null,
+            scale: null
+          }
+        ]
+      ]),
       1
     )
     saveInstrumentRowsCache(
@@ -999,7 +1037,9 @@ describe('prewarmDiscoverCandidateCaches', () => {
       riffCID: 'r1',
       ownerJamCID: 'jam1',
       bpmRnd: 128,
-      creationTime: 1000
+      creationTime: 1000,
+      root: null,
+      scale: null
     })
   })
 
@@ -1015,7 +1055,17 @@ describe('prewarmDiscoverCandidateCaches', () => {
       own,
       own.name,
       new Map([
-        ['stale', { riffCID: 'stale-riff', ownerJamCID: 'stale-jam', bpmRnd: 999, creationTime: 1 }]
+        [
+          'stale',
+          {
+            riffCID: 'stale-riff',
+            ownerJamCID: 'stale-jam',
+            bpmRnd: 999,
+            creationTime: 1,
+            root: null,
+            scale: null
+          }
+        ]
       ]),
       5
     )
@@ -1030,7 +1080,9 @@ describe('prewarmDiscoverCandidateCaches', () => {
       riffCID: 'r1',
       ownerJamCID: 'jam1',
       bpmRnd: 128,
-      creationTime: 1000
+      creationTime: 1000,
+      root: null,
+      scale: null
     })
     expect(index.has('stale')).toBe(false)
   })
@@ -1646,12 +1698,12 @@ describe('getDiscoverCandidates (kind sets)', () => {
     const micOnly = await getDiscoverCandidates({
       ownDb: own,
       jams,
-      kinds: ['lead'],
+      kinds: ['front'],
       soundSource: endlesssOff
     })
     expect(micOnly.map((c) => c.stemCID)).toEqual(['mic'])
     expect(
-      await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'], soundSource: audioInOff })
+      await getDiscoverCandidates({ ownDb: own, jams, kinds: ['front'], soundSource: audioInOff })
     ).toEqual([])
   })
 
@@ -1865,6 +1917,43 @@ describe('getDiscoverCandidates (kind sets)', () => {
     for (const c of await roll(false)) expect('intensity' in c).toBe(false)
   })
 
+  it('every roll: a loud stem carries the gain its row arrives at, a measured one its presence', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['loud', 'quiet', 'none'])
+    seedStem(own, 'loud', 'jam1', { instrument: DRUM })
+    seedStem(own, 'quiet', 'jam1', { instrument: DRUM })
+    seedStem(own, 'none', 'jam1', { instrument: DRUM })
+    seedFeatures(own, 'loud', JSON.stringify({ transientDensity: 9, loudnessLufs: -24 }))
+    seedFeatures(own, 'quiet', JSON.stringify({ transientDensity: 1, loudnessLufs: -40 }))
+    // The rest of the library: its quieter quarter sits at -30 LUFS.
+    for (let i = 0; i < 9; i++) {
+      seedFeatures(own, `lib${i}`, JSON.stringify({ transientDensity: 4, loudnessLufs: -30 }))
+    }
+    const roll = (): ReturnType<typeof getDiscoverCandidates> =>
+      getDiscoverCandidates({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums']
+      })
+
+    // Before the library's values are in memory a roll reads nothing for it: rows arrive at 1.
+    for (const c of await roll()) {
+      expect('arrivalGain' in c).toBe(false)
+      expect('presence' in c).toBe(false)
+    }
+
+    await prewarmTraitQuantileTables(own)
+    const pool = await roll()
+    const of = (id: string): (typeof pool)[number] => pool.find((c) => c.stemCID === id)!
+    expect(of('loud').arrivalGain).toBeCloseTo(10 ** (-6 / 20), 5)
+    expect('arrivalGain' in of('quiet')).toBe(false)
+    expect('arrivalGain' in of('none')).toBe(false)
+    // Presence rides the same loop: the loud busy stem demands most, an unmeasured one is unknown.
+    expect(of('loud').presence).toBeGreaterThan(0.8)
+    expect(of('quiet').presence).toBeLessThan(0.2)
+    expect('presence' in of('none')).toBe(false)
+  })
+
   it('an empty kind set returns []', async () => {
     const own = freshDb()
     expect(
@@ -1928,6 +2017,20 @@ describe('getDiscoverCandidates (kindSources)', () => {
     expect(candidates.map((c) => c.kindSources)).toEqual([{ drums: 'guess' }, { drums: 'guess' }])
   })
 
+  it("ignores an older app's guess (not a placed row)", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['mic'])
+    seedStem(own, 'mic', 'jam1', { instrument: MIC })
+    seedAutoCategory(own, 'mic', 'drums', 'centroid')
+
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: jamsFor(own),
+      kinds: ['drums']
+    })
+    expect(candidates).toEqual([])
+  })
+
   it('a combination set records the source under the kind that admitted each stem', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['d', 'b'])
@@ -1976,6 +2079,80 @@ describe('getDiscoverCandidates (kindSources)', () => {
     ).toEqual([])
     const [c] = await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds: ['bass'] })
     expect(c.kindSources).toEqual({ bass: 'confirmed' })
+  })
+})
+
+describe('getDiscoverCandidates (pools by category)', () => {
+  const NOTES = 1 << 2
+  const jamsFor = (db: Database.Database): { jamCID: string; dbForJam: Database.Database }[] => [
+    { jamCID: 'jam1', dbForJam: db }
+  ]
+  const pool = async (
+    db: Database.Database,
+    kind: 'back' | 'front'
+  ): Promise<[string, string | undefined][]> =>
+    (await getDiscoverCandidates({ ownDb: db, jams: jamsFor(db), kinds: [kind] }))
+      .map((c): [string, string | undefined] => [c.stemCID, c.kindSources[kind]])
+      .sort()
+
+  it('a stem confirmed aux is back, never front', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['a'])
+    seedStem(own, 'a', 'jam1', { instrument: NOTES })
+    seedCategory(own, 'a', { arrangeRole: 'aux' })
+    expect(await pool(own, 'back')).toEqual([['a', 'confirmed']])
+    expect(await pool(own, 'front')).toEqual([])
+  })
+
+  it('a notes stem guessed lead is in both front and back, as a guess', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['n'])
+    seedStem(own, 'n', 'jam1', { instrument: NOTES })
+    seedAutoCategory(own, 'n', 'lead', 'model')
+    expect(await pool(own, 'front')).toEqual([['n', 'guess']])
+    expect(await pool(own, 'back')).toEqual([['n', 'guess']])
+  })
+
+  it('a notes stem with no guess is in both front and back, by its tag', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['n'])
+    seedStem(own, 'n', 'jam1', { instrument: NOTES })
+    expect(await pool(own, 'front')).toEqual([['n', 'tag']])
+    expect(await pool(own, 'back')).toEqual([['n', 'tag']])
+  })
+
+  it('a notes stem guessed drums follows the guess', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['n'])
+    seedStem(own, 'n', 'jam1', { instrument: NOTES })
+    seedAutoCategory(own, 'n', 'drums', 'model')
+    expect(await pool(own, 'front')).toEqual([])
+    const drums = await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds: ['drums'] })
+    expect(drums.map((c) => [c.stemCID, c.kindSources.drums])).toEqual([['n', 'guess']])
+  })
+
+  it('front and back rank by the dial: a guess by its FrontScore, a label at its end', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['lo', 'hi', 'led', 'aux'])
+    seedStem(own, 'lo', 'jam1', { instrument: NOTES })
+    seedStem(own, 'hi', 'jam1', { instrument: NOTES })
+    seedStem(own, 'led', 'jam1', { instrument: NOTES })
+    seedStem(own, 'aux', 'jam1', { instrument: NOTES })
+    seedAutoCategory(own, 'lo', 'backing', 'model', 0.2)
+    seedAutoCategory(own, 'hi', 'lead', 'model', 0.8)
+    seedCategory(own, 'led', { arrangeRole: 'lead' })
+    seedCategory(own, 'aux', { arrangeRole: 'aux' })
+    const dial = async (
+      kinds: ('back' | 'front')[]
+    ): Promise<Record<string, [number | null | undefined, number | null | undefined]>> =>
+      Object.fromEntries(
+        (await getDiscoverCandidates({ ownDb: own, jams: jamsFor(own), kinds })).map((c) => [
+          c.stemCID,
+          [c.traitPercentiles.front, c.traitPercentiles.back]
+        ])
+      )
+    expect(await dial(['front'])).toEqual({ lo: [0, 1], hi: [1, 0], led: [1, 0] })
+    expect(await dial(['back'])).toEqual({ lo: [0, 1], hi: [1, 0], aux: [0, 1] })
   })
 })
 
@@ -2093,7 +2270,9 @@ describe('background efficiency B1: trait values from the in-memory table', () =
 describe('background efficiency B2: per-kind stem lists', () => {
   const MASKS = [null, 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, (1 << 4) | (1 << 1), 1 << 6]
   const ROLES = ['drums', 'bass', 'lead', 'aux']
-  type Kind = 'drums' | 'bass' | 'lead'
+  type Kind = 'drums' | 'bass' | 'back' | 'front'
+  const cat = (role: string | undefined): string | undefined =>
+    role === undefined ? undefined : categoryOfRole(role as ArrangeRole)
 
   /** The pre-B2 walk (getMaskKindStemMasks + getMaskDiscoverCandidates's
    * confirmed/sound-source steps), written out plainly -- the reference the
@@ -2133,27 +2312,30 @@ describe('background efficiency B2: per-kind stem lists', () => {
         if (!allowed.has(row.OwnerJamCID) || admitted.has(row.StemCID)) continue
         const c = confirmed.get(row.StemCID)
         if (c !== undefined) {
-          if (c === kind)
+          if (cat(c) === kind)
             admitted.set(row.StemCID, { instrument: row.Instrument, source: 'confirmed' })
           continue
         }
         const t = row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
-        const placed = t === 'drums' || t === 'bass' || t === 'notes'
+        const backOrFront = kind === 'back' || kind === 'front'
+        const placed = t === 'drums' || t === 'bass'
+        const notesOnly = t === 'notes' && !auto.has(row.StemCID)
+        const guessed = cat(auto.get(row.StemCID))
         const ok = placed
-          ? (t === 'drums' && kind === 'drums') ||
-            (t === 'bass' && kind === 'bass') ||
-            (t === 'notes' && kind === 'lead')
-          : auto.get(row.StemCID) === kind
+          ? t === kind
+          : notesOnly
+            ? backOrFront
+            : guessed === kind || ((guessed === 'back' || guessed === 'front') && backOrFront)
         if (ok)
           admitted.set(row.StemCID, {
             instrument: row.Instrument,
-            source: placed ? 'tag' : 'guess'
+            source: placed || notesOnly ? 'tag' : 'guess'
           })
       }
     }
     const out = new Map<string, string>()
     // Confirmed stems the walk never passed still count (mask unknown).
-    for (const [cid, role] of confirmed) if (role === kind) out.set(cid, 'confirmed')
+    for (const [cid, role] of confirmed) if (cat(role) === kind) out.set(cid, 'confirmed')
     for (const [cid, a] of admitted) {
       if (!out.has(cid)) out.set(cid, a.source)
     }
@@ -2167,7 +2349,7 @@ describe('background efficiency B2: per-kind stem lists', () => {
     let x = seed
     const rand = (n: number): number => {
       x = (x * 1103515245 + 12345) % 2147483648
-      return x % n
+      return Math.floor((x / 2147483648) * n) // high bits: an LCG's low bits cycle
     }
     for (let r = 0; r < 40; r++) {
       const db = r % 4 === 3 ? other : own
@@ -2199,7 +2381,7 @@ describe('background efficiency B2: per-kind stem lists', () => {
         { jamCID: 'jam1', dbForJam: other },
         { jamCID: 'jam3', dbForJam: other }
       ]
-      for (const kind of ['drums', 'bass', 'lead'] as Kind[]) {
+      for (const kind of ['drums', 'bass', 'back', 'front'] as Kind[]) {
         for (const soundSource of [
           { endlesss: true, audioIn: true },
           { endlesss: false, audioIn: true },
@@ -2287,13 +2469,13 @@ describe('background efficiency B2: per-kind stem lists', () => {
     seedRiff(own, 'r1', 'jam1', 120, ['mic'])
     seedStem(own, 'mic', 'jam1', { instrument: 1 << 4 })
     const jams = [{ jamCID: 'jam1', dbForJam: own }]
-    expect(await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'] })).toEqual([])
+    expect(await getDiscoverCandidates({ ownDb: own, jams, kinds: ['front'] })).toEqual([])
     seedAutoCategory(own, 'mic', 'lead')
     // The guess layer rebuilds at most every GUESS_LAYER_MIN_MS (scan plan
     // Task 10): the signal still sees the write, on the next rebuild.
     now += 10_000
-    const lead = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'] })
-    expect(lead.map((c) => [c.stemCID, c.kindSources.lead])).toEqual([['mic', 'guess']])
+    const lead = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['front'] })
+    expect(lead.map((c) => [c.stemCID, c.kindSources.front])).toEqual([['mic', 'guess']])
     vi.restoreAllMocks()
   })
 })
@@ -2416,7 +2598,7 @@ describe('background efficiency B3: change detection instead of a TTL', () => {
     seedRiff(own, 'r1', 'jam1', 128, ['s1'])
     const first = await getRiffIndexForDb(own)
     for (let i = 0; i < 50; i += 1) {
-      upsertStemAutoCategory(own, `other-stem-${i}`, 'drums', 'embedding', 2000 + i)
+      upsertStemAutoCategory(own, `other-stem-${i}`, 'drums', 'model:2.1', 2000 + i)
     }
     advance(31_000 + 10 * 60_000)
     expect(await getRiffIndexForDb(own)).toBe(first)
@@ -2450,7 +2632,19 @@ describe('background efficiency B3: change detection instead of a TTL', () => {
     saveRiffIndexCache(
       own,
       own.name,
-      new Map([['s1', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128, creationTime: 1000 }]]),
+      new Map([
+        [
+          's1',
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'jam1',
+            bpmRnd: 128,
+            creationTime: 1000,
+            root: null,
+            scale: null
+          }
+        ]
+      ]),
       1
     )
     saveInstrumentRowsCache(
@@ -2603,7 +2797,14 @@ describe('appendToInMemoryDiscoverCaches', () => {
       [
         {
           stemCID: 's2',
-          entry: { riffCID: 'r2', ownerJamCID: 'discovered', bpmRnd: 140, creationTime: 20 }
+          entry: {
+            riffCID: 'r2',
+            ownerJamCID: 'discovered',
+            bpmRnd: 140,
+            creationTime: 20,
+            root: null,
+            scale: null
+          }
         }
       ],
       []
@@ -2625,7 +2826,14 @@ describe('appendToInMemoryDiscoverCaches', () => {
       [
         {
           stemCID: 's1',
-          entry: { riffCID: 'r2', ownerJamCID: 'discovered', bpmRnd: 140, creationTime: 20 }
+          entry: {
+            riffCID: 'r2',
+            ownerJamCID: 'discovered',
+            bpmRnd: 140,
+            creationTime: 20,
+            root: null,
+            scale: null
+          }
         }
       ],
       []
@@ -2641,7 +2849,19 @@ describe('appendToInMemoryDiscoverCaches', () => {
     expect(() =>
       appendToInMemoryDiscoverCaches(
         db,
-        [{ stemCID: 's1', entry: { riffCID: 'r', ownerJamCID: 'j', bpmRnd: 1, creationTime: 1 } }],
+        [
+          {
+            stemCID: 's1',
+            entry: {
+              riffCID: 'r',
+              ownerJamCID: 'j',
+              bpmRnd: 1,
+              creationTime: 1,
+              root: null,
+              scale: null
+            }
+          }
+        ],
         []
       )
     ).not.toThrow()
@@ -2895,7 +3115,7 @@ describe('getInstrumentMaskLookup', () => {
     const writer = new Database(path)
     writer.exec(`
       CREATE TABLE Riffs (
-        RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER, BPMrnd REAL,
+        RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER, BPMrnd REAL, Root INTEGER, Scale INTEGER,
         StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
         StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT
       );
@@ -2970,6 +3190,7 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
   const ARCHIVE_DDL = `
     CREATE TABLE Riffs (
       RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER, BPMrnd REAL,
+      Root INTEGER, Scale INTEGER,
       StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
       StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY (RiffCID)
     );
@@ -3023,11 +3244,16 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
   }
 
   /** The index the old RiffCID-ordered walk built: first seen wins. */
-  function oracle(
-    path: string
-  ): Map<
+  function oracle(path: string): Map<
     string,
-    { riffCID: string; ownerJamCID: string; bpmRnd: number; creationTime: number | null }
+    {
+      riffCID: string
+      ownerJamCID: string
+      bpmRnd: number
+      creationTime: number | null
+      root: number | null
+      scale: number | null
+    }
   > {
     const db = new Database(path, { readonly: true })
     const rows = db.prepare(`SELECT * FROM Riffs ORDER BY RiffCID`).all() as Record<
@@ -3043,7 +3269,9 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
           riffCID: r.RiffCID,
           ownerJamCID: r.OwnerJamCID,
           bpmRnd: r.BPMrnd,
-          creationTime: r.CreationTime
+          creationTime: r.CreationTime,
+          root: r.Root,
+          scale: r.Scale
         })
       }
     }
@@ -3084,6 +3312,47 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
     expect(await getRiffIndexForDb(src)).toEqual(expected)
     expect(await persisted(own, path)).toEqual(expected)
     expect(walkedRiffs()).toBe(12_345)
+  })
+
+  it("keeps each riff's Root and Scale, in the saved copy too", async () => {
+    const path = archivePath()
+    const w = new Database(path)
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, Root, Scale, StemCID_1) VALUES ('a', 'j', 120, 4, 5, 's1')`
+    ).run()
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('b', 'j', 120, 's2')`
+    ).run()
+    w.close()
+    const src = launch(path)
+    const own = freshDb()
+    await prewarm(src, own)
+    expect((await getRiffIndexForDb(src)).get('s1')).toMatchObject({ root: 4, scale: 5 })
+    expect((await getRiffIndexForDb(src)).get('s2')).toMatchObject({ root: null, scale: null })
+    expect((await persisted(own, path)).get('s1')).toMatchObject({ root: 4, scale: 5 })
+  })
+
+  it('a copy saved before keys were kept is rebuilt once, with them', async () => {
+    const path = archivePath()
+    seedRiffs(path, 50, 9)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    // As an earlier version left it: no version on the meta, no keys on the rows.
+    own.prepare(`UPDATE DiscoverRiffIndexCacheMeta SET IndexVersion = NULL`).run()
+    own.prepare(`UPDATE DiscoverRiffIndexCache SET Root = NULL, Scale = NULL`).run()
+    const w = new Database(path)
+    w.prepare(`UPDATE Riffs SET Root = 4, Scale = 5`).run()
+    w.close()
+
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedRiffs()).toBe(50)
+    expect(await persisted(own, path)).toEqual(oracle(path))
+    expect([...(await persisted(own, path)).values()][0]).toMatchObject({ root: 4, scale: 5 })
+
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedRiffs()).toBe(0)
   })
 
   it('an in-session rebuild (no prewarm) gives the same index', async () => {
@@ -3279,7 +3548,9 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
           riffCID: 'kept',
           ownerJamCID: 'discovered',
           bpmRnd: 120,
-          creationTime: null
+          creationTime: null,
+          root: null,
+          scale: null
         }
       ],
       1
@@ -3383,7 +3654,7 @@ describe('instrument rows walk and extension (scan plan Task 3)', () => {
     const db = new Database(path)
     db.exec(`
       CREATE TABLE Riffs (RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
-        BPMrnd REAL, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
+        BPMrnd REAL, Root INTEGER, Scale INTEGER, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
         StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY (RiffCID));
       CREATE TABLE Stems (StemCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, Instrument INTEGER,
         CreatorUserName TEXT, PRIMARY KEY (StemCID));`)
@@ -3745,7 +4016,7 @@ describe('kind index layers (scan plan Task 10)', () => {
 
   async function pool(
     own: Database.Database,
-    kind: 'drums' | 'bass' | 'lead'
+    kind: 'drums' | 'bass' | 'back' | 'front'
   ): Promise<Map<string, string | undefined>> {
     const got = await getDiscoverCandidates({ ownDb: own, jams: jamsOf(own), kinds: [kind] })
     return new Map(got.map((c) => [c.stemCID, c.kindSources[kind]]))
@@ -3754,7 +4025,7 @@ describe('kind index layers (scan plan Task 10)', () => {
   /** The same library, indexed from scratch (a fresh connection). */
   async function fromScratch(
     own: Database.Database,
-    kind: 'drums' | 'bass' | 'lead'
+    kind: 'drums' | 'bass' | 'back' | 'front'
   ): Promise<Map<string, string | undefined>> {
     return pool(new Database(own.serialize()), kind)
   }
@@ -3764,7 +4035,7 @@ describe('kind index layers (scan plan Task 10)', () => {
     expect(await pool(own, 'drums')).toEqual(new Map([['d1', 'tag']]))
     expect(count('scan:discover.kind-index-rows')).toBe(1)
 
-    upsertStemAutoCategory(own, 'mic1', 'drums', 'embedding', 5)
+    upsertStemAutoCategory(own, 'mic1', 'drums', 'model:2.1', 5)
     now += 1_000
     expect(await pool(own, 'drums')).toEqual(new Map([['d1', 'tag']])) // up to 10 s stale
     now += 9_500
@@ -3780,14 +4051,14 @@ describe('kind index layers (scan plan Task 10)', () => {
 
   it('a confirmation rebuilds both layers at once', async () => {
     const own = library()
-    upsertStemAutoCategory(own, 'mic1', 'drums', 'embedding', 5)
+    upsertStemAutoCategory(own, 'mic1', 'drums', 'model:2.1', 5)
     expect(await pool(own, 'drums')).toEqual(
       new Map([
         ['d1', 'tag'],
         ['mic1', 'guess']
       ])
     )
-    upsertStemAutoCategory(own, 'mic2', 'drums', 'embedding', 6)
+    upsertStemAutoCategory(own, 'mic2', 'drums', 'model:2.1', 6)
     upsertStemCategoryRole(own, [{ path: 'mic1', arrangeRole: 'bass' }], 'discover', null, 7)
     expect(await pool(own, 'drums')).toEqual(
       new Map([
@@ -3806,16 +4077,16 @@ describe('kind index layers (scan plan Task 10)', () => {
 
   it('after any mix of writes, once settled, the pools equal a from-scratch build', async () => {
     const own = library()
-    const kinds = ['drums', 'bass', 'lead'] as const
+    const kinds = ['drums', 'bass', 'back', 'front'] as const
     for (const kind of kinds) await pool(own, kind)
     const writes: (() => void)[] = [
-      () => upsertStemAutoCategory(own, 'mic1', 'lead', 'embedding', 10),
-      () => upsertStemAutoCategory(own, 'mic2', 'bass', 'yamnet-zeroshot', 11),
-      () => upsertStemAutoCategory(own, 'c1', 'drums', 'embedding', 12), // confirmed wins
-      () => upsertStemAutoCategory(own, 'd1', 'bass', 'embedding', 13), // the tag wins
+      () => upsertStemAutoCategory(own, 'mic1', 'lead', 'model:2.1', 10),
+      () => upsertStemAutoCategory(own, 'mic2', 'bass', 'model:2.1', 11),
+      () => upsertStemAutoCategory(own, 'c1', 'drums', 'model:2.1', 12), // confirmed wins
+      () => upsertStemAutoCategory(own, 'd1', 'bass', 'model:2.1', 13), // the tag wins
       () =>
         upsertStemCategoryRole(own, [{ path: 'mic2', arrangeRole: 'drums' }], 'discover', null, 14),
-      () => upsertStemAutoCategory(own, 'mic1', 'drums', 'centroid', 15)
+      () => upsertStemAutoCategory(own, 'mic1', 'drums', 'model:2.1', 15)
     ]
     for (const write of writes) {
       write()
@@ -3845,7 +4116,7 @@ describe('faster startup: usable before complete (2026-10-06)', () => {
     const db = new Database(path)
     db.exec(`
       CREATE TABLE Riffs (RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
-        BPMrnd REAL, UserName TEXT, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
+        BPMrnd REAL, Root INTEGER, Scale INTEGER, UserName TEXT, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
         StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY (RiffCID));
       CREATE TABLE Stems (StemCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, Instrument INTEGER,
         PresetName TEXT, CreatorUserName TEXT, PRIMARY KEY (StemCID));

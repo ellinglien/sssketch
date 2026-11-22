@@ -3,6 +3,7 @@ import {
   QUANTILE_BREAKPOINTS,
   buildQuantileTable,
   percentileOf,
+  valueAtPercentile,
   traitPercentilesFromValues,
   tableForField,
   FALLBACK_FIELDS,
@@ -212,5 +213,37 @@ describe('tableForField', () => {
 
   it('null when there is nothing finite to build from', () => {
     expect(tableForField('transientDensity', [], 0)).toBeNull()
+  })
+})
+
+describe('valueAtPercentile', () => {
+  const table = buildQuantileTable(Array.from({ length: 101 }, (_, i) => i * 2))!
+
+  it('reads the value at a percentile, interpolating between breakpoints', () => {
+    expect(valueAtPercentile(table, 0.25)).toBeCloseTo(50, 9)
+    expect(valueAtPercentile(table, 0.255)).toBeCloseTo(51, 9)
+    expect(percentileOf(table, valueAtPercentile(table, 0.4)!)).toBeCloseTo(0.4, 9)
+  })
+
+  it('is monotone', () => {
+    let last = -Infinity
+    for (let p = 0; p <= 1; p += 0.013) {
+      const v = valueAtPercentile(table, p)!
+      expect(v).toBeGreaterThanOrEqual(last)
+      last = v
+    }
+  })
+
+  it('clamps at the ends', () => {
+    expect(valueAtPercentile(table, -1)).toBe(0)
+    expect(valueAtPercentile(table, 2)).toBe(200)
+    expect(valueAtPercentile([7], 0.3)).toBe(7)
+  })
+
+  it('null for a missing or empty table, or a non-finite percentile', () => {
+    expect(valueAtPercentile(undefined, 0.25)).toBeNull()
+    expect(valueAtPercentile(null, 0.25)).toBeNull()
+    expect(valueAtPercentile([], 0.25)).toBeNull()
+    expect(valueAtPercentile(table, NaN)).toBeNull()
   })
 })

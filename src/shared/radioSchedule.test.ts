@@ -1137,23 +1137,23 @@ describe('RadioSettings', () => {
 
 describe('radioStarterKinds', () => {
   it('lays down the shipped four at four', () => {
-    expect(radioStarterKinds(4)).toEqual(['drums', 'bass', 'lead', 'warm'])
+    expect(radioStarterKinds(4)).toEqual(['drums', 'bass', 'front', 'back'])
   })
 
   it('adds a second drum layer fifth -- a groove gets its top end from perc', () => {
-    expect(radioStarterKinds(5)).toEqual(['drums', 'bass', 'lead', 'warm', 'drums'])
+    expect(radioStarterKinds(5)).toEqual(['drums', 'bass', 'front', 'back', 'drums'])
   })
 
   it('grows from the left, so every prefix still sounds like a band', () => {
     expect(radioStarterKinds(8)).toEqual([
       'drums',
       'bass',
-      'lead',
-      'warm',
+      'front',
+      'back',
       'drums',
       'bright',
       'rhythmic',
-      'lead'
+      'front'
     ])
     for (let n = 4; n <= 8; n++) {
       expect(radioStarterKinds(n)).toEqual(radioStarterKinds(8).slice(0, n))
@@ -1172,7 +1172,7 @@ describe('radioStarterKinds', () => {
     // every prefix has to stand alone -- so 2 and 3 needed no special
     // case, only a lower floor.
     expect(radioStarterKinds(2)).toEqual(['drums', 'bass'])
-    expect(radioStarterKinds(3)).toEqual(['drums', 'bass', 'lead'])
+    expect(radioStarterKinds(3)).toEqual(['drums', 'bass', 'front'])
   })
 })
 

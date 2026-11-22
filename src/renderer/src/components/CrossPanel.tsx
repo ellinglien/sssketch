@@ -38,7 +38,8 @@ import {
 import {
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
-  isTraitSlotKind,
+  DISCOVER_TRAIT_SLOT_KINDS,
+  rankKindsOf,
   type DiscoverSlotKind
 } from '@shared/discoverSlotKind'
 import { DEFAULT_DISCOVER_CHAOS, pickReroll, rankCandidates } from '@shared/discoverRanking'
@@ -756,7 +757,7 @@ export function CrossPanel({
           })
     const ranked = rankCandidates(pool, {
       targetBpm: current.targetBpm,
-      targetTraits: kinds.filter(isTraitSlotKind)
+      targetTraits: rankKindsOf(kinds)
     })
     const picked = pickReroll(ranked, 100 - (current.matching ?? 100 - DEFAULT_DISCOVER_CHAOS))
     if (!picked) return null
@@ -1452,7 +1453,7 @@ export function CrossPanel({
             </span>
             {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => (
               <Fragment key={kind}>
-                {kind === 'bassHeavy' && <span className="ra-cross-divider" />}
+                {kind === DISCOVER_TRAIT_SLOT_KINDS[0] && <span className="ra-cross-divider" />}
                 <button
                   className="ra-cross-add-chip"
                   onClick={() => void addDiscoveredStem(kind)}

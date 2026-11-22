@@ -35,8 +35,8 @@ function slot(overrides: Partial<CoachSlotSnapshot> = {}): CoachSlotSnapshot {
 describe('coachSlotRole', () => {
   it('reads the role off the kinds Discover itself tagged, mask kinds first', () => {
     expect(coachSlotRole(['drums'])).toBe('drums')
-    expect(coachSlotRole(['bright', 'lead'])).toBe('lead')
-    expect(coachSlotRole(['warm'])).toBe('aux')
+    expect(coachSlotRole(['bright', 'front'])).toBe('lead')
+    expect(coachSlotRole(['warm'])).toBe('backing')
   })
 
   it('falls back to aux rather than guessing for an empty set', () => {
@@ -105,9 +105,9 @@ describe('lockClimaxFromSlots', () => {
   })
 
   it('normalizes each slot kind set, so two orderings lock identically', () => {
-    const a = lockClimaxFromSlots([slot({ kinds: ['warm', 'lead'] })], 120, NOW)
-    const b = lockClimaxFromSlots([slot({ kinds: ['lead', 'warm'] })], 120, NOW)
-    expect(a?.stems[0].kinds).toEqual(['lead', 'warm'])
+    const a = lockClimaxFromSlots([slot({ kinds: ['warm', 'front'] })], 120, NOW)
+    const b = lockClimaxFromSlots([slot({ kinds: ['front', 'warm'] })], 120, NOW)
+    expect(a?.stems[0].kinds).toEqual(['front', 'warm'])
     expect(a).toEqual(b)
   })
 })
@@ -167,9 +167,9 @@ describe('isDiscoverSlotKind', () => {
 
 describe('kindsCoverSet', () => {
   it('is a superset test, not an overlap test', () => {
-    expect(kindsCoverSet(['lead', 'bright'], ['lead'])).toBe(true)
-    expect(kindsCoverSet(['lead'], ['lead', 'bright'])).toBe(false)
-    expect(kindsCoverSet(['lead', 'warm'], ['lead', 'bright'])).toBe(false)
+    expect(kindsCoverSet(['front', 'bright'], ['front'])).toBe(true)
+    expect(kindsCoverSet(['front'], ['front', 'bright'])).toBe(false)
+    expect(kindsCoverSet(['front', 'warm'], ['front', 'bright'])).toBe(false)
   })
 
   it('is false for an empty wanted set, never vacuously true', () => {
@@ -220,5 +220,15 @@ describe('lockClimaxFromArrangeRoles', () => {
 
   it('refuses an empty list rather than locking nothing', () => {
     expect(lockClimaxFromArrangeRoles([], 120, 0)).toBeNull()
+  })
+})
+
+describe('legacy saved kinds', () => {
+  it('reads a saved lead as front', () => {
+    const saved = {
+      stems: [{ path: '/a.wav', name: 'a', author: '', kinds: ['lead'] }],
+      lockedAt: 1
+    }
+    expect(sanitiseLockedClimax(saved)?.stems[0].kinds).toEqual(['front'])
   })
 })

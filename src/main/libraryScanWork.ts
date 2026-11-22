@@ -22,8 +22,8 @@
 //    windows of 5,000: 179 of them for the 894k external pairs, at most 23 ms
 //    each -- the default's windows are smaller still);
 // 3. analysed but needing work: stemCIDsNeedingRework (stemAnalysisNeeds.ts:
-//    stale features or level from the trait value table's versions, and
-//    zero-shot pending) -- those with all three rows, their pairs by IN-list;
+//    stale features or level from the trait value table's versions)
+//    -- those with all three rows, their pairs by IN-list;
 // 4. the first allowed pair -- min (RiffCID, slot) among pairs whose jam is
 //    in `jams` -- decides each stem's path, as listLibraryScanTargets'
 //    first-seen rule always has; a stem with an allowed pair in an earlier db
@@ -276,7 +276,7 @@ export async function listLibraryScanWork(
   await awaitTraitQuantileBuild(ownDb)
   const yamnetAvailable = options.yamnetAvailable !== false
   const missingARow = yamnetAvailable ? MISSING_A_ROW : MISSING_A_ROW_NO_YAMNET
-  const rework = await stemCIDsNeedingRework(ownDb, { yamnetAvailable })
+  const rework = await stemCIDsNeedingRework(ownDb)
   // ...only those with all three rows: a stem missing one is the anti-join's.
   const maybeYield = async (): Promise<void> => {
     if (sliceSpent()) await yieldSlice()

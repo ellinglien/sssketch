@@ -4,9 +4,13 @@
 // added or duplicated row -- waits for the next loop top and lands with a
 // transition, together with radio's own change, in one staged swap
 // (docs/superpowers/specs/2026-09-29-radio-manual-changes-land-on-the-top-
-// design.md). These are the two rules that decide what that swap carries.
+// design.md). These are the rules that decide what that swap carries -- and,
+// since 2026-11-22, which of the user's own changes land a bar line early
+// instead, as a cut (radioManualBarLanding).
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
+import { radioChangeLengths } from './radioCompanions'
+import { radioGridLineAtOrAfter } from './radioSchedule'
 import type { RadioBuildSize } from './radioBuildSize'
 import { radioGestureLeadsChange, type RadioTransitionKind } from './radioTransition'
 
@@ -155,4 +159,62 @@ export function mergeStageChanges<S>(
     }
   }
   return { changes, joining, arrivals }
+}
+
+/** The pick each change of a stage lands, by row: the staged project plays an incoming stem at
+ * the gain its row will have once it lands. Only rows in `changes` (mergeStageChanges' own), so
+ * a manual pick that is not in the stage (still resolving, or a resting exit) names nothing --
+ * on a row radio is changing, radio's pick stands. `manual` is the READY manual picks, which
+ * win their row as they do in the merge. */
+export function stagedIncoming<C>(
+  changes: readonly { slotId: string }[],
+  radio: ReadonlyMap<string, C>,
+  manual: ReadonlyMap<string, C>
+): Map<string, C> {
+  const out = new Map<string, C>()
+  for (const { slotId } of changes) {
+    const pick = manual.has(slotId) ? manual.get(slotId) : radio.get(slotId)
+    if (pick !== undefined) out.set(slotId, pick)
+  }
+  return out
+}
+
+/** Where the user's own waiting changes land (2026-11-22: a click lands on the next bar line, not
+ * the loop top): the bar and the rows that land on it together, or null for the loop top.
+ *
+ * `rows` are the READY ones. The bar is the first line at least `leadBars` ahead (the lead radio's
+ * own bar-aimed cut needs for its stage to reach the engine, RADIO_BAR_STAGE_LEAD_BARS) that
+ * every armed gesture is spent by (`spentAt`): a stage at a bar replaces the live project there,
+ * curves and all, so a hole or a riser still playing keeps everything for the top.
+ *
+ * Only rows that leave the loop's length as it is, by radioPaceGridBars' own rule: the engine
+ * adopts a staged project's loop length with the change, so a longer stem would lengthen the loop
+ * mid-lap and a shorter loop would leave the playhead past its end. A row that would do either is
+ * left out and waits for the top, as do all of them when together they would shorten the loop. */
+export function radioManualBarLanding(
+  rows: readonly { slotId: string; incomingBars: number | null }[],
+  resolved: ReadonlyMap<string, number>,
+  pos: number,
+  loopBars: number,
+  options: { leadBars: number; spentAt: (bar: number) => boolean }
+): { atBars: number; slotIds: string[] } | null {
+  if (!(loopBars > 0) || !Number.isInteger(loopBars)) return null
+  const keepsLoop = (set: typeof rows): boolean => {
+    const l = radioChangeLengths(set, resolved)
+    return (
+      l.incomingBars !== null &&
+      l.incomingBars > 0 &&
+      l.incomingBars <= loopBars &&
+      l.loopBarsAfter !== null &&
+      l.loopBarsAfter >= loopBars
+    )
+  }
+  const fit = rows.filter((r) => keepsLoop([r]))
+  if (fit.length === 0 || !keepsLoop(fit)) return null
+  // radioGridLineAtOrAfter answers loopBars when no line is left (or the position is unknown)
+  let line = radioGridLineAtOrAfter(pos + options.leadBars, 1, loopBars)
+  for (; line < loopBars; line += 1) {
+    if (options.spentAt(line)) return { atBars: line, slotIds: fit.map((r) => r.slotId) }
+  }
+  return null
 }

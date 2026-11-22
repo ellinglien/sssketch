@@ -21,14 +21,18 @@ describe('panForSlots', () => {
   })
 
   it('a slot carrying drums or bass among other kinds stays centred too', () => {
-    expect(panForSlots([slot('lead', 'bass'), slot('warm', 'drums')])).toEqual([0, 0])
+    expect(panForSlots([slot('front', 'bass'), slot('warm', 'drums')])).toEqual([0, 0])
   })
 
   it('alternates the rest +, -, + in slot order, skipping the centred ones', () => {
     expect(
-      panForSlots([slot('drums'), slot('bass'), slot('lead'), slot('warm'), slot('bright')])
+      panForSlots([slot('drums'), slot('bass'), slot('front'), slot('warm'), slot('bright')])
     ).toEqual([0, 0, ROW_PAN, -ROW_PAN, ROW_PAN])
-    expect(panForSlots([slot('lead'), slot('drums'), slot('warm')])).toEqual([ROW_PAN, 0, -ROW_PAN])
+    expect(panForSlots([slot('front'), slot('drums'), slot('warm')])).toEqual([
+      ROW_PAN,
+      0,
+      -ROW_PAN
+    ])
   })
 
   it('a slot with no kinds is not drums or bass: it is placed', () => {
@@ -40,8 +44,8 @@ describe('panForSlots', () => {
   })
 
   it('honours a width (the sound settings), ROW_PAN when none is given', () => {
-    expect(panForSlots([slot('lead'), slot('drums'), slot('warm')], 0.4)).toEqual([0.4, 0, -0.4])
-    expect(panForSlots([slot('lead'), slot('warm')], 0)).toEqual([0, -0])
+    expect(panForSlots([slot('front'), slot('drums'), slot('warm')], 0.4)).toEqual([0.4, 0, -0.4])
+    expect(panForSlots([slot('front'), slot('warm')], 0)).toEqual([0, -0])
   })
 })
 
@@ -91,7 +95,7 @@ describe('discoverStemPans (Discover: every slot, by slot id, onto the preview s
     id,
     kinds: kinds as never[]
   })
-  const slots = [s('a', 'drums'), s('b', 'lead'), s('c', 'warm'), s('d', 'bass'), s('e', 'bright')]
+  const slots = [s('a', 'drums'), s('b', 'front'), s('c', 'warm'), s('d', 'bass'), s('e', 'bright')]
 
   it('pans over ALL the slots, so a member keeps its row pan whoever else is playing', () => {
     // Only b and e are in the mix (c is muted): e is still the third placed row, so +width.

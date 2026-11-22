@@ -91,7 +91,7 @@ describe('assessTidyUpReadiness', () => {
     expect(result.derivedBusOf).toEqual({ 'g1:1': 'bass' })
   })
 
-  it('routes the three roles with no bus of their own onto aux', () => {
+  it('routes the three roles with no bus of their own onto a bus of their category', () => {
     const fx: PlacedStemRef = { stemKey: 'g3:0', path: '/lib/sweep.wav' }
     const hit: PlacedStemRef = { stemKey: 'g3:1', path: '/lib/hit.wav' }
     const voc: PlacedStemRef = { stemKey: 'g3:2', path: '/lib/voc.wav' }
@@ -105,7 +105,7 @@ describe('assessTidyUpReadiness', () => {
       }
     )
     expect(result.needsNudge).toBe(false)
-    expect(result.derivedBusOf).toEqual({ 'g3:0': 'aux', 'g3:1': 'aux', 'g3:2': 'aux' })
+    expect(result.derivedBusOf).toEqual({ 'g3:0': 'backing', 'g3:1': 'drums', 'g3:2': 'lead' })
   })
 
   it('never overrides a real bus assignment with one derived from a role', () => {

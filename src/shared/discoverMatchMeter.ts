@@ -4,19 +4,19 @@
 // promise-vs-delivery-design.md, Phase 2. Pure formatting only: which
 // entries a slot row shows for its picked stem, their text, and their hover
 // text. DiscoverPanel's DiscoverSlotRow renders the result.
-import { ARRANGE_ROLE_OPTIONS, type ArrangeRole } from './stemRole'
+import type { ArrangeRole } from './stemRole'
+import { CATEGORY_ROLE, STEM_CATEGORY_OPTIONS, categoryOfRole } from './stemCategory'
 import {
-  DISCOVER_MASK_SLOT_KINDS,
   DISCOVER_SLOT_KIND_LABEL,
-  discoverSlotKindToArrangeRole,
+  isDialKind,
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
   type DiscoverKindSource,
   type DiscoverKindSources,
   type DiscoverMaskKind,
-  type DiscoverSlotKind,
-  type DiscoverTraitKind
+  type DiscoverRankKind,
+  type DiscoverSlotKind
 } from './discoverSlotKind'
 import { DEFAULT_TRAIT_BAR } from './traitBar'
 import type { TraitPercentiles } from './traitQuantiles'
@@ -35,7 +35,8 @@ export interface MatchMeterMaskEntry {
 
 export interface MatchMeterTraitEntry {
   type: 'trait'
-  kind: DiscoverTraitKind
+  /** A trait kind, or a dial kind (back/front) the stem was guessed into. */
+  kind: DiscoverRankKind
   label: string
   /** 0..MATCH_METER_STEPS */
   filled: number
@@ -91,7 +92,7 @@ function maskEntry(
 }
 
 function traitEntry(
-  kind: DiscoverTraitKind,
+  kind: DiscoverRankKind,
   percentile: number | null | undefined,
   barUsed: number | null,
   barRequested: number
@@ -117,14 +118,16 @@ function traitEntry(
 }
 
 /** One entry per requested kind of the slot, mask kinds first:
- * - a mask kind shows why it admitted the stem (`drummy: tag`), omitted
+ * - a mask kind shows why it admitted the stem (`drums: tag`), omitted
  *   when that kind didn't (another mask kind of the set did, or the stem
- *   was reclassified away from it);
+ *   was reclassified away from it); a back or front kind not confirmed
+ *   also shows bars from the dial after its source entry, like a trait kind
+ *   (the source entry stays: it is the reclassify trigger);
  * - a trait kind shows 5-step bars from the stem's library percentile, with
  *   the exact number (and a `· relaxed` marker when barUsed < the requested
  *   bar) in the tooltip;
- * - `reclassified` (a Discover reclassify to a role none of the slot's
- *   mask kinds covers) adds one confirmed entry for that role, so the
+ * - `reclassified` (a Discover reclassify to a role whose category none of
+ *   the slot's mask kinds is) adds one confirmed entry for that role, so the
  *   reclassify trigger is still there to change it again. */
 export function buildMatchMeter({
   kinds,
@@ -148,12 +151,13 @@ export function buildMatchMeter({
   const maskKinds = normalized.filter(isMaskSlotKind) as DiscoverMaskKind[]
   for (const kind of maskKinds) {
     const source = kindSources[kind]
-    if (source) entries.push(maskEntry(kind, DISCOVER_SLOT_KIND_LABEL[kind], source))
+    if (!source) continue
+    entries.push(maskEntry(kind, DISCOVER_SLOT_KIND_LABEL[kind], source))
+    // An unconfirmed back/front also shows where the dial put it.
+    if (isDialKind(kind) && source !== 'confirmed')
+      entries.push(traitEntry(kind, traitPercentiles[kind], barUsed, barRequested))
   }
-  if (
-    reclassified &&
-    !maskKinds.some((k) => discoverSlotKindToArrangeRole(k) === reclassified.role)
-  ) {
+  if (reclassified && !maskKinds.includes(categoryOfRole(reclassified.role))) {
     entries.push(maskEntry(null, reclassified.label, 'confirmed'))
   }
   for (const kind of normalized) {
@@ -164,8 +168,8 @@ export function buildMatchMeter({
 }
 
 /** A Discover reclassify of the slot's stem to `role`: the slot's mask kind
- * for that role (if any) becomes 'confirmed'; every other mask kind loses
- * its source (a confirmation for another role excludes the stem from
+ * for that role's category (if any) becomes 'confirmed'; every other mask
+ * kind loses its source (a confirmation for another category excludes the stem from
  * them -- same rule the candidate pools apply), so the stem's previous
  * sources don't matter. */
 export function reclassifyKindSources(
@@ -174,31 +178,19 @@ export function reclassifyKindSources(
 ): DiscoverKindSources {
   const out: DiscoverKindSources = {}
   for (const kind of normalizeSlotKinds(kinds)) {
-    if (isMaskSlotKind(kind) && discoverSlotKindToArrangeRole(kind) === role) {
+    if (isMaskSlotKind(kind) && categoryOfRole(role) === kind) {
       out[kind as DiscoverMaskKind] = 'confirmed'
     }
   }
   return out
 }
 
-function maskKindForRole(role: ArrangeRole): DiscoverSlotKind | undefined {
-  return DISCOVER_MASK_SLOT_KINDS.find((k) => discoverSlotKindToArrangeRole(k) === role)
-}
+/** The reclassify picker's roles: one per category, as the stored role a pick writes. */
+export const DISCOVER_RECLASSIFY_ROLES: ArrangeRole[] = STEM_CATEGORY_OPTIONS.map(
+  (c) => CATEGORY_ROLE[c]
+)
 
-/** The reclassify picker's roles: Discover's own three mask kinds first
- * (drummy, bassish, leadesque), then every other Tidy Up role in
- * ARRANGE_ROLE_OPTIONS order. */
-export const DISCOVER_RECLASSIFY_ROLES: ArrangeRole[] = [
-  ...DISCOVER_MASK_SLOT_KINDS.map(discoverSlotKindToArrangeRole),
-  ...ARRANGE_ROLE_OPTIONS.filter((r) => maskKindForRole(r) === undefined)
-]
-
-/** Display text for a role in Discover: a mask kind's playful label
- * (drums -> drummy) where one exists, else the caller's own label table
- * (the renderer's ROLE_LABELS -- textureFx -> texture/fx), else the raw
- * value. */
-export function discoverRoleLabel(role: ArrangeRole, otherLabels: Record<string, string>): string {
-  const kind = maskKindForRole(role)
-  if (kind) return DISCOVER_SLOT_KIND_LABEL[kind]
-  return otherLabels[role] ?? role
+/** Display text for a role in Discover: its category word. */
+export function discoverRoleLabel(role: ArrangeRole): string {
+  return categoryOfRole(role)
 }

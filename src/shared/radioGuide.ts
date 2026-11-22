@@ -685,7 +685,7 @@ export const RADIO_GUIDE: RadioGuide = {
             },
             {
               key: 'density',
-              text: 'off keeps a steady number of rows. arc grows them to four or five and thins them to two or three, without the big drops. intensity plays the waves',
+              text: 'off keeps a steady number of rows. arc grows them to three or four and thins them to two or three, without the big drops. intensity plays the waves',
               desktop: [{ strip: 'density' }],
               web: ['density', 'off', 'arc', 'intensity']
             }
@@ -802,7 +802,7 @@ export const RADIO_GUIDE: RadioGuide = {
             },
             {
               key: 'skip',
-              text: 'a new sound on this row at the next loop top. cmd-click: now',
+              text: 'a new sound on this row at the next bar line. cmd-click: now',
               desktop: [{ row: 'skip' }]
             },
             {
@@ -855,7 +855,7 @@ export const RADIO_GUIDE: RadioGuide = {
             { key: 'pace', text: 'how often things change', desktop: [{ strip: 'pace' }] },
             {
               key: 'skip',
-              text: 'radio changes a row of its choosing, at the next loop top',
+              text: 'radio changes a row of its choosing, at the next bar line',
               desktop: [{ strip: 'skip' }]
             },
             {

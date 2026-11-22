@@ -4,6 +4,7 @@ import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { LOOP_FOLDERS_DDL } from './loopFolders'
+import { bumpStemClassificationVersion } from './stemClassificationVersion'
 import {
   STEM_AUTO_CLASSIFY_TRIED_DDL,
   ensureStemAutoClassifyTriedSchema
@@ -160,23 +161,11 @@ CREATE TABLE IF NOT EXISTS StemAutoCategory (
   StemCID TEXT PRIMARY KEY,
   ArrangeRole TEXT NOT NULL,
   Source TEXT NOT NULL,
-  ComputedAt INTEGER NOT NULL
+  ComputedAt INTEGER NOT NULL,
+  FrontScore REAL
 );
 
--- One row per stem once a YAMNet zero-shot classification has been
--- ATTEMPTED (see src/renderer/src/audio/stemEmbeddingCache.ts's own
--- adoptZeroShotFromBuffer / embedAndPersist) -- regardless of whether
--- that attempt actually produced a StemAutoCategory row.
--- getOrExtractStemEmbedding is cache-hit-first (StemEmbeddingCache), so a
--- stem embedded before the zero-shot classification code existed would
--- otherwise never get a chance to run it (see the zeroShot flag of
--- stemAnalysisNeeds.ts's get-stem-analysis-needs). Separately, most
--- stems' own top AudioSet class will never map to anything in audiosetClasses.ts's deliberately narrow table -- without
--- a record of "already tried, regardless of outcome," those stems would
--- get re-decoded and re-inferred on every future scan pass, forever, for
--- no benefit. Direct report, 2026-09-17 ("in discover it wasn't really as
--- accurate honestly"), root-caused to this exact gap: the signal had
--- never actually written anything for Elling's real library.
+-- Legacy (the YAMNet zero-shot role, removed 2026-11-14): old dbs have it and nothing reads it.
 CREATE TABLE IF NOT EXISTS StemYamnetZeroShotAttempted (
   StemCID TEXT PRIMARY KEY,
   AttemptedAt INTEGER NOT NULL
@@ -390,6 +379,28 @@ function ensureStemCategoriesHasSubcategoryNote(db: Database.Database): void {
   db.exec(`ALTER TABLE StemCategories ADD COLUMN SubcategoryNote TEXT`)
 }
 
+/** 2026-11-14 (four categories): the dial column, added once. Adding it is the moment the
+ * old guessers' rows go, so every stem is guessed again by the one model. A duplicate-column
+ * error means the other app (dev vs packaged share this db) added it first: nothing to do. */
+function ensureStemAutoCategoryHasFrontScore(db: Database.Database): void {
+  const columns = db.prepare(`PRAGMA table_info(StemAutoCategory)`).all() as { name: string }[]
+  if (columns.length === 0 || columns.some((c) => c.name === 'FrontScore')) return
+  try {
+    db.transaction(() => {
+      db.exec(`ALTER TABLE StemAutoCategory ADD COLUMN FrontScore REAL`)
+      // Only Endlesss's drums/bass bit survives: no row then is the one model's.
+      db.exec(
+        `DELETE FROM StemAutoCategory WHERE NOT (Source = 'instrumentMask' AND ArrangeRole IN ('drums', 'bass'))`
+      )
+    })()
+  } catch (err) {
+    if (!String(err).includes('duplicate column')) throw err
+    return
+  }
+  // Discover's guess layer reads this table.
+  bumpStemClassificationVersion(db, 'auto')
+}
+
 /** Opens (creating the file/directories if needed) sssketch's own writable
  * riff-library connection and ensures the schema exists -- CREATE
  * TABLE/INDEX IF NOT EXISTS make re-running the DDL on every open a cheap
@@ -406,6 +417,7 @@ export function openOwnRiffLibraryDb(): Database.Database {
   db.pragma('journal_mode = WAL')
   ensureDiscoverRiffIndexCacheHasCreationTime(db)
   ensureStemCategoriesHasSubcategoryNote(db)
+  ensureStemAutoCategoryHasFrontScore(db)
   ensureStemAutoClassifyTriedSchema(db)
   db.exec(SCHEMA_SQL)
   cachedDb = db

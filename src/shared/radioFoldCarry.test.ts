@@ -66,7 +66,7 @@ describe('radioFoldCanCarry', () => {
       false
     )
     expect(
-      radioFoldCanCarry(step.state, id, R(id, { stemId: 'new', kinds: ['lead'] }), anchor)
+      radioFoldCanCarry(step.state, id, R(id, { stemId: 'new', kinds: ['front'] }), anchor)
     ).toBe(false)
     expect(radioFoldCanCarry(step.state, id, R(id, { stemId: 'new', hooked: true }), anchor)).toBe(
       false

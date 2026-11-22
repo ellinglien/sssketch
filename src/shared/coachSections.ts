@@ -91,17 +91,17 @@ export function isCoachSectionType(value: unknown): value is CoachSectionType {
  * same superset rule phase one's step completion uses (kindsCoverSet). A
  * stem is flagged when its own kinds cover ANY one of the sets.
  *
- * Read straight off the spec: "intro and outro: harmony and hook; build: the
- * hook; breakdown: kick and bass; drop: nothing".
+ * Read straight off the spec: "intro and outro: the front; build: the hook;
+ * breakdown: kick and bass; drop: nothing".
  *
  * Two deliberate choices in how that is expressed:
  *
- * - intro/outro drop BOTH harmony and hook, and both of those are leadesque
- *   slots (phase one arms {leadesque, buttery} for harmony and {leadesque,
- *   sparkly} for the hook), so ONE set -- ['lead'] -- says it exactly, and
- *   also catches a plain leadesque stem that is one or the other.
- * - build drops the hook ONLY, so it names the hook's full set, ['lead',
- *   'bright']. A plain leadesque stem is NOT flagged there: the app cannot
+ * - intro/outro drop only the front: ONE set -- ['front'] -- catches any
+ *   front stem, the hook included. Back parts stay in them (since
+ *   2026-11-14, four categories; before, backing counted as harmony and was
+ *   dropped too).
+ * - build drops the hook ONLY, so it names the hook's full set, ['front',
+ *   'bright']. A plain front stem is NOT flagged there: the app cannot
  *   tell a bare lead apart from the hook, and the honest thing to do with
  *   something it cannot tell is to say nothing. Under-flagging costs the
  *   user one click; over-flagging is the app asserting something it does
@@ -115,15 +115,15 @@ export const COACH_SECTION_DROP_SETS: Record<
   CoachSectionType,
   readonly (readonly DiscoverSlotKind[])[]
 > = {
-  intro: [['lead']],
+  intro: [['front']],
   // The hook only. "the verse should hint at the drop without giving it
   // away" is the spec's own example of a good line; this is that line as
   // data. Harmony stays -- a verse with no chords is a build.
-  verse: [['lead', 'bright']],
-  build: [['lead', 'bright']],
+  verse: [['front', 'bright']],
+  build: [['front', 'bright']],
   drop: [],
   breakdown: [['drums'], ['bass']],
-  outro: [['lead']]
+  outro: [['front']]
 }
 
 /** True when this section type usually loses this stem. A MARK, which the

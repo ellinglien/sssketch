@@ -20,14 +20,15 @@ import {
 } from './radioTurnaround'
 import { hashText, seededRandom } from './seededRandom'
 
-const KINDS: DiscoverSlotKind[][] = [['drums'], ['bass'], ['lead'], ['warm'], []]
+const KINDS: DiscoverSlotKind[][] = [['drums'], ['bass'], ['front'], ['warm'], []]
 
 /** 2000 seeded draws per temperament and kind set, with the stream position after each. */
 function transitionTrace(sizing?: Parameters<typeof pickTransition>[3]): string {
   const out: string[] = []
   for (const t of ['off', 'subtle', 'bold'] as RadioTransitions[])
     for (const kinds of KINDS) {
-      const random = seededRandom(`pt-${t}-${kinds.join('+')}`)
+      // the seed keeps the pre-rename kind name so the recorded hash still pins the draws
+      const random = seededRandom(`pt-${t}-${kinds.join('+').replace('front', 'lead')}`)
       for (let i = 0; i < 2000; i++) out.push(pickTransition(t, kinds, random, sizing))
       out.push(String(random()))
     }
@@ -47,7 +48,7 @@ const row = (
   barLength: 4,
   ...o
 })
-const BED = [row('d', ['drums']), row('b', ['bass']), row('l', ['lead']), row('w', ['warm'])]
+const BED = [row('d', ['drums']), row('b', ['bass']), row('l', ['front']), row('w', ['warm'])]
 
 /** Seeded rolls over rates, arcs, loops and depths, chained through the memory, with the stream
  * position after each. */
@@ -354,7 +355,7 @@ describe('the phrase end by size', () => {
     const rows = [
       row('d', ['drums'], { exiting: true }),
       row('b', ['bass']),
-      row('l', ['lead']),
+      row('l', ['front']),
       row('w', ['warm'])
     ]
     const random = seededRandom('exiting')

@@ -51,12 +51,42 @@ describe('discoverIndexCache', () => {
     it('round-trips a riff index through save then load', async () => {
       const own = freshOwnDb()
       const index = new Map([
-        ['s1', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128, creationTime: 1700000000 }],
-        ['s2', { riffCID: 'r1', ownerJamCID: 'jam1', bpmRnd: 128, creationTime: 1700000000 }],
+        [
+          's1',
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'jam1',
+            bpmRnd: 128,
+            creationTime: 1700000000,
+            root: null,
+            scale: null
+          }
+        ],
+        [
+          's2',
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'jam1',
+            bpmRnd: 128,
+            creationTime: 1700000000,
+            root: null,
+            scale: null
+          }
+        ],
         // A null creationTime (e.g. a riff whose CreationTime column was
         // itself null) must round-trip as null, not silently become 0 or
         // undefined.
-        ['s3', { riffCID: 'r2', ownerJamCID: 'jam2', bpmRnd: 140, creationTime: null }]
+        [
+          's3',
+          {
+            riffCID: 'r2',
+            ownerJamCID: 'jam2',
+            bpmRnd: 140,
+            creationTime: null,
+            root: null,
+            scale: null
+          }
+        ]
       ])
       saveRiffIndexCache(own, 'db-a', index, 2)
 
@@ -71,7 +101,17 @@ describe('discoverIndexCache', () => {
         own,
         'db-a',
         new Map([
-          ['s1', { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 128, creationTime: 1700000000 }]
+          [
+            's1',
+            {
+              riffCID: 'r1',
+              ownerJamCID: 'j1',
+              bpmRnd: 128,
+              creationTime: 1700000000,
+              root: null,
+              scale: null
+            }
+          ]
         ]),
         1
       )
@@ -79,7 +119,17 @@ describe('discoverIndexCache', () => {
         own,
         'db-b',
         new Map([
-          ['s2', { riffCID: 'r2', ownerJamCID: 'j2', bpmRnd: 90, creationTime: 1700000001 }]
+          [
+            's2',
+            {
+              riffCID: 'r2',
+              ownerJamCID: 'j2',
+              bpmRnd: 90,
+              creationTime: 1700000001,
+              root: null,
+              scale: null
+            }
+          ]
         ]),
         1
       )
@@ -94,7 +144,17 @@ describe('discoverIndexCache', () => {
         own,
         'db-a',
         new Map([
-          ['s1', { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 128, creationTime: 1700000000 }]
+          [
+            's1',
+            {
+              riffCID: 'r1',
+              ownerJamCID: 'j1',
+              bpmRnd: 128,
+              creationTime: 1700000000,
+              root: null,
+              scale: null
+            }
+          ]
         ]),
         1
       )
@@ -102,7 +162,17 @@ describe('discoverIndexCache', () => {
         own,
         'db-a',
         new Map([
-          ['s2', { riffCID: 'r2', ownerJamCID: 'j2', bpmRnd: 90, creationTime: 1700000001 }]
+          [
+            's2',
+            {
+              riffCID: 'r2',
+              ownerJamCID: 'j2',
+              bpmRnd: 90,
+              creationTime: 1700000001,
+              root: null,
+              scale: null
+            }
+          ]
         ]),
         1
       )
@@ -114,8 +184,28 @@ describe('discoverIndexCache', () => {
     it('loadCachedRiffIndex reports progress and reaches completed === total', async () => {
       const own = freshOwnDb()
       const index = new Map([
-        ['s1', { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 128, creationTime: 1700000000 }],
-        ['s2', { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 128, creationTime: 1700000000 }]
+        [
+          's1',
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'j1',
+            bpmRnd: 128,
+            creationTime: 1700000000,
+            root: null,
+            scale: null
+          }
+        ],
+        [
+          's2',
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'j1',
+            bpmRnd: 128,
+            creationTime: 1700000000,
+            root: null,
+            scale: null
+          }
+        ]
       ])
       saveRiffIndexCache(own, 'db-a', index, 1)
 
@@ -132,7 +222,14 @@ describe('discoverIndexCache', () => {
       const index = new Map(
         [...Array(2500)].map((_, i) => [
           `s${String(i).padStart(5, '0')}`,
-          { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 128, creationTime: 1 }
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'j1',
+            bpmRnd: 128,
+            creationTime: 1,
+            root: null,
+            scale: null
+          }
         ])
       )
       saveRiffIndexCache(own, 'db-a', index, 1)
@@ -163,7 +260,14 @@ describe('discoverIndexCache', () => {
       const index = new Map(
         [...Array(2500)].map((_, i) => [
           `s${String(i).padStart(5, '0')}`,
-          { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 128, creationTime: 1 }
+          {
+            riffCID: 'r1',
+            ownerJamCID: 'j1',
+            bpmRnd: 128,
+            creationTime: 1,
+            root: null,
+            scale: null
+          }
         ])
       )
       saveRiffIndexCache(own, 'db-a', index, 1)
@@ -226,7 +330,19 @@ describe('discoverIndexCache', () => {
       saveRiffIndexCache(
         db,
         'key1',
-        new Map([['s1', { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 120, creationTime: 10 }]]),
+        new Map([
+          [
+            's1',
+            {
+              riffCID: 'r1',
+              ownerJamCID: 'j1',
+              bpmRnd: 120,
+              creationTime: 10,
+              root: null,
+              scale: null
+            }
+          ]
+        ]),
         1
       )
       appendRiffIndexRows(
@@ -238,7 +354,9 @@ describe('discoverIndexCache', () => {
             riffCID: 'r2',
             ownerJamCID: 'discovered',
             bpmRnd: 140,
-            creationTime: 20
+            creationTime: 20,
+            root: null,
+            scale: null
           }
         ],
         1
@@ -249,7 +367,9 @@ describe('discoverIndexCache', () => {
         riffCID: 'r2',
         ownerJamCID: 'discovered',
         bpmRnd: 140,
-        creationTime: 20
+        creationTime: 20,
+        root: null,
+        scale: null
       })
     })
 
@@ -258,7 +378,19 @@ describe('discoverIndexCache', () => {
       saveRiffIndexCache(
         db,
         'key1',
-        new Map([['s1', { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 120, creationTime: 10 }]]),
+        new Map([
+          [
+            's1',
+            {
+              riffCID: 'r1',
+              ownerJamCID: 'j1',
+              bpmRnd: 120,
+              creationTime: 10,
+              root: null,
+              scale: null
+            }
+          ]
+        ]),
         1
       )
       appendRiffIndexRows(
@@ -270,7 +402,9 @@ describe('discoverIndexCache', () => {
             riffCID: 'r2',
             ownerJamCID: 'discovered',
             bpmRnd: 140,
-            creationTime: 20
+            creationTime: 20,
+            root: null,
+            scale: null
           }
         ],
         1
@@ -285,7 +419,17 @@ describe('discoverIndexCache', () => {
       appendRiffIndexRows(
         db,
         'never',
-        [{ stemCID: 's1', riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 120, creationTime: 1 }],
+        [
+          {
+            stemCID: 's1',
+            riffCID: 'r1',
+            ownerJamCID: 'j1',
+            bpmRnd: 120,
+            creationTime: 1,
+            root: null,
+            scale: null
+          }
+        ],
         1
       )
       expect(getCachedRiffCount(db, 'never')).toBe(null)
@@ -320,11 +464,20 @@ describe('discoverIndexCache', () => {
 describe('persistRiffIndexPage (sliced saves)', () => {
   const entry = (
     i: number
-  ): { riffCID: string; ownerJamCID: string; bpmRnd: number; creationTime: number } => ({
+  ): {
+    riffCID: string
+    ownerJamCID: string
+    bpmRnd: number
+    creationTime: number
+    root: null
+    scale: null
+  } => ({
     riffCID: `r${i}`,
     ownerJamCID: 'j',
     bpmRnd: 120,
-    creationTime: i
+    creationTime: i,
+    root: null,
+    scale: null
   })
 
   it('commits 50k rows in many transactions with a yield between them, the meta in the last', async () => {
@@ -361,6 +514,30 @@ describe('persistRiffIndexPage (sliced saves)', () => {
     const loaded = await loadCachedRiffIndex(own, 'k')
     expect(loaded).toEqual(new Map(changed))
     expect(loadCachedRiffOpenRowids(own, 'k')).toEqual(new Set([7, 8]))
+  })
+
+  it("round-trips a riff's root and scale, through a page and an append", async () => {
+    const own = freshOwnDb()
+    await resetRiffIndexCache(own, 'k')
+    const keyed = { ...entry(1), root: 4, scale: 5 }
+    await persistRiffIndexPage(own, 'k', {
+      changed: [['s1', keyed]],
+      opened: [],
+      closed: [],
+      watermark: { count: 1, maxRowid: 1, keyAtMax: 'r1' }
+    })
+    appendRiffIndexRows(own, 'k', [{ stemCID: 's2', ...entry(2), root: 9, scale: 0 }], 1)
+    const loaded = await loadCachedRiffIndex(own, 'k')
+    expect(loaded.get('s1')).toEqual(keyed)
+    expect(loaded.get('s2')).toMatchObject({ root: 9, scale: 0 })
+  })
+
+  it('a copy saved before keys were kept reads as not saved, so it is rebuilt', async () => {
+    const own = freshOwnDb()
+    saveRiffIndexCache(own, 'k', new Map([['s1', entry(1)]]), 1)
+    expect(readRiffIndexMeta(own, 'k')).not.toBeNull()
+    own.prepare(`UPDATE DiscoverRiffIndexCacheMeta SET IndexVersion = NULL`).run()
+    expect(readRiffIndexMeta(own, 'k')).toBeNull()
   })
 
   it('moves an entry only to an earlier RiffCID', async () => {
@@ -408,11 +585,20 @@ describe('persistRiffIndexPage (sliced saves)', () => {
 describe('the saved riff index entry count', () => {
   const entry = (
     i: number
-  ): { riffCID: string; ownerJamCID: string; bpmRnd: number; creationTime: number } => ({
+  ): {
+    riffCID: string
+    ownerJamCID: string
+    bpmRnd: number
+    creationTime: number
+    root: null
+    scale: null
+  } => ({
     riffCID: `r${i}`,
     ownerJamCID: 'j',
     bpmRnd: 120,
-    creationTime: i
+    creationTime: i,
+    root: null,
+    scale: null
   })
 
   it('unknown for a copy saved without one', () => {
@@ -449,8 +635,24 @@ describe('the saved riff index entry count', () => {
       own,
       'k',
       [
-        { stemCID: 's2', riffCID: 'r9', ownerJamCID: 'j', bpmRnd: 120, creationTime: 9 },
-        { stemCID: 's3', riffCID: 'r9', ownerJamCID: 'j', bpmRnd: 120, creationTime: 9 }
+        {
+          stemCID: 's2',
+          riffCID: 'r9',
+          ownerJamCID: 'j',
+          bpmRnd: 120,
+          creationTime: 9,
+          root: null,
+          scale: null
+        },
+        {
+          stemCID: 's3',
+          riffCID: 'r9',
+          ownerJamCID: 'j',
+          bpmRnd: 120,
+          creationTime: 9,
+          root: null,
+          scale: null
+        }
       ],
       1
     )

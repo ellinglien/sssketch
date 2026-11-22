@@ -333,6 +333,53 @@ session-only: no crash recovery for them. Cmd+Z goes to EEEDIT's history through
   Discover's and radio's Solo halts and resumes from the position reported before the halt, so it
   steps back up to the 15 ms halt plus one position update (about 33 ms): known, left as is.
 
+### Held stems (Discover and radio, keys 1 to 9)
+
+Nine slots, each holding one Discover candidate, to drop a known loop in quickly. Spec:
+`docs/superpowers/specs/2026-11-22-held-stems-design.md`.
+
+- **State:** `DiscoverSettings.heldStems` (`src/main/discoverSettingsStore.ts`), saved with the
+  app, not the project; read through `normalizeHeldStems` (a bad or old file gives nine empty
+  slots). App's `holdStem(index, candidate | null)` assigns or clears, merged onto the latest
+  settings. The pure rules are in `src/shared/heldStems.ts`.
+- **A slot has no kind of its own.** A held stem keeps the kinds of the row it was saved from,
+  in its candidate's `slotKinds` (`heldStemFromRow`), and the row it adds takes them
+  (`heldStemKinds`; a saved stem with none joins as `front`). So a stem saved from a bass row
+  comes back as a bass row, and radio treats it as bass.
+- **Keys** (`handleHeldKey` in `DiscoverPanel.tsx`, by `e.code`, not in a text field, no
+  repeats): shift + number assigns the candidate of the row under the pointer (found by
+  `[data-slot-row]:hover`, an attribute on `DiscoverSlotRow`'s root); a plain number plays;
+  Cmd + number plays at once. `0` is no slot. The tiles are `components/HeldStemsStrip.tsx`,
+  under the rows (click plays, Cmd-click at once, `x` clears).
+- **Play** (`playHeldStem`): a row that holds the stem, or has it waiting to land
+  (`rowHoldingStem`), is removed through `removeSlot`. Otherwise an empty row is added and the
+  stem joins it.
+- **Landing:** while radio runs, at the next **bar line** through `queueManualChange`, as every
+  change the user makes there does (skip, random, nearby, add, duplicate, the phone); with Cmd or
+  radio off, at once (`commitSlotPick`). The rule is `radioManualBarLanding`
+  (`src/shared/radioManualChanges.ts`), wired in `stepRadioStage` (3) and the clock effect's
+  `crossedManualBar`:
+  - The user's ready changes (`barLine` on the queue entry) go out alone on their own stage, as
+    cuts, aimed at the first bar line at least a beat ahead; the entries that stage carried are
+    committed when the playhead crosses it, or when the engine's `applied` says it already
+    swapped.
+  - **The loop top instead** when no bar line is left in the lap, when a hole, a riser or a
+    drop-out is armed (a stage at a bar replaces the live project, curves and all), and for a
+    change that would lengthen or shorten the loop (a held stem longer than the loop): the
+    engine adopts a staged project's loop length mid-lap.
+  - A hook's and the intensity arc's landings, the density arc's adds and an artist change's
+    turnover are radio's own moves and always take the loop top.
+  - One stage at a time: radio's change held for the wrap is staged after the user's bar has
+    landed; radio's cut already aimed at a bar goes first and the user's takes the next line.
+    Neither is moved to the other's boundary or dropped.
+- **The row is `radioAdded: true`**, gain 1 with no balance: it lands at the stem's levelled
+  gain, radio may turn its stem over like any unlocked row, and the density arc may thin it
+  (the arc removes only `radioAdded` rows).
+
+On screen they are **pads**. The mouse's way to save: click a pad's number (`armedPad` in
+`DiscoverPanel.tsx`), then a row; while a pad is armed each row with a stem shows a full-row
+"save to pad N" button (`padSave`, `DiscoverSlotRow.tsx`). Escape or the number again cancels.
+
 ### Metronome
 
 On/off and volume (`metronomeVolume`, drag the metronome button up/down) are app state, not saved
@@ -341,6 +388,57 @@ re-sends it to a respawned engine, which otherwise starts at its own defaults. T
 component, `components/MetronomeButton.tsx`, used by the main transport and by Cross. The click has
 no tempo of its own: the engine clicks at the loaded project's bpm, so during a Cross preview it
 follows `draft.targetBpm` and after it the project's tempo (`PlaybackEngineTests`).
+
+### Four categories
+
+Stored roles and buses are unchanged; the UI shows four (drums, bass, back, front) through
+`src/shared/stemCategory.ts`. Discover's mask kinds are the four: back and front rank by the dial
+(`stemCategoryDial.ts`, `frontScoreCache.ts`), and a saved `'lead'` goes through `parseSlotKind`.
+One model guesses (`stemCategoryModel.ts` + `.json`), trained offline by
+`scripts/train-stem-category-model.mts` from a COPY of a library db, never a live one. Pass
+`--stems-db` pointing at a COPY of the LORE archive db too, so archive stems get their jams. The
+script refuses weights below `FLOOR` (front/back at least 0.6; drums/bass precision at least 0.5
+through the shipped 0.8 rule). A model guess is stored with `Source = 'model:<CLASSIFIER_VERSION>.<version>'`
+(`modelAutoCategorySource`). Readers take any model row (`PLACED_AUTO_CATEGORY_SQL`); the classifier
+takes only the current tag (`currentAutoCategorySql`). So a retrain (a new `version`) or a
+`CLASSIFIER_VERSION` bump re-guesses every stem not placed by a label or the mask, once, and the old
+guess serves until then. The dev and packaged apps share the db, so two different versions re-guess
+each other's rows on every switch. Labels write through the plain upserts (`upsertStemCategoryBus`/`Role`):
+nothing trains on device, so a label write wakes nothing. The old centroid, nearest-neighbour and
+zero-shot guessers are gone. The web radio imports `src/shared`, so renaming a shared export breaks
+its build, and its branch `four-categories` in `ell.ing/radio` must merge together with this one.
+
+### Better picks (key, level, balance)
+
+Spec `docs/superpowers/specs/2026-11-21-picking-key-level-groove-design.md`. Three things ride
+on every Discover and radio pick (`pickForSlot` in `DiscoverPanel.tsx`, the one `rankCandidates`
+call; the web radio's `pick.ts` does the same), each absent-safe: without its input the ranking is
+exactly what it was.
+
+- **Key.** A candidate carries its riff's `Riffs.Root`/`Scale` (`riffRoot`, `riffScale`; the riff
+  index stores them, `RIFF_INDEX_VERSION` in `discoverIndexCache.ts` rebuilds an older saved index
+  once). `keyFit` (`src/shared/keyFit.ts`) scores two keys by shared notes; `rankCandidates`' `key`
+  term (`KEY_WEIGHT` 2, a strong lean, not a rule) is the mean fit against the other sounding rows
+  (`rankKeyFor`, `src/shared/discoverKey.ts`). Drums are exempt both ways. An unknown or chromatic
+  key is neutral (0.5), never a clash: the stored key is evidence, not proof.
+- **Level.** Main attaches `arrivalGain` (`stemLevel.ts`: down toward the library's 25th
+  percentile of `loudnessLufs`, never up, floor 0.25) and `presence` to every roll
+  (`attachLevelAndPresence`). It reads only the in-memory trait value table: when that table isn't
+  current the attach is skipped (rows arrive at 1, no presence) so a roll never pays disk reads.
+  A row's gain is the ordinary visible one. A row also keeps its `balance` (its gain over its
+  stem's arrival gain, unclamped, set when the gain is dragged), so a boost survives rerolls and a
+  hook's return; `landedLevel` applies it at a landing. `rowGainFor(row, stem)` gives the gain a row has for a
+  given stem, and every landing goes through it (`commitSlotPick`), as do the staged engine project
+  and `pushMasterLevel`, so an incoming stem is staged at the gain its row will have. Anything new
+  that writes a stem's volume from row state must use `rowGainFor` with the stem actually sounding.
+- **Balance.** `presence` (`stemPresence`, `radioIntensity.ts`: the mean of the intensity score's
+  `busy` and `full` parts) is how much a stem demands. The `balance` term (`BALANCE_WEIGHT` 1) wants
+  `1 - the strongest other row's presence`. Bass, back and front count; drums don't
+  (`rankBalanceFor`, whose `countDrums` flag is for the next design's rotating focus).
+
+Radio's density arc peaks at 3 or 4 rows (`DENSITY_PEAK`, `DENSITY_MAX` 4; the intensity arc's
+ordinary peak follows), and a leg always aims at least one row away from where it starts. The web
+index carries the same values as `kr`, `ks`, `g` and `p`, all optional.
 
 ### Previews, Cmd+Z and the mixer rail (renderer conventions)
 

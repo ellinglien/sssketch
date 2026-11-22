@@ -16,7 +16,7 @@ const BPM = 120
 const BAR = 2 // seconds
 const ROWS: ThrowTick['rows'] = [
   { slot: 'd', kinds: ['drums'], audible: false },
-  { slot: 'l', kinds: ['lead'], audible: true },
+  { slot: 'l', kinds: ['front'], audible: true },
   { slot: 'w', kinds: ['warm'], audible: true }
 ]
 const tick = (now: number, o: Partial<ThrowTick> = {}): ThrowTick => ({

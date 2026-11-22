@@ -13,25 +13,25 @@ import {
 } from '@shared/agglomerativeCluster'
 import { clusterProvenance, type BusProvenance } from '@shared/busProvenance'
 import {
-  emptyCategoryCentroidStore,
-  suggestCategory,
-  type CategoryCentroidStore
-} from '@shared/categoryCentroids'
-import {
-  ARRANGE_ROLE_OPTIONS,
   ARRANGE_ROLE_TO_BUS,
   DRUM_SUB_ROLE_OPTIONS,
   DRUM_SUB_ROLE_LABELS,
   type ArrangeRole,
   type DrumSubRole
 } from '@shared/stemRole'
+import {
+  CATEGORY_BUS,
+  CATEGORY_ROLE,
+  STEM_CATEGORY_OPTIONS,
+  categoryOfBus,
+  categoryOfRole,
+  groupBusFor
+} from '@shared/stemCategory'
 import { stemTileGeometryFromFields } from '../state/selectors'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
 import { stemColorVar } from '../theme/typeColor'
 import type { ProjectRef } from '@shared/types'
-import { useCachedStemEmbeddings } from '../audio/useCachedStemEmbeddings'
-import { suggestCategoryFromEmbedding, type ConfirmedEmbedding } from '@shared/embeddingMatch'
 import { guessArrangeRoleFromPresetName } from '@shared/presetNames'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import { useThrowawayStemPreview } from '../state/useThrowawayStemPreview'
@@ -62,7 +62,8 @@ const LIBRARY_PAGE = 200
 export type TidyUpPopulation = 'sketch' | 'library'
 
 const DEFAULT_CLUSTER_COUNT = 8
-const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
+// One suggested group per category, keyed by the bus a pick of it stores.
+const BUS_IDS: BusId[] = STEM_CATEGORY_OPTIONS.map((c) => CATEGORY_BUS[c])
 
 // Shared across every unsplit suggested group so `.get(busId) ?? EMPTY_NODE_ID_SET`
 // doesn't allocate a fresh empty Set on every render.
@@ -171,6 +172,9 @@ interface ClusterableStem {
    * useStemPreviewPlayback to solo by stemKey. */
   librarySource?: Omit<Stem, 'slot'>
   path: string
+  /** SKETCH POPULATION ONLY. The original a re-oned (or Cross/EEEDIT) copy was made from: the
+   * stored guess is looked up by it, since a `.bakes` copy has no StemCID of its own. */
+  phaseSourcePath?: string
   color: string
   /** The bar this stem's own rifff is placed at on the timeline -- what a
    * thumbnail click scrubs the transport to (see handleThumbnailClick on
@@ -247,7 +251,7 @@ interface ClusterGroup {
 //
 // state 'confirmed' matches the original boolean `active` meaning exactly
 // (this row's own busOf already agrees). 'suggested' is new -- a lighter,
-// dashed-border hint for a bus the centroid classifier proposed but the
+// dashed-border hint for a bus the stored guess proposed but the
 // user hasn't clicked yet, distinguishable from both "confirmed" and "just
 // one of the other four options."
 function buttonStyle(state?: 'confirmed' | 'suggested'): React.CSSProperties {
@@ -328,7 +332,7 @@ export function ClusterStemsBrowser({
   // Frozen the moment this component mounts (useState's lazy initializer
   // runs exactly once, and busOf is already-available store state, not an
   // async fetch -- no separate mount-effect needed, unlike
-  // centroidStoreSnapshot below). `partitioned` reads THIS, not live busOf,
+  // guessByPath below). `partitioned` reads THIS, not live busOf,
   // to decide which row/section a stem belongs to (2026-09-15, real bug
   // reported twice during Elling's own live testing: first as rows "jumping
   // to another location" when confirming one, then -- after an earlier fix
@@ -342,42 +346,6 @@ export function ClusterStemsBrowser({
   // live busOf independently), never which row it's in.
   const [busOfSnapshot] = useState(() => busOf)
 
-  // Global, cross-project classifier state (see categoryCentroids.ts) --
-  // loaded once on mount. Starts empty (every suggestCategory() call returns
-  // null, i.e. no suggestions at all) until enough real confirmations have
-  // trained it server-side, which is the correct cold-start behavior: this
-  // modal falls straight back to its original all-DSP-clustering flow
-  // rather than ever blocking on the fetch.
-  //
-  // Frozen the first time the real store loads, never again -- `partitioned`
-  // below reads suggestions from this frozen snapshot, not a live,
-  // continuously-retraining store (training itself is now entirely
-  // server-side, see categoryCentroidTraining.ts, triggered by the
-  // upsert-stem-category-bus IPC handler that recordBusCategories below
-  // calls). Without freezing this snapshot, confirming ANY bus mid-tidy-up
-  // would retrain the suggestion set shown here, which can immediately flip
-  // an unrelated, already-visible DSP-cluster stem into "suggested" and yank
-  // it out of the list the user is actively working through -- reported as
-  // the suggestion UI feeling "jolting"/like it "took over." Freezing the
-  // snapshot means the suggested/DSP split for this session is decided
-  // once, at open time, and stays put no matter how much training happens
-  // server-side while the user works.
-  const [centroidStoreSnapshot, setCentroidStoreSnapshot] = useState<CategoryCentroidStore>(
-    emptyCategoryCentroidStore
-  )
-  useEffect(() => {
-    void window.rifffApi.getCategoryCentroids().then(setCentroidStoreSnapshot)
-  }, [])
-
-  // Same frozen-once-per-mount pattern as centroidStoreSnapshot above --
-  // confirmed bus-axis embeddings, fetched once and read by `partitioned`
-  // below via suggestCategoryFromEmbedding, which ranks above the centroid
-  // classifier when confident.
-  const [confirmedBusEmbeddings, setConfirmedBusEmbeddings] = useState<ConfirmedEmbedding[]>([])
-  useEffect(() => {
-    void window.rifffApi.getConfirmedEmbeddings('bus').then(setConfirmedBusEmbeddings)
-  }, [])
-
   // Restoring the pre-solo mute snapshot and pausing playback now happens
   // automatically via useStemPreviewPlayback's own unmount-cleanup effect,
   // the moment onClose's state flip (App.tsx) unmounts this component --
@@ -388,8 +356,7 @@ export function ClusterStemsBrowser({
   }
 
   // Fetched once per modal session, like every other frozen-at-mount input
-  // in this file (busOfSnapshot, centroidStoreSnapshot,
-  // confirmedBusEmbeddings) and for the same reason: a list that reshuffles
+  // in this file (busOfSnapshot, guessByPath) and for the same reason: a list that reshuffles
   // under the user mid-pass was reported as "jolting"/like it "took over".
   // null means "not fetched yet", which the loading branch below reads.
   const [libraryStems, setLibraryStems] = useState<TidyUpLibraryStem[] | null>(null)
@@ -469,6 +436,7 @@ export function ClusterStemsBrowser({
           name: `${rifff.name} - ${stem.name}`,
           presetName: stem.name,
           path: stem.path,
+          phaseSourcePath: stem.phaseSourcePath,
           tileSpanBars: geometry.tileSpanBars,
           color: stemColorVar(stem),
           startBar: geometry.startBar,
@@ -490,15 +458,48 @@ export function ClusterStemsBrowser({
   const [clusterCount, setClusterCount] = useState(DEFAULT_CLUSTER_COUNT)
 
   const scanItems = useMemo(() => stems.map((s) => ({ key: s.key, path: s.path })), [stems])
-  const { loading, featuresByKey } = useStemFeatureScan(scanItems)
-  const embeddingByKey = useCachedStemEmbeddings(scanItems)
+  const { loading: featuresLoading, featuresByKey } = useStemFeatureScan(scanItems)
+
+  // The overnight classifier's stored guess (StemAutoCategory, placed rows only) for the sketch's
+  // stems, keyed by the path asked about (a copy's phaseSourcePath, else its path). Keyed on the
+  // SORTED SET of those paths, not on `stems` (a new array on every bus click), so it is fetched
+  // once per population and again only if the stems themselves change: a guess written
+  // mid-session never moves a row. The library population carries its guess through
+  // listTidyUpLibraryStems instead (libraryRoleGuessByKey below). null = not fetched yet, which
+  // reads as loading, so the rows aren't laid out twice.
+  const guessPathsKey = useMemo(
+    () =>
+      population === 'sketch'
+        ? [...new Set(stems.map((s) => s.phaseSourcePath ?? s.path))].sort().join('\n')
+        : '',
+    [population, stems]
+  )
+  const [guessByPath, setGuessByPath] = useState<Record<
+    string,
+    { arrangeRole: ArrangeRole }
+  > | null>(null)
+  useEffect(() => {
+    if (population !== 'sketch') return
+    let cancelled = false
+    window.rifffApi
+      .getStemCategoryGuesses(guessPathsKey === '' ? [] : guessPathsKey.split('\n'))
+      .then((guesses) => {
+        if (!cancelled) setGuessByPath(guesses)
+      })
+      .catch((err: unknown) => {
+        console.error('ClusterStemsBrowser: failed to read the stored guesses:', err)
+        if (!cancelled) setGuessByPath({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [population, guessPathsKey])
+  const loading = featuresLoading || (population === 'sketch' && guessByPath === null)
 
   // Mirrors the old `computed` shape's own two derived pieces exactly --
   // analyzedStems (only the stems that scanned successfully) and
-  // rawVectorsByKey (toFeatureArray-flattened, raw/unstandardized, since
-  // suggestCategory below needs raw space -- see categoryCentroids.ts's own
-  // doc comment) -- so every downstream consumer needs zero further changes
-  // beyond what Step 2 below updates.
+  // rawVectorsByKey (toFeatureArray-flattened, raw/unstandardized; the
+  // clustering below standardizes them itself).
   const computed = useMemo(() => {
     if (loading) return null
     const analyzedStems = stems.filter((s) => featuresByKey.has(s.key))
@@ -541,16 +542,10 @@ export function ClusterStemsBrowser({
   // since ClusterRow's `assignedBus` reads live busOf independently of
   // this partitioning decision.
   //
-  // A suggestion prefers an embedding-nearest-neighbor match
-  // (suggestCategoryFromEmbedding, confirmedBusEmbeddings) when this stem's
-  // embedding has been extracted and one is confident, falling back to the
-  // centroid classifier (suggestCategory, centroidStoreSnapshot) otherwise
-  // -- same embedding-preferred, centroid-fallback shape as
-  // roleEmbeddingRefinement.ts's own refineRoleWithEmbeddingOrCentroidSuggestion.
-  // centroidStoreSnapshot/confirmedBusEmbeddings are themselves frozen once
-  // per modal session for the exact same "don't jolt the user mid-session"
-  // reason busOfSnapshot now is (see centroidStoreSnapshot's own doc
-  // comment above). mergeSequence -- the expensive O(n^3) part -- only ever
+  // A suggestion is the overnight classifier's stored guess (guessByPath),
+  // falling back to a real Endlesss preset-name match. guessByPath is
+  // fetched once per population for the same "don't jolt the user
+  // mid-session" reason busOfSnapshot is frozen. mergeSequence -- the expensive O(n^3) part -- only ever
   // re-runs when the actual DSP population changes, not on every keystroke
   // elsewhere in the modal.
   const partitioned = useMemo(() => {
@@ -560,8 +555,7 @@ export function ClusterStemsBrowser({
     const dspStems: ClusterableStem[] = []
 
     // THE LIBRARY IS NOT CLUSTERED, AND CANNOT BE. computeMergeSequence is
-    // O(n^3) and categoryCentroids.ts records testing against a real
-    // ~45,000-stem backlog -- that is arithmetic, not a performance
+    // O(n^3), and a real library is a ~45,000-stem backlog -- that is arithmetic, not a performance
     // problem. Tidy Up already has two halves, and the library gets the
     // SUGGESTED one: every stem lands in a suggested group from what is
     // already known about it, and `dspStems` stays empty so the DSP half
@@ -585,7 +579,7 @@ export function ClusterStemsBrowser({
           libraryRoleGuessByKey.get(stem.key) ??
           guessArrangeRoleFromPresetName(stem.presetName)?.arrangeRole ??
           null
-        const busId = known === null ? 'aux' : ARRANGE_ROLE_TO_BUS[known]
+        const busId = groupBusFor(known)
         const list = suggestions.get(busId) ?? []
         list.push(stem)
         suggestions.set(busId, list)
@@ -598,18 +592,12 @@ export function ClusterStemsBrowser({
         dspStems.push(stem)
         continue
       }
-      const raw = rawVectorsByKey.get(stem.key)
-      const embedding = embeddingByKey.get(stem.key)
-      const embeddingSuggestedBus = embedding
-        ? (suggestCategoryFromEmbedding(confirmedBusEmbeddings, embedding) as BusId | null)
-        : null
-      const centroidSuggestedBus = raw
-        ? (suggestCategory(centroidStoreSnapshot, 'bus', raw) as BusId | null)
-        : null
+      const guess = guessByPath?.[stem.phaseSourcePath ?? stem.path]
+      const guessedBus = guess ? ARRANGE_ROLE_TO_BUS[guess.arrangeRole] : null
       // Falls back to a real Endlesss preset-name match (same
       // guessArrangeRoleFromPresetName lookup resolveStemRole.ts's own
       // priority chain already uses for AutoArrangeRoleStep.tsx) when
-      // neither the embedding nor the centroid classifier has anything --
+      // the stored guess has nothing --
       // added 2026-09-15, closing a real gap reported directly by Elling:
       // Arrange mode's suggestions felt meaningfully better than Tidy Up's
       // because AutoArrangeRoleStep.tsx already consulted preset names via
@@ -619,7 +607,9 @@ export function ClusterStemsBrowser({
       // own 8 buttons.
       const presetGuess = guessArrangeRoleFromPresetName(stem.presetName)
       const presetSuggestedBus = presetGuess ? ARRANGE_ROLE_TO_BUS[presetGuess.arrangeRole] : null
-      const suggestedBus = embeddingSuggestedBus ?? centroidSuggestedBus ?? presetSuggestedBus
+      const rawSuggestedBus = guessedBus ?? presetSuggestedBus
+      // aux reads as back, so a stored aux guess joins the back group.
+      const suggestedBus = rawSuggestedBus ? CATEGORY_BUS[categoryOfBus(rawSuggestedBus)] : null
       if (suggestedBus) {
         const list = suggestions.get(suggestedBus) ?? []
         list.push(stem)
@@ -635,15 +625,7 @@ export function ClusterStemsBrowser({
       rawVectorsByKey,
       mergeSequence: computeMergeSequence(standardizeFeatures(dspVectors))
     }
-  }, [
-    computed,
-    population,
-    libraryRoleGuessByKey,
-    busOfSnapshot,
-    centroidStoreSnapshot,
-    embeddingByKey,
-    confirmedBusEmbeddings
-  ])
+  }, [computed, population, libraryRoleGuessByKey, busOfSnapshot, guessByPath])
 
   // Node ids the user has manually split a SUGGESTED group further into,
   // keyed by that group's own bus -- same idea as splitNodeIds below (for
@@ -807,10 +789,7 @@ export function ClusterStemsBrowser({
 
   // Forward-captures every member's BusId into the library-wide
   // StemCategories table (design spec §2) -- fire-and-forget, sits alongside
-  // the ASSIGN_STEMS_TO_BUS dispatch rather than blocking on it. This call
-  // is also what triggers server-side centroid training (see
-  // categoryCentroidTraining.ts, wired into the upsert-stem-category-bus IPC
-  // handler) -- there is no client-side training left to mirror. Uses each
+  // the ASSIGN_STEMS_TO_BUS dispatch rather than blocking on it. Uses each
   // member's own `path` (content-addressed by StemCID for a real library
   // stem -- see stemCategoriesStore.ts's own doc comment); a member whose
   // path doesn't resolve to a real StemCID is silently skipped by the
@@ -825,13 +804,9 @@ export function ClusterStemsBrowser({
 
   // The ArrangeRole equivalent of recordBusCategories above, added
   // 2026-09-14 (direct request) alongside the 8-category picker below --
-  // every Tidy Up assignment now trains BOTH the bus and arrangeRole/
-  // drumSubRole centroid classifiers, not just AutoArrangeWizard/
-  // DrawArrangeWizard's own role-confirmation step (see
-  // categoryCentroidTraining.ts's recordStemCategoryRole, wired into
-  // the SAME upsert-stem-category-role IPC handler this calls into) --
-  // Tidy Up is used far more often than the auto-arrange role step, so this
-  // is a real accuracy win with no extra clicks for the 5 shared
+  // every Tidy Up assignment now writes BOTH the bus and the arrangeRole/
+  // drumSubRole label, not just AutoArrangeWizard/DrawArrangeWizard's own
+  // role-confirmation step, with no extra clicks for the 5 shared
   // categories, where arrangeRole is always fully determined by the bus
   // just assigned.
   //
@@ -864,12 +839,10 @@ export function ClusterStemsBrowser({
   // not a row index -- see focusedId's own doc comment above for why.
   const [celebratingId, setCelebratingId] = useState<number | null>(null)
 
-  // `category` is one of ARRANGE_ROLE_OPTIONS' 8 values, not just a BusId --
-  // the 3 without a bus of their own (textureFx/fill/vocal) route to 'aux'
-  // (see ARRANGE_ROLE_TO_BUS's own doc comment, shared/stemRole.ts) while
-  // still recording the finer category via recordRoles. For the 5 shared
-  // categories the bus assignment is unchanged; recordRoles runs either
-  // way (see its own doc comment above).
+  // `category` is a stored role (CATEGORY_ROLE of the picked category), not a BusId --
+  // the bus is its category's (ARRANGE_ROLE_TO_BUS, shared/stemRole.ts)
+  // and recordRoles records the stored role either way (see its own doc
+  // comment above).
   function assignCluster(id: number, members: ClusterableStem[], category: ArrangeRole): void {
     // BUS WRITES STOP AT THE SKETCH BOUNDARY -- see TidyUpPopulation.
     if (population === 'sketch') {
@@ -990,10 +963,8 @@ export function ClusterStemsBrowser({
     })
   }
 
-  // Arrow keys move focus between rows; number keys 1-8 assign the focused
-  // row's cluster to the corresponding category (ARRANGE_ROLE_OPTIONS[0..7],
-  // extended from the original 1-5/BUS_IDS[0..4] range when the picker grew
-  // to 8 categories, 2026-09-14). Escape closes the modal, matching this
+  // Arrow keys move focus between rows; number keys 1-4 assign the focused
+  // row's cluster to the corresponding category (STEM_CATEGORY_OPTIONS). Escape closes the modal, matching this
   // app's existing modal-dismiss convention.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
@@ -1011,12 +982,12 @@ export function ClusterStemsBrowser({
         setFocusedId(clusters[prev]?.id ?? null)
       } else if (e.key === 'Escape') {
         handleClose()
-      } else if (e.key >= '1' && e.key <= '8') {
+      } else if (e.key >= '1' && e.key <= '4') {
         const categoryIndex = Number(e.key) - 1
-        const category = ARRANGE_ROLE_OPTIONS[categoryIndex]
+        const category = STEM_CATEGORY_OPTIONS[categoryIndex]
         const activeCluster = clusters[clampedFocusedIndex]
         if (category && activeCluster) {
-          assignCluster(activeCluster.id, activeCluster.members, category)
+          assignCluster(activeCluster.id, activeCluster.members, CATEGORY_ROLE[category])
         }
       }
     }
@@ -1262,9 +1233,8 @@ function ClusterRow({
   population
 }: {
   members: ClusterableStem[]
-  /** One of ARRANGE_ROLE_OPTIONS' 8 values -- see ARRANGE_ROLE_TO_BUS's own
-   * doc comment (shared/stemRole.ts) for how the 3 without a real bus
-   * (textureFx/fill/vocal) still resolve to a concrete BusId assignment. */
+  /** The stored role of the picked category (CATEGORY_ROLE); its bus is
+   * ARRANGE_ROLE_TO_BUS of it. */
   onAssign: (category: ArrangeRole) => void
   /** Only ever fires for 'kick'/'snare'/'hihat'/'clap'/'perc' -- write-only,
    * same as onAssign for the 3 bus-less categories: there's no persisted
@@ -1288,7 +1258,7 @@ function ClusterRow({
   /** False for a suggestion row -- there's no dendrogram behind it, so
    * "split into closest sub-groups" has nothing to operate on. */
   splittable?: boolean
-  /** The centroid classifier's own proposed bus for a suggestion row --
+  /** The stored guess's (or preset name's) proposed bus for a suggestion row --
    * drawn with buttonStyle's 'suggested' state until/unless the user
    * clicks a bus (any bus, including this one) to actually confirm it. */
   suggestedBus?: BusId
@@ -1316,11 +1286,16 @@ function ClusterRow({
   // and this exact membership recurs. Only shown as "assigned" when EVERY
   // member of this cluster already carries the same busId; a mixed
   // cluster shows no highlight rather than a misleading single answer.
+  // Compared by category: aux+backing or vocal+lead rows are one category.
   const assignedBus = useMemo<BusId | null>(() => {
     if (members.length === 0) return null
     const first = busOf[members[0].key]
     if (!first) return null
-    const allMatch = members.every((m) => busOf[m.key] === first)
+    const category = categoryOfBus(first)
+    const allMatch = members.every((m) => {
+      const bus = busOf[m.key]
+      return bus !== undefined && categoryOfBus(bus) === category
+    })
     return allMatch ? first : null
   }, [members, busOf])
 
@@ -1331,14 +1306,20 @@ function ClusterRow({
   //
   // KNOWN LIMIT, accepted: a confirmation made DURING this session does not
   // re-highlight, because the fetched list is frozen at open (the same
-  // freeze busOfSnapshot/centroidStoreSnapshot have, for the same
+  // freeze busOfSnapshot/guessByPath have, for the same
   // "don't jolt the user mid-pass" reason). The celebration pulse already
   // acknowledges the click, which is exactly what it was added for.
   const assignedRole = useMemo<ArrangeRole | null>(() => {
     if (population !== 'library' || members.length === 0) return null
     const first = members[0].confirmedRole ?? null
     if (first === null) return null
-    return members.every((m) => (m.confirmedRole ?? null) === first) ? first : null
+    const category = categoryOfRole(first)
+    return members.every((m) => {
+      const role = m.confirmedRole ?? null
+      return role !== null && categoryOfRole(role) === category
+    })
+      ? first
+      : null
   }, [members, population])
 
   // True while ANY of this row's own members is the current preview
@@ -1417,14 +1398,15 @@ function ClusterRow({
           </button>
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {ARRANGE_ROLE_OPTIONS.map((category, i) => (
+          {STEM_CATEGORY_OPTIONS.map((category, i) => (
             <button
               key={category}
-              onClick={() => onAssign(category)}
+              onClick={() => onAssign(CATEGORY_ROLE[category])}
               style={buttonStyle(
-                assignedRole === category || assignedBus === ARRANGE_ROLE_TO_BUS[category]
+                (assignedRole && categoryOfRole(assignedRole) === category) ||
+                  (assignedBus && categoryOfBus(assignedBus) === category)
                   ? 'confirmed'
-                  : suggestedBus === category
+                  : suggestedBus && categoryOfBus(suggestedBus) === category
                     ? 'suggested'
                     : undefined
               )}
@@ -1440,7 +1422,8 @@ function ClusterRow({
           'drums') -- see onAssignDrumSubRole's own doc comment above for why
           this is write-only and always starts back at "drums (generic)"
           rather than remembering a prior pick. */}
-      {(assignedBus === 'drums' || assignedRole === 'drums') && (
+      {((assignedBus && categoryOfBus(assignedBus) === 'drums') ||
+        (assignedRole && categoryOfRole(assignedRole) === 'drums')) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
           <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>kit piece</span>
           <select

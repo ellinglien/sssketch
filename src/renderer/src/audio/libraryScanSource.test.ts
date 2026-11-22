@@ -4,7 +4,7 @@ import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import { createLibraryScanSource, type LibraryScanSource } from './libraryScanSource'
 import type { AnalysisWorkItem } from './backgroundAnalysisQueue'
 
-const NEEDY: StemAnalysisNeeds = { peaks: true, features: true, embedding: true, zeroShot: false }
+const NEEDY: StemAnalysisNeeds = { peaks: true, features: true, embedding: true }
 
 interface Deferred<T> {
   promise: Promise<T>

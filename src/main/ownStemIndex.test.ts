@@ -15,7 +15,7 @@ function library(lore: boolean): Database.Database {
     CREATE TABLE Stems (StemCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL,
       Instrument INTEGER, CreatorUserName TEXT, PRIMARY KEY(StemCID));
     CREATE TABLE Riffs (RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL,
-      CreationTime INTEGER, BPMrnd REAL, UserName TEXT,
+      CreationTime INTEGER, BPMrnd REAL, UserName TEXT, Root INTEGER, Scale INTEGER,
       StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
       StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY(RiffCID));
   `)
@@ -32,11 +32,9 @@ function stem(db: Database.Database, cid: string, user: string | null, instrumen
 
 function riff(db: Database.Database, cid: string, user: string | null, stems: string[]): void {
   const slots = [...stems, ...Array(8 - stems.length).fill(null)]
-  db.prepare(`INSERT INTO Riffs VALUES (?, 'jam1', 1000, 120, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    cid,
-    user,
-    ...slots
-  )
+  db.prepare(
+    `INSERT INTO Riffs VALUES (?, 'jam1', 1000, 120, ?, 4, 5, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(cid, user, ...slots)
 }
 
 describe('buildOwnStemIndex on an archive with username indexes', () => {
@@ -56,7 +54,9 @@ describe('buildOwnStemIndex on an archive with username indexes', () => {
       riffCID: 'r5',
       ownerJamCID: 'jam1',
       bpmRnd: 120,
-      creationTime: 1000
+      creationTime: 1000,
+      root: 4,
+      scale: 5
     })
     expect(own.rows).toEqual([
       { StemCID: 'mine1', Instrument: 4, OwnerJamCID: 'jam1' },

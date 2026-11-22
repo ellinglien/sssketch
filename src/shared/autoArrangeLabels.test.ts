@@ -31,7 +31,26 @@ describe('stemLabelsByKey', () => {
   })
 
   it('uses the human ROLE_LABELS text for known roles', () => {
-    expect(ROLE_LABELS.textureFx).toBe('texture/fx')
     expect(ROLE_LABELS.hihat).toBe('hi-hat')
+  })
+
+  it('shows every stored role as its category', () => {
+    expect(ROLE_LABELS.lead).toBe('front')
+    expect(ROLE_LABELS.vocal).toBe('front')
+    expect(ROLE_LABELS.backing).toBe('back')
+    expect(ROLE_LABELS.aux).toBe('back')
+    expect(ROLE_LABELS.textureFx).toBe('back')
+    expect(ROLE_LABELS.fill).toBe('drums')
+  })
+
+  it('numbers stems across a whole category', () => {
+    const labels = stemLabelsByKey([
+      { stemKey: 'a', role: 'backing', included: true },
+      { stemKey: 'b', role: 'aux', included: true },
+      { stemKey: 'c', role: 'lead', included: true }
+    ])
+    expect(labels.get('a')).toBe('back 1')
+    expect(labels.get('b')).toBe('back 2')
+    expect(labels.get('c')).toBe('front')
   })
 })

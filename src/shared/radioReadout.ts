@@ -148,7 +148,7 @@ export interface RadioReadoutRow {
 }
 
 export interface RadioReadout {
-  /** `building ↑ 3 → 5 · next: row 2 → filter in · 6 bars`; '' when there is nothing to say. */
+  /** `building ↑ 3 → 4 · next: row 2 → filter in · 6 bars`; '' when there is nothing to say. */
   statusLine: string
   /** One tick per bar of the phrase; `filled` whole bars played in it; `end` the turnaround
    * armed for its end (`wash`, or `turn: wash` for a turn), null for none. */
@@ -175,7 +175,8 @@ export const RADIO_TRAIT_DOMINANT = 0.6
 export const RADIO_KIND_WORD: Readonly<Record<DiscoverSlotKind, string>> = {
   drums: 'drums',
   bass: 'bass',
-  lead: 'lead',
+  back: 'back',
+  front: 'front',
   bassHeavy: 'heavy',
   rhythmic: 'rhythmic',
   bright: 'bright',

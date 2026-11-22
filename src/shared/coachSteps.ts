@@ -93,7 +93,7 @@ export type CoachMoveAction =
  * `primaryMoveId` -- by "do it for me". */
 export interface CoachMove {
   id: string
-  /** Phrased as an offer, e.g. 'add a bassish one'. Lowercase. */
+  /** Phrased as an offer, e.g. 'add a bass one'. Lowercase. */
   label: string
   action: CoachMoveAction
 }

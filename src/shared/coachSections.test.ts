@@ -47,8 +47,8 @@ const climax: LockedClimax = {
   stems: [
     stem('/kick.wav', ['drums']),
     stem('/bass.wav', ['bass']),
-    stem('/harmony.wav', ['lead', 'warm']),
-    stem('/hook.wav', ['lead', 'bright']),
+    stem('/harmony.wav', ['front', 'warm']),
+    stem('/hook.wav', ['front', 'bright']),
     stem('/perc.wav', ['bassHeavy'])
   ]
 }
@@ -108,9 +108,9 @@ describe('the suggested-drop table', () => {
   })
 
   it('adds a verse, which loses the hook and keeps the harmony', () => {
-    expect(COACH_SECTION_DROP_SETS.verse).toEqual([['lead', 'bright']])
-    expect(isSuggestedDrop('verse', stem('/hook.wav', ['lead', 'bright']))).toBe(true)
-    expect(isSuggestedDrop('verse', stem('/harmony.wav', ['lead', 'warm']))).toBe(false)
+    expect(COACH_SECTION_DROP_SETS.verse).toEqual([['front', 'bright']])
+    expect(isSuggestedDrop('verse', stem('/hook.wav', ['front', 'bright']))).toBe(true)
+    expect(isSuggestedDrop('verse', stem('/harmony.wav', ['front', 'warm']))).toBe(false)
   })
 
   it('flags the kick and the bass in a breakdown', () => {

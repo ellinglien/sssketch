@@ -36,6 +36,7 @@
 // length (and a cycle's countdown) is drawn where it lands.
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
+import { DENSITY_PEAK } from './radioDensity'
 import type { RadioHookThrow } from './radioHooks'
 import { drawThrowBeats, drawThrowEcho } from './radioThrows'
 import type { TurnaroundArc } from './radioTurnaround'
@@ -273,12 +274,12 @@ export function radioBreakdownCarrier(r: RadioIntensityRow): boolean {
   return r.sounding && !isLow(r.kinds)
 }
 
-/** The kind of a carry row (section 4.1 rule 2): a lead, or a warm row when a lead is already on
- * the bed. */
+/** The kind of a carry row (section 4.1 rule 2): a front row, or a back row when a front row is
+ * already on the bed (back replaced warm here on 2026-11-14, four categories). */
 export function radioCarryKind(
   rows: readonly { kinds: readonly DiscoverSlotKind[] }[]
 ): DiscoverSlotKind {
-  return rows.some((r) => r.kinds.includes('lead')) ? 'warm' : 'lead'
+  return rows.some((r) => r.kinds.includes('front')) ? 'back' : 'front'
 }
 
 /**
@@ -507,7 +508,12 @@ function nextBuild(
     }
   }
   const lo = Math.max(1, input.min)
-  const peak = big ? input.max : clamp01(input.energy / 100) < 0.5 ? 4 : 5
+  // an ordinary peak is the density arc's: 3 or 4 rows since 2026-11-21 (4 or 5 before)
+  const peak = big
+    ? input.max
+    : clamp01(input.energy / 100) < 0.5
+      ? DENSITY_PEAK.min
+      : DENSITY_PEAK.max
   const peakRows = Math.min(input.max, Math.max(lo, peak))
   const adds = Math.max(0, peakRows - count)
   const drawn = drawLength(INTENSITY_PHRASES.build[energyBand(input.energy)], input.random)

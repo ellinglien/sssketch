@@ -31,7 +31,7 @@ const BPM = 120 // 2 s a bar, 0.5 s a beat
 const rows = [
   { slot: 'r0', kinds: ['drums' as const], audible: true },
   { slot: 'r1', kinds: ['bass' as const], audible: true },
-  { slot: 'r2', kinds: ['lead' as const], audible: true },
+  { slot: 'r2', kinds: ['front' as const], audible: true },
   { slot: 'r3', kinds: ['warm' as const], audible: true }
 ]
 

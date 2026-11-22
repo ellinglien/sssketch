@@ -14,7 +14,7 @@
 //   In:  { type: 'init', modelBytes: Uint8Array }
 //        { type: 'infer', requestId: number, pcm: Float32Array }
 //   Out: { type: 'ready' }
-//        { type: 'result', requestId: number, embedding: number[], topClassIndex: number | null }
+//        { type: 'result', requestId: number, embedding: number[] }
 //        { type: 'error', requestId: number | null, message: string }
 //
 // Imports from 'onnxruntime-web/wasm' specifically, NOT the bare
@@ -68,36 +68,6 @@ export function meanPoolEmbedding(
   return pooled
 }
 
-/** Mean-pools YAMNet's own per-frame class-score output (output_0, shape
- * [numFrames, numClasses]) across frames -- same pooling convention as
- * meanPoolEmbedding above, just argmax'd at the end instead of returned as
- * a vector, since a single "what did this clip sound like overall" class
- * guess is all Task 4's own lookup table needs. Returns null for zero
- * frames (a clip too short to produce even one analysis window -- same
- * degenerate case meanPoolEmbedding's own caller, stemEmbeddingCache.ts,
- * already treats as "extraction failed" for the embedding). */
-export function topClassIndexFromScores(
-  data: Float32Array,
-  numFrames: number,
-  numClasses: number
-): number | null {
-  if (numFrames === 0) return null
-  const pooled = new Array<number>(numClasses).fill(0)
-  for (let frame = 0; frame < numFrames; frame++) {
-    const offset = frame * numClasses
-    for (let c = 0; c < numClasses; c++) pooled[c] += data[offset + c]
-  }
-  let bestIndex = 0
-  let bestScore = -Infinity
-  for (let c = 0; c < numClasses; c++) {
-    if (pooled[c] > bestScore) {
-      bestScore = pooled[c]
-      bestIndex = c
-    }
-  }
-  return bestIndex
-}
-
 async function handleInit(modelBytes: Uint8Array): Promise<void> {
   session = await ort.InferenceSession.create(modelBytes, {
     executionProviders: ['wasm']
@@ -128,15 +98,7 @@ async function handleInfer(requestId: number, pcm: Float32Array): Promise<void> 
       numFrames,
       embeddingDim
     )
-    const scoresOutput = outputs.output_0
-    const topClassIndex = scoresOutput
-      ? topClassIndexFromScores(
-          scoresOutput.data as Float32Array,
-          scoresOutput.dims[0],
-          scoresOutput.dims[1]
-        )
-      : null
-    postMessage({ type: 'result', requestId, embedding, topClassIndex })
+    postMessage({ type: 'result', requestId, embedding })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`yamnetWorker: infer failed (pcm.length=${pcm.length}): ${message}`)

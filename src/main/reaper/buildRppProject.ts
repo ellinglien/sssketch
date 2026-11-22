@@ -2,7 +2,13 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { AppState } from '../../renderer/src/state/store'
-import type { BusId, Rifff, SoundType, Stem } from '@shared/types'
+import type { Rifff, SoundType, Stem } from '@shared/types'
+import {
+  CATEGORY_BUS,
+  STEM_CATEGORY_OPTIONS,
+  categoryOfBus,
+  type StemCategory
+} from '@shared/stemCategory'
 import { stemKey } from '@shared/types'
 import { packIntoTracks } from '@shared/packIntoTracks'
 import { clipLengthBars, edgeFadeState } from '@shared/automationEdit'
@@ -124,7 +130,7 @@ function newGuid(): string {
 // Sampled from the same real, hand-recolored-in-Ableton reference project
 // buildAlsXml.ts's own ABLETON_BUS_COLORS is built from (see that file's
 // doc comment) -- these exact hex values are src/renderer/src/theme/
-// typeColor.ts's own BUS_COLOR_HEX, the actual source palette both exports
+// typeColor.ts's own CATEGORY_COLOR_HEX, the actual source palette both exports
 // draw from, including that same file's drums/bass swap (2026-08-21) and
 // its aux grey-to-taupe swap (2026-09-01, fixing aux reading as visually
 // indistinguishable from a muted clip's own grey -- see that file's own
@@ -135,13 +141,15 @@ function newGuid(): string {
 // file would cross this codebase's own process boundary for no real
 // benefit (see CLAUDE.md's "wire format twins are hand-synced, not
 // code-shared" convention).
-const REAPER_BUS_COLORS: Record<BusId, string> = {
+const REAPER_CATEGORY_COLORS: Record<StemCategory, string> = {
   drums: '#4a56ad',
   bass: '#e8929b',
-  lead: '#c7a4d2',
-  backing: '#7fc98a',
-  aux: '#a3937a'
+  front: '#c7a4d2',
+  back: '#7fc98a'
 }
+
+// Risers and the reverb bus belong to no category: they keep the old aux taupe as their neutral.
+const NEUTRAL_TRACK_COLOR = '#a3937a'
 
 // REAPER's native track/item color: the high bit (0x01000000) marks "use
 // this custom color, not the default", OR'd with a BGR-packed (not RGB)
@@ -566,8 +574,8 @@ function buildStemItems(
   }
 }
 
-const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
-const DEFAULT_BUS: BusId = 'aux'
+// A stem with no bus counts as back, as aux did before the four categories.
+const DEFAULT_CATEGORY: StemCategory = 'back'
 
 /**
  * One clip's toolkit, resolved into exactly the numbers the REAPER side
@@ -747,7 +755,7 @@ interface ReverbSend {
 function buildReverbBusTrack(sends: ReverbSend[], secPerBarProject: number): RppNode {
   const children: RppNode[] = [
     rppField('NAME', quote('reverb bus')),
-    rppField('PEAKCOL', colorInt(REAPER_BUS_COLORS[DEFAULT_BUS])),
+    rppField('PEAKCOL', colorInt(NEUTRAL_TRACK_COLOR)),
     rppField('MUTESOLO', 0, 0, 0)
   ]
 
@@ -891,10 +899,8 @@ function buildRiserTracks(
       [
         rppField('NAME', quote('risers')),
         // A riser belongs to an arranger ROW, not to a bus -- it has no entry
-        // in state.busOf and nothing to derive a sound type from. The aux
-        // colour is the honest answer: aux is already where this exporter puts
-        // material with no bus of its own (DEFAULT_BUS).
-        rppField('PEAKCOL', colorInt(REAPER_BUS_COLORS[DEFAULT_BUS])),
+        // in state.busOf and nothing to derive a sound type from, so it gets the neutral colour.
+        rppField('PEAKCOL', colorInt(NEUTRAL_TRACK_COLOR)),
         rppField('MUTESOLO', 0, 0, 0),
         ...group.map((p) => p.item)
       ]
@@ -939,8 +945,8 @@ export function buildRppProject(
   // track pan in automation mode -- see the TRACK block below. Bake mode renders them into the
   // audio instead (exportToolkitAudio.ts's clipsToBake).
   const stemPans = automationMode ? timelineStemPans(state) : new Map<string, number>()
-  const byBus = new Map<BusId, StemItemsResult[]>()
-  for (const busId of BUS_IDS) byBus.set(busId, [])
+  const byBus = new Map<StemCategory, StemItemsResult[]>()
+  for (const category of STEM_CATEGORY_OPTIONS) byBus.set(category, [])
   const plans = new Map<string, StemToolkitPlan>()
 
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
@@ -957,7 +963,8 @@ export function buildRppProject(
       const fileName = baked?.fileName ?? stemFileNames.get(key)
       if (!fileName) continue
 
-      const busId = state.busOf[key] ?? DEFAULT_BUS
+      const bus = state.busOf[key]
+      const category = bus ? categoryOfBus(bus) : DEFAULT_CATEGORY
       const edgeFades = edgeFadesFor(state, rifff, stem, playedBars, leftCropBars)
       const volumeCurveLength = state.stemAutomation?.[key]?.volume?.length ?? 0
       const result = buildStemItems(
@@ -980,17 +987,17 @@ export function buildRppProject(
       // The plan is built AFTER the items, so it can take the clip's left
       // edge from the item that was actually placed -- see curveToPoints.
       if (automationMode) plans.set(key, buildStemToolkitPlan(state, key, result.startSec))
-      byBus.get(busId)!.push(result)
+      byBus.get(category)!.push(result)
     }
   }
 
   const trackBlocks: RppNode[] = []
   const sends: ReverbSend[] = []
-  for (const busId of BUS_IDS) {
-    const entries = byBus.get(busId)!
+  for (const category of STEM_CATEGORY_OPTIONS) {
+    const entries = byBus.get(category)!
     if (entries.length === 0) continue
 
-    const color = colorInt(REAPER_BUS_COLORS[busId])
+    const color = colorInt(REAPER_CATEGORY_COLORS[category])
     // ONE TRACK PER STEM in automation mode, packIntoTracks skipped
     // entirely. A REAPER envelope belongs to a whole TRACK, not to an item
     // on it, so two stems sharing a packed track would silently apply the
@@ -1016,14 +1023,14 @@ export function buildRppProject(
       // NAME, or a second/third packed-open track for the same bus would
       // be unlabeled and indistinguishable from any other bus once
       // opened in Reaper.
-      const busLabel = busId.toUpperCase()
+      const busLabel = category.toUpperCase()
       // In automation mode every track holds exactly one stem, so they all
       // get the name a single-entry packed track already gets -- naming the
       // first one after the whole bus would be a lie about what is on it.
       const name = automationMode
         ? `${busLabel} - ${trackEntries[0].trackLabel}`
         : trackIndex === 0
-          ? busGroupName(busId, entries)
+          ? busGroupName(CATEGORY_BUS[category], entries)
           : trackEntries.length === 1
             ? `${busLabel} - ${trackEntries[0].trackLabel}`
             : `${busLabel} (shared)`

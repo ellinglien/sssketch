@@ -58,14 +58,25 @@ describe('transition temperament', () => {
     expect(picks.has('bloom')).toBe(true)
   })
 
+  it('front takes the melodic table, back the pad one', () => {
+    const subtle = (kind: 'front' | 'back'): Set<string> =>
+      new Set(
+        Array.from({ length: 40 }, (_, i) => pickTransition('subtle', [kind], seeded([i / 40])))
+      )
+    expect(subtle('front').has('hole')).toBe(true)
+    expect(subtle('front').has('bloom')).toBe(false)
+    expect(subtle('back').has('bloom')).toBe(true)
+    expect(subtle('back').has('hole')).toBe(false)
+  })
+
   it('only reaches riser and duck at bold', () => {
     const subtle = new Set(
-      Array.from({ length: 40 }, (_, i) => pickTransition('subtle', ['lead'], seeded([i / 40])))
+      Array.from({ length: 40 }, (_, i) => pickTransition('subtle', ['front'], seeded([i / 40])))
     )
     expect(subtle.has('riser')).toBe(false)
     expect(subtle.has('duck')).toBe(false)
     const bold = new Set(
-      Array.from({ length: 40 }, (_, i) => pickTransition('bold', ['lead'], seeded([i / 40])))
+      Array.from({ length: 40 }, (_, i) => pickTransition('bold', ['front'], seeded([i / 40])))
     )
     expect(bold.has('riser') || bold.has('duck')).toBe(true)
   })

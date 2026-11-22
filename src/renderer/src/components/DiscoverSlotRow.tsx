@@ -16,7 +16,6 @@ import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { DiscoverKindPicker } from './DiscoverKindPicker'
 import { DiscoverReclassifyPicker } from './DiscoverReclassifyPicker'
-import { ROLE_LABELS } from '@shared/autoArrangeLabels'
 import { stemColorVar } from '../theme/typeColor'
 import {
   discoverSlotKindToArrangeRole,
@@ -42,6 +41,7 @@ import {
 } from '@shared/discoverMatchMeter'
 import type { ArrangeRole } from '@shared/stemRole'
 import { discoverWindowLayout } from '@shared/discoverWindowLayout'
+import { rowKeyLabel } from '@shared/discoverKey'
 import { startPointerDrag } from './dragUtils'
 import { type Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
@@ -294,6 +294,7 @@ export function DiscoverSlotRow({
   onToggleReplaceSoon,
   onRemove,
   onDuplicate,
+  padSave,
   onReroll,
   onRerollRandom,
   onTogglePreview,
@@ -408,6 +409,8 @@ export function DiscoverSlotRow({
    * runs, the stem lands right away instead of waiting for the loop top --
    * the same flag on onReroll, onRerollRandom and onSwapFromNearby. */
   onDuplicate: (immediate: boolean) => void
+  /** A pad is armed (HeldStemsStrip): the row offers itself, and a click saves its stem there. */
+  padSave?: { label: string; onSave: () => void } | null
   onReroll: (immediate: boolean) => void
   /** DiscoverPanel's own rerollRandomSlot -- bypasses confirmed/embedding/
    * instrument matching entirely, picking any stem from the user's own
@@ -445,7 +448,11 @@ export function DiscoverSlotRow({
    * resolvedStemsRef and any currently-playing mix this slot is part of
    * stay in sync with what's actually showing on screen, rather than
    * DiscoverPanel needing to re-resolve candidates itself. */
-  onResolvedChange: (stem: ResolvedCandidateStem | null) => void
+  /** `candidate`: the one `stem` was resolved from (null for a seed, or with no stem). */
+  onResolvedChange: (
+    stem: ResolvedCandidateStem | null,
+    candidate: DiscoverCandidate | null
+  ) => void
   /** DiscoverPanel's own forgetSlotResolution(id) (plus the matching
    * previewing-mix cleanup) -- called once when this row's own resolution
    * hits a TERMINAL failure state (resolveFailed or noMatchFound, both
@@ -698,7 +705,7 @@ export function DiscoverSlotRow({
       barUsed: fromRoll ? (slot.pickBar?.barUsed ?? null) : null,
       barRequested: slot.pickBar?.barRequested,
       reclassified: reclassified
-        ? { role: reclassified.role, label: discoverRoleLabel(reclassified.role, ROLE_LABELS) }
+        ? { role: reclassified.role, label: discoverRoleLabel(reclassified.role) }
         : undefined
     }).filter((entry) => entry.type === 'mask' || fromRoll)
   }, [slot.candidate, slot.kinds, slot.pickBar, slot.reclassified])
@@ -834,8 +841,8 @@ export function DiscoverSlotRow({
   // re-render instead of only when THIS row's own resolvedStem actually
   // changes.
   useEffect(() => {
-    onResolvedChange(resolvedStem)
-    return () => onResolvedChange(null)
+    onResolvedChange(resolvedStem, resolvedStem ? (resolvedForCurrent?.candidate ?? null) : null)
+    return () => onResolvedChange(null, null)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
   }, [resolvedStem])
 
@@ -1176,7 +1183,9 @@ export function DiscoverSlotRow({
                 : null,
               creatorInTooltip && slot.candidate?.creatorUserName
                 ? `by ${slot.candidate.creatorUserName}`
-                : null
+                : null,
+              // the riff's key (Endlesss's own root and scale), when it says something
+              rowKeyLabel(slot.candidate?.riffRoot, slot.candidate?.riffScale) ?? null
             ]
               .filter((p): p is string => p !== null)
               .join(' · ') || undefined
@@ -1777,12 +1786,39 @@ export function DiscoverSlotRow({
   // remove) over a full-width waveform carrying the plates. The SAME part constants as the grid,
   // so every button keeps one implementation; a missing conditional part just closes up the flex
   // line. The row's root stays a div in a Fragment with the popovers after it, as in the grid.
+  // Over the whole row while a pad is armed: one click saves this row's stem to it.
+  const padSaveOverlay =
+    padSave != null && slot.candidate !== null ? (
+      <button
+        type="button"
+        onClick={padSave.onSave}
+        aria-label={`${padSave.label}: row ${rowNumber}`}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          zIndex: 5,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--ra-bg-row)',
+          opacity: 0.88,
+          border: '1px solid var(--ra-text)',
+          color: 'var(--ra-text)',
+          fontFamily: 'inherit',
+          fontSize: 'var(--ra-fs-9)',
+          cursor: 'pointer'
+        }}
+      >
+        {padSave.label}
+      </button>
+    ) : null
   // Its border and the waveform's margins are the playhead overlay's inset in DiscoverPanel
   // (RADIO_ROW_INSET_LEFT/RIGHT in discoverRowGrid): keep them equal.
   if (radioLayout) {
     return (
       <>
         <div
+          data-slot-row={slot.id}
           role="group"
           aria-label={
             plates?.info != null && plates.info.label !== ''
@@ -1798,6 +1834,7 @@ export function DiscoverSlotRow({
             transition: 'opacity 100ms ease-out'
           }}
         >
+          {padSaveOverlay}
           {holding && (
             <span
               aria-hidden
@@ -1858,7 +1895,11 @@ export function DiscoverSlotRow({
   return (
     <>
       <div
+        // the row under the pointer, for held stems' shift + number (DiscoverPanel handleHeldKey)
+        data-slot-row={slot.id}
         style={{
+          // for the pad save overlay (padSaveOverlay), which covers the row
+          position: 'relative',
           display: 'grid',
           // 15 tracks, explicit gridColumn on every child below (including
           // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
@@ -1992,6 +2033,7 @@ export function DiscoverSlotRow({
           transition: 'opacity 100ms ease-out'
         }}
       >
+        {padSaveOverlay}
         {removeButton}
         {lockButton}
         {muteSolo}

@@ -83,7 +83,7 @@ function row(id: string, kinds: DiscoverSlotKind[], o: Partial<TurnaroundRow> = 
 const CARRIED: TurnaroundRow[] = [
   row('d', ['drums'], { audible: false }),
   row('b', ['bass'], { audible: false }),
-  row('l', ['lead']),
+  row('l', ['front']),
   row('w', ['warm'])
 ]
 function input(over: Partial<TurnaroundInput> = {}): TurnaroundInput {
@@ -122,7 +122,7 @@ describe('the drop roll', () => {
       const plan = rollTurnaround(input({ random: r, drop: { gapChance: 1 } }))!
       expect(plan.gapBeats).toBeGreaterThan(0)
     }
-    const lone = [row('d', ['drums'], { audible: false }), row('l', ['lead'])]
+    const lone = [row('d', ['drums'], { audible: false }), row('l', ['front'])]
     expect(rollTurnaround(input({ rows: lone, drop: { gapChance: 1 } }))!.gapBeats).toBeGreaterThan(
       0
     )
@@ -166,7 +166,7 @@ describe('the drop roll', () => {
     const playing = [
       row('d', ['drums']),
       row('b', ['bass']),
-      row('l', ['lead']),
+      row('l', ['front']),
       row('w', ['warm'])
     ]
     const quick = (o: Partial<TurnaroundInput>): TurnaroundInput =>

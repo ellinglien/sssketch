@@ -1,6 +1,12 @@
 // src/shared/discoverRanking.test.ts
 import { describe, expect, it, vi } from 'vitest'
-import { rankCandidates, pickReroll } from './discoverRanking'
+import {
+  rankCandidates,
+  pickReroll,
+  BALANCE_WEIGHT,
+  KEY_WEIGHT,
+  DEFAULT_DISCOVER_CHAOS
+} from './discoverRanking'
 import type { DiscoverCandidate } from './discoverCandidate'
 import { favesBoostScale } from './discoverFaves'
 
@@ -485,5 +491,121 @@ describe('rankCandidates: favouriteScale (the faves dial)', () => {
       favouriteScale: 0.5
     })
     expect(weighted[0].score - 1).toBeCloseTo(0.375, 6)
+  })
+})
+
+describe('rankCandidates by the dial', () => {
+  it('ranks front by its dial value; one with no value ranks last', () => {
+    const high = candidate({
+      stemCID: 'high',
+      slotKinds: ['front'],
+      traitPercentiles: { front: 0.9 }
+    })
+    const low = candidate({
+      stemCID: 'low',
+      slotKinds: ['front'],
+      traitPercentiles: { front: 0.1 }
+    })
+    const none = candidate({ stemCID: 'none', slotKinds: ['front'] })
+    const ranked = rankCandidates([none, low, high], { targetBpm: 128, targetTraits: ['front'] })
+    expect(ranked.map((r) => r.candidate.stemCID)).toEqual(['high', 'low', 'none'])
+  })
+})
+
+describe('key term', () => {
+  const MINOR = 5
+  const MAJOR = 0
+  const bed = [{ root: 9, scale: MINOR }]
+  const cand = candidate
+  const fit = cand({ stemCID: 'fit', riffBpm: 120, riffRoot: 9, riffScale: MINOR })
+  const clash = cand({ stemCID: 'clash', riffBpm: 120, riffRoot: 6, riffScale: MAJOR })
+  const unknown = cand({ stemCID: 'unknown', riffBpm: 120 })
+
+  it('ranks a fitting key over an unknown one over a clash', () => {
+    const r = rankCandidates([clash, unknown, fit], { targetBpm: 120, key: { others: bed } })
+    expect(r.map((x) => x.candidate.stemCID)).toEqual(['fit', 'unknown', 'clash'])
+    expect(r[0].score).toBeCloseTo(1 + KEY_WEIGHT, 5)
+    expect(r[1].score).toBeCloseTo(1 + KEY_WEIGHT * 0.5, 5)
+    expect(r[2].score).toBeCloseTo(1, 5)
+  })
+  it('no others, or only unknown others: exactly the ranking without it', () => {
+    const plain = rankCandidates([clash, fit], { targetBpm: 120 })
+    expect(rankCandidates([clash, fit], { targetBpm: 120, key: { others: [] } })).toEqual(plain)
+    expect(
+      rankCandidates([clash, fit], {
+        targetBpm: 120,
+        key: { others: [{ root: null, scale: null }] }
+      })
+    ).toEqual(plain)
+  })
+  it('exempt candidates get no term', () => {
+    const r = rankCandidates([fit], { targetBpm: 120, key: { others: bed, exempt: true } })
+    expect(r[0].score).toBeCloseTo(1, 5)
+  })
+  it('scores against the mean of the others', () => {
+    const r = rankCandidates([fit], {
+      targetBpm: 120,
+      key: { others: [...bed, { root: 6, scale: MAJOR }] }
+    })
+    expect(r[0].score).toBeCloseTo(1 + KEY_WEIGHT * 0.5, 5) // fits one fully, clashes with one
+  })
+  it('at the default matching a fitting stem is drawn about three times as often', () => {
+    const pool = Array.from({ length: 100 }, (_, i) =>
+      cand({
+        stemCID: `s${i}`,
+        riffBpm: 120,
+        riffRoot: i % 2 ? 9 : 6,
+        riffScale: i % 2 ? MINOR : MAJOR
+      })
+    )
+    const ranked = rankCandidates(pool, { targetBpm: 120, key: { others: bed } })
+    let seed = 7
+    const random = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647
+    let fits = 0
+    for (let i = 0; i < 10000; i++)
+      if (pickReroll(ranked, DEFAULT_DISCOVER_CHAOS, random)!.riffRoot === 9) fits++
+    // top 75: 50 fitting at 3, 25 clashing at 1 -> 150/175 = 0.857
+    expect(fits / 10000).toBeGreaterThan(0.83)
+    expect(fits / 10000).toBeLessThan(0.88)
+  })
+})
+
+describe('balance term', () => {
+  const cand = candidate
+  const strong = cand({ stemCID: 'strong', riffBpm: 120, presence: 0.9 })
+  const sparse = cand({ stemCID: 'sparse', riffBpm: 120, presence: 0.1 })
+  const unknown = cand({ stemCID: 'unknown', riffBpm: 120 })
+  it('a strong bed prefers a sparse pick', () => {
+    const r = rankCandidates([strong, sparse, unknown], {
+      targetBpm: 120,
+      balance: { others: [0.9, 0.3] }
+    })
+    expect(r.map((x) => x.candidate.stemCID)).toEqual(['sparse', 'strong', 'unknown'])
+    expect(r[0].score).toBeCloseTo(1 + BALANCE_WEIGHT * 1, 5) // want 0.1
+    expect(r[1].score).toBeCloseTo(1 + BALANCE_WEIGHT * 0.2, 5)
+    expect(r[2].score).toBeCloseTo(1, 5) // no presence: no term
+  })
+  it('a sparse bed prefers a strong pick', () => {
+    const r = rankCandidates([sparse, strong], { targetBpm: 120, balance: { others: [0.1] } })
+    expect(r[0].candidate.stemCID).toBe('strong')
+  })
+  it('no others, only unusable others, or exempt: exactly the ranking without it', () => {
+    const plain = rankCandidates([strong, sparse], { targetBpm: 120 })
+    expect(rankCandidates([strong, sparse], { targetBpm: 120, balance: { others: [] } })).toEqual(
+      plain
+    )
+    expect(
+      rankCandidates([strong, sparse], { targetBpm: 120, balance: { others: [NaN, Infinity] } })
+    ).toEqual(plain)
+    expect(
+      rankCandidates([strong, sparse], { targetBpm: 120, balance: { others: [0.9], exempt: true } })
+    ).toEqual(plain)
+  })
+  it('a candidate with a null presence gets no term', () => {
+    const r = rankCandidates([cand({ riffBpm: 120, presence: null })], {
+      targetBpm: 120,
+      balance: { others: [0.9] }
+    })
+    expect(r[0].score).toBeCloseTo(1, 5)
   })
 })

@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { drawManualTransitions, mergeStageChanges, radioGestureBeats } from './radioManualChanges'
+import {
+  drawManualTransitions,
+  mergeStageChanges,
+  radioGestureBeats,
+  radioManualBarLanding,
+  stagedIncoming
+} from './radioManualChanges'
 import type { RadioTransitionKind } from './radioTransition'
 
 /** A pick that returns the given kind for every row. */
@@ -373,5 +379,123 @@ describe('mergeStageChanges: the pace slider companions', () => {
     }
     const manual = new Map([['a', { stem: 'A2', joining: false, arrival: null }]])
     expect(mergeStageChanges(led, manual).changes).toEqual([{ slotId: 'a', stem: 'A2' }])
+  })
+})
+
+describe('stagedIncoming', () => {
+  const changes = [{ slotId: 'a' }, { slotId: 'b' }, { slotId: 'c' }]
+  it('names the pick of each staged change: a manual one wins its row', () => {
+    const radio = new Map([
+      ['a', 'radio-a'],
+      ['b', 'radio-b']
+    ])
+    const manual = new Map([
+      ['b', 'manual-b'],
+      ['c', 'manual-c']
+    ])
+    expect([...stagedIncoming(changes, radio, manual)]).toEqual([
+      ['a', 'radio-a'],
+      ['b', 'manual-b'],
+      ['c', 'manual-c']
+    ])
+  })
+  it('leaves out a pick that is not in the stage (still resolving, or a resting exit)', () => {
+    const radio = new Map([['a', 'radio-a']])
+    const manual = new Map([['z', 'manual-z']])
+    expect([...stagedIncoming([{ slotId: 'a' }], radio, manual)]).toEqual([['a', 'radio-a']])
+  })
+  it('a staged change with no pick known is left out', () =>
+    expect(stagedIncoming(changes, new Map(), new Map()).size).toBe(0))
+})
+
+describe('radioManualBarLanding', () => {
+  // an 8-bar loop: two 8-bar rows and a 4-bar one
+  const resolved = new Map([
+    ['a', 8],
+    ['b', 8],
+    ['c', 4]
+  ])
+  const opts = { leadBars: 0.25, spentAt: () => true }
+  const swap = [{ slotId: 'c', incomingBars: 4 }]
+
+  it('aims at the next bar line', () => {
+    expect(radioManualBarLanding(swap, resolved, 2.3, 8, opts)).toEqual({
+      atBars: 3,
+      slotIds: ['c']
+    })
+  })
+
+  it('takes the line after when the next one is closer than the lead', () => {
+    expect(radioManualBarLanding(swap, resolved, 2.8, 8, opts)?.atBars).toBe(4)
+    expect(radioManualBarLanding(swap, resolved, 2.75, 8, opts)?.atBars).toBe(3)
+  })
+
+  it('is the loop top (null) once no bar line is left in the lap', () => {
+    expect(radioManualBarLanding(swap, resolved, 6.5, 8, opts)?.atBars).toBe(7)
+    expect(radioManualBarLanding(swap, resolved, 6.8, 8, opts)).toBeNull()
+    expect(radioManualBarLanding(swap, resolved, 7.2, 8, opts)).toBeNull()
+  })
+
+  it('lands every ready row together on one line', () => {
+    const rows = [
+      { slotId: 'c', incomingBars: 2 },
+      { slotId: 'new', incomingBars: 8 }
+    ]
+    expect(radioManualBarLanding(rows, resolved, 0.1, 8, opts)).toEqual({
+      atBars: 1,
+      slotIds: ['c', 'new']
+    })
+  })
+
+  it('keeps a row that would lengthen the loop for the top', () => {
+    const rows = [
+      { slotId: 'c', incomingBars: 4 },
+      { slotId: 'new', incomingBars: 16 }
+    ]
+    expect(radioManualBarLanding(rows, resolved, 2.3, 8, opts)).toEqual({
+      atBars: 3,
+      slotIds: ['c']
+    })
+    expect(
+      radioManualBarLanding([{ slotId: 'new', incomingBars: 16 }], resolved, 2.3, 8, opts)
+    ).toBeNull()
+  })
+
+  it('keeps a row that would shorten the loop for the top', () => {
+    const one = new Map([
+      ['a', 8],
+      ['c', 4]
+    ])
+    expect(radioManualBarLanding([{ slotId: 'a', incomingBars: 4 }], one, 2.3, 8, opts)).toBeNull()
+    // another row still holds the loop at 8
+    expect(
+      radioManualBarLanding([{ slotId: 'a', incomingBars: 4 }], resolved, 2.3, 8, opts)?.atBars
+    ).toBe(3)
+  })
+
+  it('keeps them all for the top when together they would shorten the loop', () => {
+    const rows = [
+      { slotId: 'a', incomingBars: 4 },
+      { slotId: 'b', incomingBars: 4 }
+    ]
+    expect(radioManualBarLanding(rows, resolved, 2.3, 8, opts)).toBeNull()
+  })
+
+  it('has no bar line for an unknown length, an unknown position or a loop of no whole bars', () => {
+    expect(
+      radioManualBarLanding([{ slotId: 'c', incomingBars: null }], resolved, 2.3, 8, opts)
+    ).toBeNull()
+    expect(radioManualBarLanding(swap, resolved, Number.NaN, 8, opts)).toBeNull()
+    expect(radioManualBarLanding(swap, new Map([['c', 4.5]]), 1.3, 4.5, opts)).toBeNull()
+    expect(radioManualBarLanding([], resolved, 2.3, 8, opts)).toBeNull()
+  })
+
+  it('takes the first line every armed gesture is spent by, and the top when none is', () => {
+    expect(
+      radioManualBarLanding(swap, resolved, 0.1, 8, { ...opts, spentAt: (bar) => bar >= 2 })
+    ).toEqual({ atBars: 2, slotIds: ['c'] })
+    expect(
+      radioManualBarLanding(swap, resolved, 0.1, 8, { ...opts, spentAt: () => false })
+    ).toBeNull()
   })
 })

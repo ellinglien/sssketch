@@ -47,7 +47,7 @@ describe('remoteStateFromSlots', () => {
     expect(state.slots).toEqual([
       {
         id: 's1',
-        kindLabel: 'drummy',
+        kindLabel: 'drums',
         stemName: 'wooden thud',
         soundType: 'drums',
         muted: false,
@@ -94,7 +94,7 @@ describe('remoteStateFromSlots', () => {
     expect(state.slots).toEqual([
       {
         id: 's1',
-        kindLabel: 'drummy',
+        kindLabel: 'drums',
         stemName: '',
         soundType: null,
         muted: false,
@@ -113,7 +113,7 @@ describe('remoteStateFromSlots', () => {
       lastKeptName: null,
       loopBars: 8
     })
-    expect(state.slots[0].kindLabel).toContain('drummy')
+    expect(state.slots[0].kindLabel).toContain('drums')
     expect(state.slots[0].kindLabel).toContain('chonky')
   })
 
@@ -336,9 +336,19 @@ describe('parseRemoteSlotKinds', () => {
     expect(parseRemoteSlotKinds([1, 2])).toBeNull()
   })
 
-  it('rejects a selection longer than the seven chips, whatever it contains', () => {
+  it('rejects a selection longer than the eight chips, whatever it contains', () => {
     expect(
-      parseRemoteSlotKinds(['drums', 'drums', 'drums', 'drums', 'drums', 'drums', 'drums', 'drums'])
+      parseRemoteSlotKinds([
+        'drums',
+        'drums',
+        'drums',
+        'drums',
+        'drums',
+        'drums',
+        'drums',
+        'drums',
+        'drums'
+      ])
     ).toBeNull()
   })
 })
@@ -625,5 +635,11 @@ describe('the fold switch in the remote state', () => {
     expect(parseRemoteFold(true)).toBe(true)
     expect(parseRemoteFold(false)).toBe(false)
     for (const v of ['true', 1, null, undefined, {}]) expect(parseRemoteFold(v)).toBeNull()
+  })
+})
+
+describe('parseRemoteSlotKinds legacy', () => {
+  it('reads an old page lead as front', () => {
+    expect(parseRemoteSlotKinds(['lead'])).toEqual(['front'])
   })
 })

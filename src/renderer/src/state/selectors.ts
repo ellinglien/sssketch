@@ -1,6 +1,12 @@
 import { stemKey, type BusId, type Rifff, type Stem } from '@shared/types'
 import { packIntoTracks } from '@shared/packIntoTracks'
 import {
+  CATEGORY_BUS,
+  STEM_CATEGORY_OPTIONS,
+  categoryOfBus,
+  type StemCategory
+} from '@shared/stemCategory'
+import {
   ARRANGE_STEP_BARS,
   activeRangesForStem,
   groupIdFromStemKey,
@@ -144,27 +150,24 @@ export function channelsInOrder(state: AppState): Channel[] {
   return ordered.map((channelId) => ({ channelId, rifffs: byChannel.get(channelId) ?? [] }))
 }
 
-const TIDIED_BUS_ORDER: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
-
-/** A rifff's own bus, for tidied-view grouping purposes only -- busOf itself
+/** A rifff's own category, for tidied-view grouping purposes only -- busOf itself
  * is per-stem (a rifff's stems can be split across buses), but the arranger
- * groups whole rifffs onto a row, so this picks whichever bus the most of
- * a rifff's stems are assigned to (ties broken by TIDIED_BUS_ORDER), same
- * "aux is the fallback" convention buildAlsXml.ts already uses for a stem
- * with no assignment at all. */
-function busForRifff(state: AppState, rifff: Rifff): BusId {
-  const counts: Partial<Record<BusId, number>> = {}
+ * groups whole rifffs onto a row, so this picks the category the most of
+ * a rifff's stems are assigned to (ties broken by STEM_CATEGORY_OPTIONS order);
+ * a stem with no assignment counts as back, same as the exports. */
+function categoryForRifff(state: AppState, rifff: Rifff): StemCategory {
+  const counts: Partial<Record<StemCategory, number>> = {}
   for (const stem of rifff.stems) {
-    const bus = state.busOf[stemKey(rifff.groupId, stem.slot)] ?? 'aux'
-    counts[bus] = (counts[bus] ?? 0) + 1
+    const category = categoryOfBus(state.busOf[stemKey(rifff.groupId, stem.slot)] ?? 'aux')
+    counts[category] = (counts[category] ?? 0) + 1
   }
-  let best: BusId = 'aux'
+  let best: StemCategory = 'back'
   let bestCount = -1
-  for (const bus of TIDIED_BUS_ORDER) {
-    const count = counts[bus] ?? 0
+  for (const category of STEM_CATEGORY_OPTIONS) {
+    const count = counts[category] ?? 0
     if (count > bestCount) {
       bestCount = count
-      best = bus
+      best = category
     }
   }
   return best
@@ -178,7 +181,7 @@ function busForRifff(state: AppState, rifff: Rifff): BusId {
  * are looking at freshly-imported, never-tidied content most of the time,
  * and collapsing that straight to a flat neutral color throws away real,
  * free information Endlesss's own stem metadata already provides.
- * busForRifff below has its own separate, always-resolving lookup (it
+ * categoryForRifff above has its own separate, always-resolving lookup (it
  * needs a definite bucket to count an unassigned stem into, mixed in with
  * real assignments, for its own row-grouping tie-break) -- deliberately
  * not shared with this one, since the two need different "no assignment"
@@ -192,37 +195,38 @@ export function busIfAssignedFromBusOf(
 }
 
 /** channelsInOrder's tidied-view layout: every placed rifff bucketed by its
- * own bus (busForRifff), then packed onto the minimum number of shared rows
+ * own category (categoryForRifff), then packed onto the minimum number of shared rows
  * within that bus via packIntoTracks -- the same interval-partitioning
  * buildAlsXml.ts already uses to build the Ableton export, so this is a
  * preview of that grouping rather than a second, potentially-diverging
- * algorithm. Purely a computed overlay: channelIds here (`tidied:<bus>:<n>`)
+ * algorithm. Purely a computed overlay: channelIds here (`tidied:<category>:<n>`)
  * are synthetic and never written back to state.channelOf/channelOrder --
  * see App.tsx's resolveDrop, which refuses to dispatch MOVE_TO_CHANNEL while
  * tidiedView is on, specifically so a drag never lands on one of these.
  * Recording channels are deliberately omitted -- they're not placed rifffs
  * and have no bus to sort by; flip back to the normal view to see one. */
 function tidiedChannelsInOrder(state: AppState): Channel[] {
-  const byBus = new Map<BusId, Rifff[]>()
+  const byCategory = new Map<StemCategory, Rifff[]>()
   for (const rifff of Object.values(state.rifffs)) {
     if (rifff.startBar === undefined) continue
-    const bus = busForRifff(state, rifff)
-    const list = byBus.get(bus)
+    const category = categoryForRifff(state, rifff)
+    const list = byCategory.get(category)
     if (list) list.push(rifff)
-    else byBus.set(bus, [rifff])
+    else byCategory.set(category, [rifff])
   }
 
   const channels: Channel[] = []
-  for (const bus of TIDIED_BUS_ORDER) {
-    const rifffs = byBus.get(bus)
+  for (const category of STEM_CATEGORY_OPTIONS) {
+    const rifffs = byCategory.get(category)
     if (!rifffs) continue
+    const bus = CATEGORY_BUS[category]
     const tracks = packIntoTracks(
       rifffs,
       (r) => r.startBar as number,
       (r) => (r.startBar as number) + resolvePlayedBars(state, r.groupId)
     )
     tracks.forEach((trackRifffs, i) => {
-      channels.push({ channelId: `tidied:${bus}:${i}`, rifffs: trackRifffs, bus })
+      channels.push({ channelId: `tidied:${category}:${i}`, rifffs: trackRifffs, bus })
     })
   }
   return channels

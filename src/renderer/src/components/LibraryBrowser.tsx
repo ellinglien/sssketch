@@ -48,6 +48,7 @@ import { formatBpm } from '@shared/format'
 import { libraryModeLabel, type LibraryMode } from '@shared/libraryEntryPoints'
 import type { RadioSettings } from '@shared/radioSchedule'
 import type { RadioView } from '@shared/radioView'
+import type { HeldStems } from '@shared/heldStems'
 import { bytesLabel } from '@shared/visuals'
 import type { Rifff } from '@shared/types'
 import type { ProjectRef } from '@shared/types'
@@ -168,6 +169,8 @@ export function LibraryBrowser({
   onRadioSettingsChange,
   radioView,
   onRadioViewChange,
+  heldStems,
+  onHoldStem,
   setDiscoverConsented,
   discoverSlots,
   setDiscoverSlots,
@@ -221,6 +224,9 @@ export function LibraryBrowser({
    * setter: a pass-through, as radioSettings. */
   radioView: RadioView
   onRadioViewChange: (view: RadioView) => Promise<void>
+  /** Held stems (DiscoverSettings.heldStems) and their persisting setter: a pass-through. */
+  heldStems: HeldStems
+  onHoldStem: (index: number, candidate: DiscoverCandidate | null) => Promise<void>
   setDiscoverConsented: (value: boolean) => Promise<void>
   /** App.tsx's own lifted Discover session state -- see its own doc
    * comment for why it lives there now (survives the WHOLE LibraryBrowser
@@ -2838,6 +2844,8 @@ export function LibraryBrowser({
             onRadioSettingsChange={onRadioSettingsChange}
             radioView={radioView}
             onRadioViewChange={onRadioViewChange}
+            heldStems={heldStems}
+            onHoldStem={onHoldStem}
             setDiscoverConsented={setDiscoverConsented}
             seedBpm={discoverSeedBpm}
             seedPhase={discoverSeedPhase}

@@ -21,7 +21,7 @@ let nextRequestId = 0
 const pending = new Map<
   number,
   {
-    resolve: (result: { embedding: number[]; topClassIndex: number | null }) => void
+    resolve: (result: { embedding: number[] }) => void
     reject: (err: Error) => void
   }
 >()
@@ -33,7 +33,6 @@ interface ResultMessage {
   type: 'result'
   requestId: number
   embedding: number[]
-  topClassIndex: number | null
 }
 interface ErrorMessage {
   type: 'error'
@@ -48,9 +47,7 @@ function getWorker(): Worker {
   w.onmessage = (event: MessageEvent<OutMessage>) => {
     const msg = event.data
     if (msg.type === 'result') {
-      pending
-        .get(msg.requestId)
-        ?.resolve({ embedding: msg.embedding, topClassIndex: msg.topClassIndex })
+      pending.get(msg.requestId)?.resolve({ embedding: msg.embedding })
       pending.delete(msg.requestId)
     } else if (msg.type === 'error') {
       if (msg.requestId !== null) {
@@ -126,14 +123,10 @@ function ensureReady(): Promise<void> {
 }
 
 /** Runs YAMNet inference on one stem's already-decoded, already-16kHz-mono
- * PCM and returns its mean-pooled 1024-dim embedding alongside the
- * top-scoring AudioSet class index (see yamnetWorker.ts's own
- * topClassIndexFromScores). Returns null (never throws) on ANY failure,
+ * PCM and returns its mean-pooled 1024-dim embedding. Returns null (never throws) on ANY failure,
  * same "no embedding" contract as before -- every caller already treats
  * that as a normal, expected fallback case, not an error. */
-export async function extractEmbeddingAndTopClass(
-  pcm: Float32Array
-): Promise<{ embedding: number[]; topClassIndex: number | null } | null> {
+export async function extractEmbedding(pcm: Float32Array): Promise<{ embedding: number[] } | null> {
   if (modelMissing) return null
   countWork('yamnet')
   try {

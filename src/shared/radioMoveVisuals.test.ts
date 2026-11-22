@@ -686,7 +686,7 @@ describe("the planner's own combined turnaround (rollTurnaround, combine on)", (
     inFilterIn: false,
     barLength: 4
   })
-  const bed = [row('d', 'drums'), row('b', 'bass'), row('l', 'lead'), row('w', 'warm')]
+  const bed = [row('d', 'drums'), row('b', 'bass'), row('l', 'front'), row('w', 'warm')]
   // the first seeded riser turn that layers a move with volume and leaves a gap
   let plan: TurnaroundPlan | null = null
   for (let seed = 1; seed < 2000 && plan === null; seed++) {

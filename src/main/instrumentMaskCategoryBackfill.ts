@@ -1,7 +1,6 @@
-// src/main/instrumentMaskCentroidBackfill.ts
+// src/main/instrumentMaskCategoryBackfill.ts
 import type Database from 'better-sqlite3'
-import type { StemRoleCategoryEntry } from './stemCategoriesStore'
-import { recordStemCategoryRole } from './categoryCentroidTraining'
+import { upsertStemCategoryRole, type StemRoleCategoryEntry } from './stemCategoriesStore'
 import { resolveStemPath, candidateDbsForRiff } from './riffLibraryStore'
 
 export interface InstrumentMaskBackfillSummary {
@@ -25,23 +24,6 @@ interface EligibleStemRow {
  * mask (exactly the drums bit or exactly the bass bit, nothing else set) --
  * a stem with multiple bits, or with the notes/audioIn bits this backfill
  * doesn't cover, is left alone rather than guessed at.
- *
- * This directly resolves these specific stems no differently than the
- * blunt instrumentMaskToSoundType (src/shared/riffLibraryTypes.ts) fallback
- * chain a caller like discoverAdjacency.ts's matchRole already builds and
- * passes into resolveStemArrangeRole as its own fallback closure (mask is
- * checked first there too; resolveStemArrangeRole.ts itself never
- * references instrumentMaskToSoundType -- it only takes an opaque
- * caller-supplied fallback) -- the real value is in FEEDING TWO DOWNSTREAM
- * CLASSIFIERS this same StemCategories write already reaches:
- * recordStemCategoryRole (below, the DSP-
- * feature centroid classifier) and getConfirmedEmbeddings (embeddingMatch.ts,
- * a live JOIN against StemCategories -- no separate training call needed,
- * it just reads whatever's there) -- vastly more drums/bass reference
- * points than today's 56/11 human-confirmed examples, which should improve
- * classification accuracy for OTHER, harder categories too (a better-
- * calibrated global feature/embedding space, and more confident
- * "definitely not drums/bass" rule-outs).
  *
  * Idempotent and safe to call on every app startup, same convention as
  * backfillStemCategoriesFromProjectLibrary (stemCategoriesBackfill.ts) --
@@ -71,7 +53,7 @@ export function backfillInstrumentMaskCategories(
 
   const extraCandidateDbs = candidateDbsForRiff()
   const updatedAt = Date.now() / 1000
-  recordStemCategoryRole(db, entries, 'instrumentMask', null, updatedAt, extraCandidateDbs)
+  upsertStemCategoryRole(db, entries, 'instrumentMask', null, updatedAt, extraCandidateDbs)
 
   return { categorizedStems: entries.length }
 }

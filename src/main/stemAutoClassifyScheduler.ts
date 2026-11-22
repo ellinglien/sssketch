@@ -33,8 +33,7 @@ const BUSY_DELAY_MS = 3000
 const IDLE_DELAY_MS = 30_000
 // Background efficiency B4: once a batch reports nothing left, the
 // scheduler SLEEPS instead of polling every IDLE_DELAY_MS -- woken by
-// stemAutoClassifyWake.ts (new embedding/feature rows, a confirmation, a
-// centroid retrain), or at this long safety interval, whose batch rebuilds
+// stemAutoClassifyWake.ts (new embedding/feature rows), or at this long safety interval, whose batch rebuilds
 // the pending lists from scratch (catches anything no signal reported).
 const SAFETY_INTERVAL_MS = 10 * 60_000
 // A wake runs the next batch after this delay, so a burst of writes (the

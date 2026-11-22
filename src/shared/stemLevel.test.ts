@@ -1,6 +1,17 @@
 // The loudness measurement (spec 2026-10-05-radio-intensity-arc-design section 7): stemLevel.ts.
 import { describe, expect, it } from 'vitest'
-import { kWeightingHighPass, kWeightingShelf, stemLevelFeatures, type Biquad } from './stemLevel'
+import {
+  ARRIVAL_GAIN_FLOOR,
+  arrivalGain,
+  kWeightingHighPass,
+  kWeightingShelf,
+  balanceForGain,
+  landedLevel,
+  rowBalance,
+  rowGainFor,
+  stemLevelFeatures,
+  type Biquad
+} from './stemLevel'
 
 /** A sine of `seconds` at `hz`, peak `dbfs`, at `fs`. */
 function sine(hz: number, dbfs: number, seconds: number, fs: number): Float32Array {
@@ -175,4 +186,104 @@ describe('stemLevelFeatures: edges (Task 12 review follow-ups)', () => {
       expect(Math.abs(a - b), `${hz} Hz`).toBeLessThanOrEqual(0.1)
     }
   })
+})
+
+describe('arrivalGain', () => {
+  it('turns a loud stem down to the target', () =>
+    expect(arrivalGain(-17, -23)).toBeCloseTo(10 ** (-6 / 20), 5))
+  it('never turns up', () => expect(arrivalGain(-30, -23)).toBe(1))
+  it('has a floor', () => expect(arrivalGain(0, -23)).toBe(ARRIVAL_GAIN_FLOOR))
+  it('is 1 for an unmeasured stem', () => {
+    expect(arrivalGain(null, -23)).toBe(1)
+    expect(arrivalGain(undefined, -23)).toBe(1)
+    expect(arrivalGain(NaN, -23)).toBe(1)
+  })
+})
+
+describe('rowGainFor', () => {
+  const quiet = { stemCID: 'stem-a', arrivalGain: 0.5 }
+  const loud = { stemCID: 'stem-b', arrivalGain: 0.25 }
+  const plain = { stemCID: 'stem-c' }
+  it("a fresh row takes its first stem's arrival gain", () =>
+    expect(rowGainFor({ gain: 1, candidate: null }, quiet)).toBe(0.5))
+  it('an untouched row follows the new stem', () =>
+    expect(rowGainFor({ gain: 0.5, candidate: quiet }, loud)).toBe(0.25))
+  it('a balance set by hand is carried to the new stem', () =>
+    expect(rowGainFor({ gain: 0.25, candidate: quiet }, plain)).toBe(0.5))
+  it("the row's own stem plays at the row's gain, exactly", () =>
+    expect(rowGainFor({ gain: 0.3, candidate: quiet }, { ...quiet })).toBe(0.3))
+  it('stays in 0..1', () => {
+    expect(rowGainFor({ gain: 1, candidate: loud }, plain)).toBe(1)
+    expect(rowGainFor({ gain: 0, candidate: quiet }, plain)).toBe(0)
+  })
+  it('the outgoing stem keeps the gain it had while the new pick resolves', () => {
+    const before = { gain: 0.4, candidate: quiet }
+    const after = { ...landedLevel(before, loud), candidate: loud }
+    expect(rowGainFor(after, quiet)).toBe(0.4)
+  })
+  it('a seeded row (no candidate) keeps its gain for its seed and scales it for a pick', () => {
+    expect(rowGainFor({ gain: 0.8, candidate: null }, null)).toBe(0.8)
+    expect(rowGainFor({ gain: 0.8, candidate: null }, quiet)).toBe(0.4)
+  })
+  it('a row left with no stem gives the trim back, so the next pick does not trim twice', () => {
+    const emptied = { ...landedLevel({ gain: 0.5, candidate: quiet }, null), candidate: null }
+    expect(emptied.gain).toBe(1)
+    expect(rowGainFor(emptied, loud)).toBe(0.25)
+  })
+  it('a stored balance wins over the one the gain implies', () =>
+    expect(rowGainFor({ gain: 1, balance: 2, candidate: plain }, quiet)).toBe(1))
+})
+
+describe('rowBalance and balanceForGain', () => {
+  const quiet = { stemCID: 'stem-a', arrivalGain: 0.5 }
+  it('with none stored, the balance is the gain over the arrival gain of the stem held', () => {
+    expect(rowBalance({ gain: 0.25, candidate: quiet })).toBe(0.5)
+    expect(rowBalance({ gain: 0.8, candidate: null })).toBe(0.8)
+  })
+  it('a gain set by hand above the arrival gain is a balance above 1', () =>
+    expect(balanceForGain(1, quiet)).toBe(2))
+  it('a stem with no arrival gain, or none: the balance is the gain', () => {
+    expect(balanceForGain(0.6, { stemCID: 'stem-c' })).toBe(0.6)
+    expect(balanceForGain(0.6, null)).toBe(0.6)
+  })
+})
+
+describe('landedLevel', () => {
+  const quiet = { stemCID: 'stem-a', arrivalGain: 0.5 }
+  const plain = { stemCID: 'stem-c' }
+  it('a row turned up past its arrival gain comes back to it after a louder substitute', () => {
+    // the hook's away and return: 0.5-arrival stem set to 1.0, an arrival-1 substitute, and back
+    const set = { gain: 1, balance: balanceForGain(1, quiet), candidate: quiet }
+    const away = { ...landedLevel(set, plain), candidate: plain }
+    expect(away.gain).toBe(1)
+    const back = landedLevel(away, quiet)
+    expect(back.gain).toBe(1)
+    expect(back.balance).toBe(2)
+  })
+  it('many rerolls do not drift', () => {
+    const stems = [0.31, 0.77, undefined, 0.25, 0.93, 0.5].map((arrivalGain, i) => ({
+      stemCID: `stem-${i}`,
+      ...(arrivalGain !== undefined && { arrivalGain })
+    }))
+    let row: { gain: number; balance?: number; candidate: (typeof stems)[number] | null } = {
+      gain: 0.37 * 0.31,
+      balance: 0.37,
+      candidate: stems[0]
+    }
+    for (let i = 1; i <= 600; i += 1) {
+      const next = stems[i % stems.length]
+      row = { ...landedLevel(row, next), candidate: next }
+    }
+    expect(row.balance).toBe(0.37)
+    expect(row.gain).toBe(0.37 * 0.31)
+  })
+  it('a row with no stored balance gets the one its gain implied, and keeps it', () => {
+    const landed = landedLevel({ gain: 0.25, candidate: quiet }, plain)
+    expect(landed).toEqual({ gain: 0.5, balance: 0.5 })
+  })
+  it("the row's own stem again: nothing moves", () =>
+    expect(landedLevel({ gain: 0.3, balance: 0.6, candidate: quiet }, { ...quiet })).toEqual({
+      gain: 0.3,
+      balance: 0.6
+    }))
 })

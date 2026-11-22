@@ -15,6 +15,7 @@ import {
   roundIntensity,
   stemIntensityParts,
   stemIntensityScore,
+  stemPresence,
   type IntensityValues
 } from './radioIntensity'
 import { buildQuantileTable, type TraitQuantileTables } from './traitQuantiles'
@@ -124,16 +125,53 @@ describe('stemIntensityScore', () => {
   })
 })
 
+describe('stemPresence', () => {
+  it('a busy, loud, always-sounding stem is high', () => {
+    const strong = {
+      transientDensity: 95,
+      rhythmicStrength: 90,
+      loudnessLufs: 90,
+      activeFraction: 100
+    }
+    expect(stemPresence(strong, TABLES)).toBeGreaterThan(0.8)
+  })
+
+  it('a sparse quiet one is low', () => {
+    const sparse = {
+      transientDensity: 5,
+      rhythmicStrength: 10,
+      loudnessLufs: 10,
+      activeFraction: 15
+    }
+    expect(stemPresence(sparse, TABLES)).toBeLessThan(0.2)
+  })
+
+  it('is the mean of the busy and full parts, whatever low and bright say', () => {
+    const parts = stemIntensityParts(ALL, TABLES)
+    expect(stemPresence(ALL, TABLES)).toBeCloseTo((parts.busy! + parts.full!) / 2, 9)
+  })
+
+  it('only loudness known: the full part alone', () => {
+    expect(stemPresence({ loudnessLufs: 30 }, TABLES)).toBeCloseTo(0.3, 9)
+  })
+
+  it('nothing known: null', () => {
+    expect(stemPresence({}, TABLES)).toBeNull()
+    expect(stemPresence({ bassEnergyRatio: 50, spectralCentroidHz: 50 }, TABLES)).toBeNull()
+    expect(stemPresence(ALL, {})).toBeNull()
+  })
+})
+
 describe('the role weight', () => {
   it('is the largest over the slot kinds', () => {
     expect(radioIntensityRoleWeight(['drums'])).toBe(1)
     expect(radioIntensityRoleWeight(['bass'])).toBe(1)
     expect(radioIntensityRoleWeight(['bassHeavy'])).toBe(0.8)
     expect(radioIntensityRoleWeight(['rhythmic'])).toBe(0.8)
-    expect(radioIntensityRoleWeight(['lead'])).toBe(0.35)
+    expect(radioIntensityRoleWeight(['front'])).toBe(0.35)
     expect(radioIntensityRoleWeight(['bright'])).toBe(0.35)
     expect(radioIntensityRoleWeight(['warm'])).toBe(0.25)
-    expect(radioIntensityRoleWeight(['warm', 'lead', 'rhythmic'])).toBe(0.8)
+    expect(radioIntensityRoleWeight(['warm', 'front', 'rhythmic'])).toBe(0.8)
   })
 
   it('scales the term by 0.4 + 0.6 drama', () => {
@@ -208,17 +246,17 @@ describe('the band draw', () => {
       return v
     }
     const half = 0.35 * (0.4 + 0.6 * 0.6)
-    expect(radioIntensityLeanWeight(['lead'], 60)).toBeCloseTo(half, 12)
+    expect(radioIntensityLeanWeight(['front'], 60)).toBeCloseTo(half, 12)
     expect(
       applyIntensityBand(big, {
         target: 0.5,
-        kinds: ['lead'],
+        kinds: ['front'],
         drama: 60,
         random: counting(half - 1e-6)
       }).banded
     ).toBe(true)
     expect(
-      applyIntensityBand(big, { target: 0.5, kinds: ['lead'], drama: 60, random: counting(half) })
+      applyIntensityBand(big, { target: 0.5, kinds: ['front'], drama: 60, random: counting(half) })
         .banded
     ).toBe(false)
     expect(n).toBe(2)
@@ -378,7 +416,7 @@ describe('the bed intensity', () => {
       radioBedIntensity([
         { kinds: ['drums'], score: 0.8 },
         { kinds: ['warm'], score: 0.2 },
-        { kinds: ['lead'], score: null }
+        { kinds: ['front'], score: null }
       ])
     ).toBeCloseTo((0.8 + 0.25 * 0.2) / 1.25, 9)
     expect(radioBedIntensity([{ kinds: ['drums'], score: null }])).toBeNull()

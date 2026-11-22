@@ -5,10 +5,35 @@ import {
   DISCOVER_TRAIT_FIELD,
   DISCOVER_TRAIT_PREFERRED_FIELD
 } from './discoverTraits'
-import type { DiscoverTraitKind } from './discoverSlotKind'
+import { isDialKind, type DiscoverRankKind, type DiscoverTraitKind } from './discoverSlotKind'
 import { radioClashBedScore, radioClashTraitScore, type RankClash } from './radioClash'
 import { DIG_WEIGHT, radioDigCloseness, type RankDig } from './radioDig'
+import { hasKey, keyFit, type RiffKey } from './keyFit'
 import { intensityTerms, type RankIntensity } from './radioIntensity'
+
+// A fitting key outweighs a favourite (1.5): a strong lean, not a rule (spec 2026-11-21, 1). At
+// the default matching a fitting stem is drawn about three times as often as a clashing one of
+// the same tempo; discoverRanking.test.ts measures it.
+export const KEY_WEIGHT = 2
+
+/** The keys a pick will sound with (every other row that isn't drums). `exempt`: the slot
+ * being filled is drums, which has no key. */
+export interface RankKey {
+  others: readonly RiffKey[]
+  exempt?: boolean
+}
+
+// A trait's weight: balance shapes a pick as much as "bright" does, under key (2) and a
+// favourite (1.5). Spec 2026-11-21-picking-key-level-groove-design, 3.
+export const BALANCE_WEIGHT = 1
+
+/** The presences (a candidate's `presence`, 0 sparse and quiet to 1 busy and loud) of the rows a
+ * pick will sound with that count toward the balance. `exempt`: the slot being filled doesn't
+ * count (drums). */
+export interface RankBalance {
+  others: readonly number[]
+  exempt?: boolean
+}
 
 export interface RankedCandidate {
   candidate: DiscoverCandidate
@@ -23,8 +48,7 @@ export interface RankedCandidate {
 // NOT YET VALIDATED against real data (2026-09-14 code quality review) --
 // this hasn't been checked against Elling's own actual riff-tempo
 // distribution, only reasoned about in the abstract. Likely needs the same
-// kind of live-data tuning pass CONFIDENCE_RATIO got (see
-// categoryCentroids.ts's own 0.7->0.85 fix, 2026-09-14) once there's a real
+// kind of live-data tuning pass once there's a real
 // library of Discover picks to check it against -- don't treat 40 as tuned
 // or final.
 const BPM_FALLOFF = 40
@@ -87,7 +111,9 @@ export function rankCandidates(
     targetTraits = [],
     clash,
     dig,
-    intensity
+    intensity,
+    key,
+    balance
   }: {
     targetBpm: number
     favouriteStemCIDs?: ReadonlySet<string>
@@ -100,7 +126,7 @@ export function rankCandidates(
      * multiplies the whole favourites boost. Absent: 1, the full boost, as before. 0: no boost
      * at all -- exactly the ranking without favourites. */
     favouriteScale?: number
-    targetTraits?: readonly DiscoverTraitKind[]
+    targetTraits?: readonly DiscoverRankKind[]
     /** Radio fold mode's `clash` (@shared/radioClash): a requested rhythmic or bright trait
      * turns toward its other end, and distance from the bed on those two traits scores. Absent
      * or amount 0: exactly the ranking without it. */
@@ -113,6 +139,15 @@ export function rankCandidates(
      * - target|), an unscored one the neutral 0.5 closeness. Absent: no term, exactly the ranking
      * without it. */
     intensity?: RankIntensity
+    /** The key lean (@shared/keyFit, spec 2026-11-21, 1): every candidate gains KEY_WEIGHT * its
+     * mean keyFit to the sounding rows' keys. Absent, exempt, or no other row with a known key:
+     * no term, exactly the ranking without it. */
+    key?: RankKey
+    /** The balance lean (spec 2026-11-21, 3): a candidate with a presence gains BALANCE_WEIGHT *
+     * (1 - |its presence - (1 - the strongest other row's)|), so a strong bed pulls sparse picks
+     * up and a sparse bed strong ones. Absent, exempt, no other row with a presence, or a
+     * candidate without one: no term, exactly the ranking without it. */
+    balance?: RankBalance
   }
 ): RankedCandidate[] {
   // Pool-relative values per kind, for candidates without a library
@@ -122,8 +157,10 @@ export function rankCandidates(
   // every candidate with field values has it; otherwise everyone is ranked
   // on the fallback field, which every analysed row carries. Candidates
   // without field values (legacy constructors) use traitValues as-is.
+  // A dial kind (back/front) has no pool fallback: only its percentile ranks.
+  const traitKinds = targetTraits.filter((k): k is DiscoverTraitKind => !isDialKind(k))
   const poolValues = new Map<DiscoverTraitKind, (c: DiscoverCandidate) => number | null>()
-  for (const kind of targetTraits) {
+  for (const kind of traitKinds) {
     const preferred = DISCOVER_TRAIT_PREFERRED_FIELD[kind]
     const fallback = DISCOVER_TRAIT_FIELD[kind]
     const allHavePreferred = candidates.every((c) => {
@@ -140,7 +177,7 @@ export function rankCandidates(
   }
 
   const ranges = new Map<DiscoverTraitKind, { min: number; max: number }>()
-  for (const kind of targetTraits) {
+  for (const kind of traitKinds) {
     const valueOf = poolValues.get(kind)!
     let min = Infinity
     let max = -Infinity
@@ -155,6 +192,11 @@ export function rankCandidates(
 
   const boost = FAVOURITE_BOOST * clampWeight(favouriteScale)
   const leaned = intensity ? intensityTerms(candidates, intensity) : null
+  const keyOthers = key && !key.exempt ? key.others.filter(hasKey) : []
+  const strongest =
+    balance && !balance.exempt
+      ? Math.max(-Infinity, ...balance.others.filter(Number.isFinite))
+      : NaN
   return candidates
     .map((candidate, i) => {
       const bpmDistance = Math.abs(candidate.riffBpm - targetBpm)
@@ -166,18 +208,31 @@ export function rankCandidates(
         // spec) when main attached one -- already direction-adjusted, and
         // comparable across rolls, unlike the pool's own min-max range.
         const percentile = candidate.traitPercentiles?.[kind]
-        const trait =
-          typeof percentile === 'number' && Number.isFinite(percentile)
-            ? percentile
-            : traitScore(
-                poolValues.get(kind)!(candidate),
-                DISCOVER_TRAIT_DIRECTION[kind],
-                ranges.get(kind)
-              )
+        const hasPercentile = typeof percentile === 'number' && Number.isFinite(percentile)
+        if (isDialKind(kind)) {
+          if (hasPercentile) score += percentile * TRAIT_SCORE_WEIGHT
+          continue
+        }
+        const trait = hasPercentile
+          ? percentile
+          : traitScore(
+              poolValues.get(kind)!(candidate),
+              DISCOVER_TRAIT_DIRECTION[kind],
+              ranges.get(kind)
+            )
         score += radioClashTraitScore(kind, trait, clash?.amount ?? 0) * TRAIT_SCORE_WEIGHT
       }
       if (clash) score += radioClashBedScore(candidate.traitPercentiles ?? {}, clash)
       if (dig) score += DIG_WEIGHT * radioDigCloseness(dig, candidate)
+      if (keyOthers.length > 0) {
+        const own = { root: candidate.riffRoot ?? null, scale: candidate.riffScale ?? null }
+        let sum = 0
+        for (const other of keyOthers) sum += keyFit(own, other)
+        score += KEY_WEIGHT * (sum / keyOthers.length)
+      }
+      if (Number.isFinite(strongest) && Number.isFinite(candidate.presence)) {
+        score += BALANCE_WEIGHT * (1 - Math.abs(candidate.presence! - (1 - strongest)))
+      }
       if (leaned) score += leaned[i]
       return { candidate, score }
     })

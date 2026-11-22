@@ -2,7 +2,7 @@
 import { countWork } from '../perf/workCounters'
 import { decodeStemFile } from './decodeStemFile'
 import { resampleTo16kMono } from './resampleTo16kMono'
-import { extractEmbeddingAndTopClass } from './yamnetClient'
+import { extractEmbedding } from './yamnetClient'
 import { queueStemAnalysisWrite } from './analysisWriteQueue'
 
 const cache = new Map<string, Promise<number[] | null>>()
@@ -70,26 +70,22 @@ export function getOrExtractStemEmbedding(path: string): Promise<number[] | null
 }
 
 /** YAMNet inference on already-resampled 16 kHz mono PCM, then the same
- * persistence + zero-shot side effects for every fresh extraction (shared
+ * persistence for every fresh extraction (shared
  * by getOrExtractStemEmbedding and adoptStemEmbeddingFromBuffer). Null for
  * no result or an all-zero embedding -- see getOrExtractStemEmbedding.
- * `queued` (the ambient scans, via adoptStemEmbeddingFromBuffer): the same
- * three writes go through the batched write queue (analysisWriteQueue.ts,
- * background efficiency B7) instead of three immediate IPCs. */
+ * `queued` (the ambient scans, via adoptStemEmbeddingFromBuffer): the write
+ * goes through the batched write queue (analysisWriteQueue.ts, background
+ * efficiency B7) instead of an immediate IPC. */
 async function embedAndPersist(
   path: string,
   pcm: Float32Array,
   queued = false
 ): Promise<number[] | null> {
-  const result = await extractEmbeddingAndTopClass(pcm)
+  const result = await extractEmbedding(pcm)
   if (!result || result.embedding.every((v) => v === 0)) return null
 
   if (queued) {
-    queueStemAnalysisWrite(path, {
-      embedding: result.embedding,
-      zeroShotAttempted: true,
-      ...(result.topClassIndex !== null ? { zeroShotClassIndex: result.topClassIndex } : {})
-    })
+    queueStemAnalysisWrite(path, { embedding: result.embedding })
     return result.embedding
   }
 
@@ -98,15 +94,6 @@ async function embedAndPersist(
   // non-library path is silently skipped main-process-side.
   countWork('ipc:set-stem-embedding-cache')
   void window.rifffApi.setStemEmbeddingCache(path, result.embedding)
-  // Marks the attempt regardless of topClassIndex -- see
-  // markYamnetZeroShotAttempted's own doc comment (main process) for
-  // why "tried, found nothing mappable" still needs recording.
-  countWork('ipc:mark-yamnet-zeroshot-attempted')
-  void window.rifffApi.markYamnetZeroShotAttempted(path)
-  if (result.topClassIndex !== null) {
-    countWork('ipc:set-yamnet-zeroshot-category')
-    void window.rifffApi.setYamnetZeroShotCategory(path, result.topClassIndex)
-  }
   return result.embedding
 }
 
@@ -117,7 +104,7 @@ export function hasStemEmbeddingEntry(path: string): boolean {
 }
 
 /** Extracts from an already-decoding buffer (analyzeStemOnce.ts) -- same
- * resample, inference, persistence and zero-shot writes as
+ * resample, inference and persistence as
  * getOrExtractStemEmbedding, minus that function's own read+decode.
  * Installed as this path's entry so getOrExtractStemEmbedding shares it
  * mid-flight. Returns null (nothing installed) when the path already has
@@ -148,68 +135,5 @@ export function adoptStemEmbeddingFromBuffer(
     }
   })()
   cache.set(path, promise)
-  return promise
-}
-
-const zeroShotEntries = new Map<string, Promise<boolean>>()
-
-/** True when this path's zero-shot step is in flight or already succeeded
- * this session. */
-export function hasZeroShotEntry(path: string): boolean {
-  return zeroShotEntries.has(path)
-}
-
-/** Zero-shot classification for a stem whose embedding is ALREADY cached --
- * one embedded before the zero-shot code existed (background efficiency B5;
- * main's get-stem-analysis-needs reports it as `zeroShot`).
- * getOrExtractStemEmbedding is cache-hit-first, so such a stem never
- * reaches extractEmbeddingAndTopClass again on its own; this re-runs
- * inference on the stem's already-decoding buffer (analyzeStemOnce.ts --
- * the same decode as any other output it needs) purely to recover
- * topClassIndex. Replaces the old separate retroactive scan
- * (YamnetZeroShotRetroactiveScan.tsx), which decoded each target itself.
- *
- * Does NOT re-write the embedding (already correct, cached) and does NOT
- * touch the embedding `cache` above. Marks the stem "attempted" on any
- * successful inference, even when topClassIndex is null or maps to no
- * ArrangeRole -- a real result is deterministic for the same audio, so
- * retrying would waste the same work (see markYamnetZeroShotAttempted,
- * main process). Does NOT mark on an outright failure (decode error, model
- * unavailable) -- plausibly transient, so the entry is dropped and a later
- * pass retries it. Resolves true on success; never rejects. Returns null
- * (nothing started) when the path already has an entry. */
-export function adoptZeroShotFromBuffer(
-  path: string,
-  audioBuffer: Promise<AudioBuffer>
-): Promise<boolean> | null {
-  if (zeroShotEntries.has(path)) return null
-  const promise = (async (): Promise<boolean> => {
-    let decoded: AudioBuffer
-    try {
-      decoded = await audioBuffer
-    } catch {
-      // Logged once by the caller (analyzeStemOnce), as above.
-      zeroShotEntries.delete(path)
-      return false
-    }
-    try {
-      const result = await extractEmbeddingAndTopClass(await resampleTo16kMono(decoded))
-      if (!result) {
-        zeroShotEntries.delete(path)
-        return false
-      }
-      // Batched with the stem's other writes (analysisWriteQueue.ts, B7).
-      queueStemAnalysisWrite(path, {
-        zeroShotAttempted: true,
-        ...(result.topClassIndex !== null ? { zeroShotClassIndex: result.topClassIndex } : {})
-      })
-      return true
-    } catch (err) {
-      console.error('adoptZeroShotFromBuffer: failed for stem', path, err)
-      zeroShotEntries.delete(path)
-      return false
-    }
-  })()
-  zeroShotEntries.set(path, promise)
   return promise
 }

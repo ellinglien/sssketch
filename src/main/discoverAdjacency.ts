@@ -1,13 +1,16 @@
 // src/main/discoverAdjacency.ts
+import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 import { basename } from 'node:path'
 import type Database from 'better-sqlite3'
 import { instrumentMaskToSoundType, type DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import type { SoundType } from '@shared/types'
 import type { ArrangeRole } from '@shared/stemRole'
+import { categoryOfRole } from '@shared/stemCategory'
 import {
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
+  type DiscoverKindSources,
   type DiscoverSlotKind,
   type DiscoverTraitKind
 } from '@shared/discoverSlotKind'
@@ -33,8 +36,10 @@ import { whenAllTableCountsSettled } from './tableChangeSignal'
 import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
 import {
+  attachDiscoverDial,
   attachDiscoverIntensity,
   attachDiscoverTraits,
+  attachLevelAndPresence,
   getRiffIndexForDb,
   type DiscoverCandidate
 } from './discoverCandidates'
@@ -214,7 +219,9 @@ export async function getAdjacentDiscoverCandidates(
   const confirmedRoleStmt = ownDb.prepare(
     `SELECT ArrangeRole FROM StemCategories WHERE StemCID = ? AND ArrangeRole IS NOT NULL`
   )
-  const autoRoleStmt = ownDb.prepare(`SELECT ArrangeRole FROM StemAutoCategory WHERE StemCID = ?`)
+  const autoRoleStmt = ownDb.prepare(
+    `SELECT a.ArrangeRole FROM StemAutoCategory a WHERE a.StemCID = ? AND ${PLACED_AUTO_CATEGORY_SQL}`
+  )
   const featureStmt = ownDb.prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
 
   async function matchRole(summary: {
@@ -275,12 +282,17 @@ export async function getAdjacentDiscoverCandidates(
         slotKinds: normalizedKinds,
         drumSubRole: null,
         riffBpm: resolved.bpm,
+        riffRoot: resolved.root ?? null,
+        riffScale: resolved.scale ?? null,
         traitValues,
         traitFieldValues,
         // Adjacency stays on pool-relative trait ranking for now (the
         // library-percentile bar is the main roll path only, Phase 1).
         traitPercentiles: {},
-        kindSources: {},
+        // A back/front label sets the dial (attachDiscoverDial); other kinds need no source here.
+        kindSources: confirmedDialKindSources(
+          'confirmedRole' in classification ? classification.confirmedRole : null
+        ),
         riffCreationTime: resolved.creationTime ?? null,
         soundType,
         // Pure string computation (resolveStemPath's own doc comment --
@@ -317,7 +329,18 @@ export async function getAdjacentDiscoverCandidates(
     )
   }
 
-  const traited = await attachAdjacentTraits(ownDb, result, traitKinds, options.percentileTraits)
+  const traitedOnly = await attachAdjacentTraits(
+    ownDb,
+    result,
+    normalizedKinds,
+    traitKinds,
+    options.percentileTraits
+  )
+  // A row filled from here arrives at its gain, and is balanced, like one a roll fills.
+  const traited = {
+    newer: await attachLevelAndPresence(ownDb, traitedOnly.newer),
+    older: await attachLevelAndPresence(ownDb, traitedOnly.older)
+  }
   if (options.intensity !== true) return traited
   const withIntensity = async (
     list: AdjacentDiscoverCandidate[]
@@ -328,26 +351,36 @@ export async function getAdjacentDiscoverCandidates(
   return { newer: await withIntensity(traited.newer), older: await withIntensity(traited.older) }
 }
 
-/** Trait values and percentiles for `percentileTraits` (plus the slot's own) on both directions. */
+/** A stem labelled back or front is 'confirmed' for that kind, so its dial reads 0 or 1. */
+export function confirmedDialKindSources(
+  confirmedRole: ArrangeRole | null | undefined
+): DiscoverKindSources {
+  const category = confirmedRole ? categoryOfRole(confirmedRole) : null
+  return category === 'back' || category === 'front' ? { [category]: 'confirmed' } : {}
+}
+
+/** Trait values and percentiles for `percentileTraits` (plus the slot's own) on both directions,
+ * and the front/back dial for a slot with a dial kind (attachDiscoverDial). */
 async function attachAdjacentTraits(
   ownDb: Database.Database,
   result: AdjacentWalkResult<AdjacentDiscoverCandidate>,
+  slotKinds: readonly DiscoverSlotKind[],
   traitKinds: readonly DiscoverTraitKind[],
   percentileTraits: readonly DiscoverTraitKind[] | undefined
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   if (percentileTraits === undefined) return result
   const valueKinds = [...traitKinds, ...percentileTraits.filter((k) => !traitKinds.includes(k))]
-  if (valueKinds.length === 0) return result
   // Re-attached per direction, keeping each candidate's own extra fields (path, soundType).
   const withTraits = async (
     list: AdjacentDiscoverCandidate[]
   ): Promise<AdjacentDiscoverCandidate[]> => {
     const attached = await attachDiscoverTraits(ownDb, list, valueKinds)
+    const dialed = attachDiscoverDial(ownDb, attached, slotKinds)
     return list.map((c, i) => ({
       ...c,
-      traitValues: attached[i].traitValues,
-      traitFieldValues: attached[i].traitFieldValues,
-      traitPercentiles: attached[i].traitPercentiles
+      traitValues: dialed[i].traitValues,
+      traitFieldValues: dialed[i].traitFieldValues,
+      traitPercentiles: dialed[i].traitPercentiles
     }))
   }
   return { newer: await withTraits(result.newer), older: await withTraits(result.older) }

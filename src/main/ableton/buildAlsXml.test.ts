@@ -159,13 +159,13 @@ describe('buildAlsXml', () => {
     // Grouping is now by bus, not by channel -- with no busOf entry for
     // this stem, it falls back to 'aux' (see the 'bus clustering' describe
     // block below for dedicated bus-naming/grouping coverage). The group's
-    // own name also carries a sound-type summary -- "AUX — DRUMS" here,
+    // own name also carries a sound-type summary -- "BACK — DRUMS" here,
     // since drumsRifff()'s stem is type 'drums' -- a genuinely useful
     // signal that a drums-typed stem ended up unassigned in the fallback
     // bus, not just the bare bus id (see the 'bus clustering' > 'names
     // groups...' tests below for dedicated coverage of this summary).
     // Upper-cased -- purely decorative, see busGroupName's own doc comment.
-    expect(attrs(groupEffName)['@_Value']).toBe('AUX — DRUMS')
+    expect(attrs(groupEffName)['@_Value']).toBe('BACK — DRUMS')
   })
 
   // Share readiness S9 (2026-10-07): the template was cut from one of Elling's own sets, and its
@@ -1101,13 +1101,13 @@ describe('buildAlsXml', () => {
       const { tracks } = tracksOf(xml)
       const groupTrack = findChild(tracks, 'GroupTrack')!
       const nameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
-      // "AUX — DRUMS", not bare "aux" -- drumsRifff()'s stem is type
+      // "BACK — DRUMS", not bare "aux" -- drumsRifff()'s stem is type
       // 'drums', and the group name summarizes what's actually in it (see
       // the dedicated 'names groups with a sound-type summary' tests
       // below), which is genuinely useful signal for an unassigned stem
       // that landed in the fallback bus. Upper-cased, see busGroupName.
       expect(attrs(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!)['@_Value']).toBe(
-        'AUX — DRUMS'
+        'BACK — DRUMS'
       )
     })
 
@@ -1220,7 +1220,7 @@ describe('buildAlsXml', () => {
       const nameNode = findChild(childArray(groupTrack, 'GroupTrack'), 'Name')!
       // Upper-cased -- purely decorative, see busGroupName's own doc comment.
       expect(attrs(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!)['@_Value']).toBe(
-        'LEAD — DRUMS'
+        'FRONT — DRUMS'
       )
     })
 
@@ -1274,6 +1274,36 @@ describe('buildAlsXml', () => {
         (g) => attrs(findChild(childArray(g, 'GroupTrack'), 'Color')!)['@_Value']
       )
       expect(new Set(groupColors)).toEqual(new Set(['65', '53'])) // drums, lead
+    })
+
+    it('puts aux and backing stems in ONE back group coloured as backing, lead as front', () => {
+      const rifffs = ['a', 'b', 'c'].map((id) => ({ ...drumsRifff(), groupId: id, startBar: 0 }))
+      const state = emptyAppState({
+        rifffs: Object.fromEntries(rifffs.map((r) => [r.groupId, r])),
+        channelOrder: ['a', 'b', 'c'],
+        channelOf: { a: 'a', b: 'b', c: 'c' },
+        busOf: { 'a:0': 'aux', 'b:0': 'backing', 'c:0': 'lead' }
+      })
+      const stemFileNames = new Map([
+        ['a:0', 'a.wav'],
+        ['b:0', 'b.wav'],
+        ['c:0', 'c.wav']
+      ])
+
+      const { tracks } = tracksOf(buildAlsXml(TEMPLATE_XML, state, '/out', stemFileNames))
+      const groups = findAllChildren(tracks, 'GroupTrack').map((g) => {
+        const body = childArray(g, 'GroupTrack')
+        const nameNode = findChild(body, 'Name')!
+        return [
+          attrs(findChild(childArray(nameNode, 'Name'), 'EffectiveName')!)['@_Value'],
+          attrs(findChild(body, 'Color')!)['@_Value']
+        ]
+      })
+
+      expect(groups).toEqual([
+        ['BACK — DRUMS', '67'],
+        ['FRONT — DRUMS', '53']
+      ])
     })
 
     it('sets UserName, not just EffectiveName, on both the group and its track', () => {

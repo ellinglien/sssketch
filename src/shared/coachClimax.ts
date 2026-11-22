@@ -21,6 +21,7 @@ import {
   arrangeRoleToSlotKinds,
   discoverSlotKindToArrangeRole,
   normalizeSlotKinds,
+  parseSlotKind,
   type DiscoverSlotKind
 } from './discoverSlotKind'
 import type { ArrangeRole } from './stemRole'
@@ -93,8 +94,8 @@ export function coachSlotRole(kinds: readonly DiscoverSlotKind[]): ArrangeRole {
  * The one superset rule every kind-set check in this feature shares: a set
  * of kinds COVERS a wanted set when it contains all of them.
  *
- * Superset, not overlap, is what keeps a {leadesque, buttery} harmony stem
- * from answering for a {leadesque, sparkly} hook -- and normalizeSlotKinds
+ * Superset, not overlap, is what keeps a {front, buttery} harmony stem
+ * from answering for a {front, sparkly} hook -- and normalizeSlotKinds
  * allows at most one of sparkly/buttery in a set, so those two can never
  * collide. Phase one uses it to decide whether a step is satisfied
  * (slotCoversKindSet, deleted with phase one); phase two uses it to decide
@@ -217,7 +218,9 @@ function loadedStem(value: unknown): LockedClimaxStem | null {
   const loose = value as Record<string, unknown>
   if (typeof loose.path !== 'string' || loose.path === '') return null
   const kinds = normalizeSlotKinds(
-    (Array.isArray(loose.kinds) ? loose.kinds : []).filter(isDiscoverSlotKind)
+    (Array.isArray(loose.kinds) ? loose.kinds : [])
+      .map(parseSlotKind)
+      .filter((k): k is DiscoverSlotKind => k !== null)
   )
   return {
     path: loose.path,

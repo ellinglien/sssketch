@@ -17,12 +17,11 @@ import {
   type AnalysisWorkItem
 } from './backgroundAnalysisQueue'
 
-const NEEDY: StemAnalysisNeeds = { peaks: true, features: true, embedding: true, zeroShot: false }
+const NEEDY: StemAnalysisNeeds = { peaks: true, features: true, embedding: true }
 const NOTHING: StemAnalysisNeeds = {
   peaks: false,
   features: false,
-  embedding: false,
-  zeroShot: false
+  embedding: false
 }
 
 interface Harness {

@@ -33,7 +33,7 @@ const BAND: RadioFoldRow[] = [
   row('drums', { kinds: ['drums'], barLength: 4 }),
   row('hats', { kinds: ['drums'], barLength: 1 }),
   row('perc', { kinds: ['rhythmic'], barLength: 2 }),
-  row('lead', { kinds: ['lead'], barLength: 4 })
+  row('lead', { kinds: ['front'], barLength: 4 })
 ]
 
 const input = (fold: number): RadioFoldInput => ({ rows: BAND, loopBars: 4, bpm: 120, fold })
@@ -110,7 +110,7 @@ describe('radioFoldStatus', () => {
   it('folded with nothing that may fold says so', () => {
     const rows = [
       row('drums', { kinds: ['drums'], barLength: 4 }),
-      row('lead', { kinds: ['lead'] })
+      row('lead', { kinds: ['front'] })
     ]
     const a = stepRadioFold(createRadioFold('k3x9pq'), { ...input(40), rows })
     const b = stepRadioFold(a.state, { ...input(40), rows })

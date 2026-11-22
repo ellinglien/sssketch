@@ -40,6 +40,11 @@ export interface DiscoverCandidate {
    * frequently null in real data -- LORE's own resolveRiff falls back to
    * the riff's BPM for exactly this reason, riffLibraryTypes.ts). */
   riffBpm: number
+  /** The OWNING RIFF's key as Endlesss stored it (Riffs.Root 0-11, Riffs.Scale, an index into
+   * RIFF_LIBRARY_SCALE_NAMES), for rankCandidates' key term (@shared/keyFit). Optional: absent or
+   * null is an unknown key, which is neutral. */
+  riffRoot?: number | null
+  riffScale?: number | null
   /** Raw StemFeatureCache field value per requested TRAIT kind, for
    * rankCandidates' trait terms. {} when the slot has no trait kinds or the
    * stem has no cached features. */
@@ -82,4 +87,10 @@ export interface DiscoverCandidate {
    * when the stem is unscored. Attached only when a roll asks for it (getDiscoverCandidates'
    * `alsoIntensity`, the web index's `x`): absent on every other roll. */
   intensity?: number | null
+  /** The gain a row holding this stem starts at (@shared/stemLevel arrivalGain), (0, 1]. Main
+   * attaches it to every roll; absent (older constructors, an unmeasured stem): 1. */
+  arrivalGain?: number
+  /** How much a stem demands, 0 sparse and quiet to 1 busy and loud (@shared/radioIntensity
+   * stemPresence); attached to every roll; absent or null: unknown. */
+  presence?: number | null
 }

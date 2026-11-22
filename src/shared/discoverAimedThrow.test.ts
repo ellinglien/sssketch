@@ -65,7 +65,7 @@ describe('discoverAimedThrowRows', () => {
     const rows = [
       { slot: 'd', kinds: ['drums' as const], audible: true },
       { slot: 'b', kinds: ['bass' as const, 'warm' as const], audible: true },
-      { slot: 'l', kinds: ['lead' as const], audible: true },
+      { slot: 'l', kinds: ['front' as const], audible: true },
       { slot: 'w', kinds: ['warm' as const], audible: false },
       { slot: 'p', kinds: ['bright' as const], audible: true }
     ]
@@ -77,7 +77,7 @@ describe('discoverAimedThrowRows', () => {
 describe('pickDiscoverAimedThrowRow', () => {
   const rows = [
     { slot: 'd', kinds: ['drums' as const], audible: true },
-    { slot: 'l', kinds: ['lead' as const], audible: true },
+    { slot: 'l', kinds: ['front' as const], audible: true },
     { slot: 'p', kinds: ['bright' as const], audible: true }
   ]
   it('draws one of the rows a throw may take, evenly, with one number', () => {

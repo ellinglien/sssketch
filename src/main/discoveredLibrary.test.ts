@@ -263,7 +263,14 @@ describe('discoveredLibrary', () => {
     expect(result?.indexRows).toEqual([
       {
         stemCID: 'h1',
-        entry: { riffCID: result!.riffCID, ownerJamCID: 'discovered', bpmRnd: 120, creationTime: 7 }
+        entry: {
+          riffCID: result!.riffCID,
+          ownerJamCID: 'discovered',
+          bpmRnd: 120,
+          creationTime: 7,
+          root: null,
+          scale: null
+        }
       }
     ])
     // h1 already had a Stems row in the own db, so it is NOT a new

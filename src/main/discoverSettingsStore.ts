@@ -10,6 +10,7 @@ import {
 } from '@shared/radioSchedule'
 import { DEFAULT_RADIO_VIEW, normalizeRadioView, type RadioView } from '@shared/radioView'
 import { LEGACY_SOURCE_LEAN } from '@shared/discoverSlotModifier'
+import { EMPTY_HELD_STEMS, normalizeHeldStems, type HeldStems } from '@shared/heldStems'
 
 export interface DiscoverSettings {
   /** Whether the user has explicitly agreed to the whole-library background
@@ -35,6 +36,9 @@ export interface DiscoverSettings {
    * what the view shows, never what radio does, so it is not a RadioSettings field (a change to
    * `radio` re-runs the panel's radio effects). Simple unless saved advanced. */
   radioView: RadioView
+  /** Held stems (spec 2026-11-22-held-stems-design): the nine slots on keys 1 to 9, saved with
+   * the app so they are there every session. Its own field, as radioView is. */
+  heldStems: HeldStems
 }
 
 const STORE_FILENAME = 'discoverSettings.json'
@@ -47,11 +51,11 @@ const DEFAULT_SETTINGS: DiscoverSettings = {
   consentedToLibraryScan: false,
   traitMatchBar: DEFAULT_TRAIT_BAR,
   radio: DEFAULT_RADIO_SETTINGS,
-  radioView: DEFAULT_RADIO_VIEW
+  radioView: DEFAULT_RADIO_VIEW,
+  heldStems: EMPTY_HELD_STEMS
 }
 
-/** Mirrors categoryCentroidStore.ts's own loadCategoryCentroidStore -- an
- * empty/default result (never a thrown error), both when nothing has been
+/** An empty/default result (never a thrown error), both when nothing has been
  * saved yet and when reading fails. */
 export function loadDiscoverSettings(): DiscoverSettings {
   const path = storePath()
@@ -69,7 +73,8 @@ export function loadDiscoverSettings(): DiscoverSettings {
           normalizeRadioSettings(parsed.radio, (parsed as { radioPace?: unknown }).radioPace),
           parsed.radio
         ),
-        radioView: normalizeRadioView(parsed.radioView)
+        radioView: normalizeRadioView(parsed.radioView),
+        heldStems: normalizeHeldStems(parsed.heldStems)
       },
       parsed.radio?.foldSeed
     )

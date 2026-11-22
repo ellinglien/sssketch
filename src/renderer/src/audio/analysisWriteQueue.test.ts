@@ -18,7 +18,7 @@ describe('analysisWriteQueue (B7)', () => {
   it("merges a stem's writes and flushes them as one batch after the delay", async () => {
     const q = await import('./analysisWriteQueue')
     q.queueStemAnalysisWrite('/a', { peaks: { peaks: [1], brightness: [2] } })
-    q.queueStemAnalysisWrite('/a', { embedding: [3], zeroShotAttempted: true })
+    q.queueStemAnalysisWrite('/a', { embedding: [3] })
     q.queueStemAnalysisWrite('/b', { features: { mfcc: [] } as never })
 
     await vi.advanceTimersByTimeAsync(q.FLUSH_DELAY_MS - 1)
@@ -29,8 +29,7 @@ describe('analysisWriteQueue (B7)', () => {
       {
         path: '/a',
         peaks: { peaks: [1], brightness: [2] },
-        embedding: [3],
-        zeroShotAttempted: true
+        embedding: [3]
       },
       { path: '/b', features: { mfcc: [] } }
     ])

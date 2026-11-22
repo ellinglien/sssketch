@@ -7,13 +7,13 @@ vi.mock('./resampleTo16kMono', () => ({
   resampleTo16kMono: vi.fn(async (buffer: AudioBuffer) => buffer.getChannelData(0).slice(0, 64))
 }))
 vi.mock('./yamnetClient', () => ({
-  extractEmbeddingAndTopClass: vi.fn(async (pcm: Float32Array) => ({
+  extractEmbedding: vi.fn(async (pcm: Float32Array) => ({
     embedding: Array.from(pcm.slice(0, 16), (v) => v + 1),
     topClassIndex: 7
   }))
 }))
 
-const ALL = { peaks: true, features: true, embedding: true, zeroShot: false }
+const ALL = { peaks: true, features: true, embedding: true }
 
 function fakeAudioBuffer(): AudioBuffer {
   const n = 8820
@@ -45,8 +45,6 @@ describe('analyzeStemOnce', () => {
       setStemFeatureCache: vi.fn().mockResolvedValue(undefined),
       getStemEmbeddingCache: vi.fn().mockResolvedValue(null),
       setStemEmbeddingCache: vi.fn().mockResolvedValue(undefined),
-      markYamnetZeroShotAttempted: vi.fn().mockResolvedValue(undefined),
-      setYamnetZeroShotCategory: vi.fn().mockResolvedValue(undefined),
       setStemAnalysisResults: vi.fn().mockResolvedValue(undefined)
     }
     vi.stubGlobal('window', { rifffApi: api })
@@ -77,8 +75,6 @@ describe('analyzeStemOnce', () => {
     expect(api.setStemPeaksCache).not.toHaveBeenCalled()
     expect(api.setStemFeatureCache).not.toHaveBeenCalled()
     expect(api.setStemEmbeddingCache).not.toHaveBeenCalled()
-    expect(api.markYamnetZeroShotAttempted).not.toHaveBeenCalled()
-    expect(api.setYamnetZeroShotCategory).not.toHaveBeenCalled()
   }
 
   async function oldPathOutputs(path: string): Promise<{
@@ -118,8 +114,7 @@ describe('analyzeStemOnce', () => {
     expect(result).toEqual({
       peaks: 'done',
       features: 'done',
-      embedding: 'done',
-      zeroShot: 'skipped'
+      embedding: 'done'
     })
     expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
     expect(api.readAudioFile).toHaveBeenCalledTimes(1)
@@ -130,9 +125,7 @@ describe('analyzeStemOnce', () => {
       path: '/lib/cid-1',
       peaks: { peaks: before.peaks, brightness: before.brightness },
       features: before.features,
-      embedding: before.embedding,
-      zeroShotAttempted: true,
-      zeroShotClassIndex: 7
+      embedding: before.embedding
     })
     expect(api.setStemAnalysisResults).toHaveBeenCalledTimes(1)
     expectNoSingleWrites()
@@ -168,24 +161,20 @@ describe('analyzeStemOnce', () => {
     const result = await analyzeStemOnce('/lib/cid-3', {
       peaks: false,
       features: false,
-      embedding: true,
-      zeroShot: false
+      embedding: true
     })
     expect(result).toEqual({
       peaks: 'skipped',
       features: 'skipped',
-      embedding: 'done',
-      zeroShot: 'skipped'
+      embedding: 'done'
     })
     expect(Object.keys((await flushedWrites()).get('/lib/cid-3') ?? {}).sort()).toEqual([
       'embedding',
-      'path',
-      'zeroShotAttempted',
-      'zeroShotClassIndex'
+      'path'
     ])
 
     expect(await analyzeStemOnce('/lib/cid-4', { ...ALL, peaks: false, embedding: false })).toEqual(
-      { peaks: 'skipped', features: 'done', embedding: 'skipped', zeroShot: 'skipped' }
+      { peaks: 'skipped', features: 'done', embedding: 'skipped' }
     )
     // Brightness came from the same decode; the peaks row wasn't missing, so not re-persisted.
     expect(Object.keys((await flushedWrites()).get('/lib/cid-4') ?? {}).sort()).toEqual([
@@ -201,14 +190,12 @@ describe('analyzeStemOnce', () => {
     const result = await analyzeStemOnce('/lib/cid-5', {
       peaks: false,
       features: false,
-      embedding: false,
-      zeroShot: false
+      embedding: false
     })
     expect(result).toEqual({
       peaks: 'skipped',
       features: 'skipped',
-      embedding: 'skipped',
-      zeroShot: 'skipped'
+      embedding: 'skipped'
     })
     expect(api.readAudioFile).not.toHaveBeenCalled()
   })
@@ -240,14 +227,13 @@ describe('analyzeStemOnce', () => {
 
   it('a failure in one output does not lose the others, and the failed one retries later', async () => {
     const yamnet = await import('./yamnetClient')
-    vi.mocked(yamnet.extractEmbeddingAndTopClass).mockRejectedValueOnce(new Error('worker died'))
+    vi.mocked(yamnet.extractEmbedding).mockRejectedValueOnce(new Error('worker died'))
     const { analyzeStemOnce } = await import('./analyzeStemOnce')
     const result = await analyzeStemOnce('/lib/cid-7', ALL)
     expect(result).toEqual({
       peaks: 'done',
       features: 'done',
-      embedding: 'failed',
-      zeroShot: 'skipped'
+      embedding: 'failed'
     })
     const firstWrite = (await flushedWrites()).get('/lib/cid-7') ?? {}
     expect(firstWrite.peaks).toBeDefined()
@@ -258,8 +244,7 @@ describe('analyzeStemOnce', () => {
     expect(retry).toEqual({
       peaks: 'skipped',
       features: 'skipped',
-      embedding: 'done',
-      zeroShot: 'skipped'
+      embedding: 'done'
     })
     expect((await flushedWrites()).get('/lib/cid-7')?.embedding).toBeDefined()
   })
@@ -272,15 +257,13 @@ describe('analyzeStemOnce', () => {
     expect(result).toEqual({
       peaks: 'failed',
       features: 'failed',
-      embedding: 'failed',
-      zeroShot: 'skipped'
+      embedding: 'failed'
     })
     const retry = await analyzeStemOnce('/lib/cid-8', ALL)
     expect(retry).toEqual({
       peaks: 'done',
       features: 'done',
-      embedding: 'done',
-      zeroShot: 'skipped'
+      embedding: 'done'
     })
     errSpy.mockRestore()
   })
@@ -300,8 +283,7 @@ describe('analyzeStemOnce', () => {
     expect(result).toEqual({
       peaks: 'failed',
       features: 'failed',
-      embedding: 'failed',
-      zeroShot: 'skipped'
+      embedding: 'failed'
     })
     expect(lines).toHaveLength(1)
     // One line: plain strings, no Error object (whose stack would print).
@@ -323,58 +305,5 @@ describe('analyzeStemOnce', () => {
     warnSpy.mockRestore()
     expect(lines).toHaveLength(1)
     expect(lines[0].join(' ')).toContain('Unable to decode audio data')
-  })
-
-  it('zero-shot for an already-embedded stem shares the one decode, marks attempted, never re-writes the embedding', async () => {
-    const { analyzeStemOnce } = await import('./analyzeStemOnce')
-    const result = await analyzeStemOnce('/lib/cid-9', {
-      peaks: true,
-      features: false,
-      embedding: false,
-      zeroShot: true
-    })
-    expect(result).toEqual({
-      peaks: 'done',
-      features: 'skipped',
-      embedding: 'skipped',
-      zeroShot: 'done'
-    })
-    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
-    const write = (await flushedWrites()).get('/lib/cid-9')
-    expect(write?.zeroShotAttempted).toBe(true)
-    expect(write?.zeroShotClassIndex).toBe(7)
-    expect(write?.embedding).toBeUndefined()
-    expectNoSingleWrites()
-
-    // Done this session -- a second ask is skipped without a decode.
-    const again = await analyzeStemOnce('/lib/cid-9', {
-      peaks: false,
-      features: false,
-      embedding: false,
-      zeroShot: true
-    })
-    expect(again.zeroShot).toBe('skipped')
-    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('zero-shot: an inference failure is not marked attempted and retries later', async () => {
-    const yamnet = await import('./yamnetClient')
-    vi.mocked(yamnet.extractEmbeddingAndTopClass).mockResolvedValueOnce(null)
-    const { analyzeStemOnce } = await import('./analyzeStemOnce')
-    const needs = { peaks: false, features: false, embedding: false, zeroShot: true }
-    expect((await analyzeStemOnce('/lib/cid-10', needs)).zeroShot).toBe('failed')
-    expect((await flushedWrites()).has('/lib/cid-10')).toBe(false)
-    expect((await analyzeStemOnce('/lib/cid-10', needs)).zeroShot).toBe('done')
-    expect((await flushedWrites()).get('/lib/cid-10')?.zeroShotAttempted).toBe(true)
-  })
-
-  it('a fresh embedding covers zero-shot itself -- no second inference', async () => {
-    const yamnet = await import('./yamnetClient')
-    vi.mocked(yamnet.extractEmbeddingAndTopClass).mockClear()
-    const { analyzeStemOnce } = await import('./analyzeStemOnce')
-    const result = await analyzeStemOnce('/lib/cid-11', { ...ALL, zeroShot: true })
-    expect(result.zeroShot).toBe('skipped')
-    expect(vi.mocked(yamnet.extractEmbeddingAndTopClass)).toHaveBeenCalledTimes(1)
-    expect((await flushedWrites()).get('/lib/cid-11')?.zeroShotAttempted).toBe(true)
   })
 })

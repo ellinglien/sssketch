@@ -13,10 +13,9 @@
 //   (StemAutoClassifyTried) is forgotten here too: a re-extraction can change
 //   the answer, and the record would otherwise keep it out of the lists at
 //   the next launch if the app quit before the classifier's next batch.
-// - noteAutoClassifyTrainingChanged: a confirmation or centroid retrain
-//   (stemCategoriesStore.ts's upsertStemCategoryRole, categoryCentroidStore.ts's
-//   saveCategoryCentroidStore) -- can make previously unclassifiable stems
-//   classifiable, so the next batch rebuilds the whole pending list.
+// A confirmation (a label write) needs no signal: it only removes a stem from
+// the eligible set, and a pending id's eligibility is re-checked when its batch
+// is fetched (stemAutoClassify.ts). The model doesn't train on device.
 //
 // O(1) per call (one primary-key DELETE, nothing on a db without the
 // table); no 'electron' import, so the stores stay testable from plain vitest.
@@ -31,7 +30,6 @@ interface AddedRows {
 }
 
 const addedByDb = new WeakMap<Database.Database, AddedRows>()
-let trainingGeneration = 0
 let listener: (() => void) | null = null
 
 function notify(): void {
@@ -52,17 +50,6 @@ export function noteAutoClassifyInputRow(
   added[kind].add(stemCID)
   forgetStemTried(db, stemCID)
   notify()
-}
-
-/** Classifier training (confirmations, centroids) changed -- every pending
- * list is rebuilt from scratch on its next batch. */
-export function noteAutoClassifyTrainingChanged(): void {
-  trainingGeneration += 1
-  notify()
-}
-
-export function getAutoClassifyTrainingGeneration(): number {
-  return trainingGeneration
 }
 
 /** Takes (and clears) the rows noted for `db` since the last drain. */

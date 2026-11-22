@@ -191,3 +191,70 @@ export function stemLevelFeatures(
     activeFraction: round(active / blocks.length, 3)
   }
 }
+
+/** The loudness a new Discover/radio row arrives at when the library has no percentile yet. */
+export const ARRIVAL_TARGET_FALLBACK_LUFS = -23
+/** The library percentile of loudnessLufs rows are trimmed toward: the quieter quarter. */
+export const ARRIVAL_TARGET_PERCENTILE = 0.25
+export const ARRIVAL_GAIN_FLOOR = 0.25
+
+/** A new row's starting gain (spec 2026-11-21-picking-key-level-groove-design, 2): down to
+ * `targetLufs`, never up (row gains are 0..1 and a stem at unity is already loud), never under
+ * the floor. An unmeasured stem arrives at 1. */
+export function arrivalGain(loudnessLufs: number | null | undefined, targetLufs: number): number {
+  if (typeof loudnessLufs !== 'number' || !Number.isFinite(loudnessLufs)) return 1
+  if (!Number.isFinite(targetLufs)) return 1
+  const gain = Math.pow(10, (targetLufs - loudnessLufs) / 20)
+  return Math.min(1, Math.max(ARRIVAL_GAIN_FLOOR, gain))
+}
+
+/** What the row helpers read of a stem: a DiscoverCandidate. */
+export interface LevelledStem {
+  stemCID: string
+  arrivalGain?: number
+}
+
+/** What they read of a row. `balance` is the row's level relative to its stem's arrival gain,
+ * NOT clamped: a row turned up past its stem's arrival gain has one above 1, which its 0..1 gain
+ * alone would lose at the first louder stem. Absent (a row never set by hand, an old undo
+ * snapshot): the one its gain implies. */
+export interface LevelledRow {
+  gain: number
+  balance?: number
+  candidate: LevelledStem | null
+}
+
+function arrivalOf(stem: LevelledStem | null): number {
+  const arrival = stem?.arrivalGain
+  return arrival !== undefined && arrival > 0 ? arrival : 1
+}
+
+/** The balance a gain set by hand gives a row holding `stem` (null: a seed, or none). */
+export function balanceForGain(gain: number, stem: LevelledStem | null): number {
+  return gain / arrivalOf(stem)
+}
+
+/** The row's balance: the stored one, else what its gain implies for the stem it holds. */
+export function rowBalance(row: LevelledRow): number {
+  return row.balance ?? balanceForGain(row.gain, row.candidate)
+}
+
+/** The gain a row plays `stem` at. Its own stem (the row's candidate): the row's gain. Any other
+ * stem -- a pick about to land, or the outgoing one still sounding while the pick resolves -- the
+ * row's balance times that stem's arrival gain, in 0..1. Null is a stem with no arrival gain (a
+ * seed, or none). A fresh row (gain 1) takes the stem's arrival gain; a balance set by hand
+ * holds. So a landing pick's gain and the gain the engine is sent for it ahead of the landing
+ * are one number. */
+export function rowGainFor(row: LevelledRow, stem: LevelledStem | null): number {
+  if (stem?.stemCID === row.candidate?.stemCID) return row.gain
+  return Math.min(1, Math.max(0, rowBalance(row) * arrivalOf(stem)))
+}
+
+/** The row's gain and balance once `stem` has landed on it: the gain rowGainFor gives, and the
+ * balance carried as it is (stored from here on, so repeated landings never re-derive it). */
+export function landedLevel(
+  row: LevelledRow,
+  stem: LevelledStem | null
+): { gain: number; balance: number } {
+  return { gain: rowGainFor(row, stem), balance: rowBalance(row) }
+}

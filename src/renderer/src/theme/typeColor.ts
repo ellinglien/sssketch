@@ -1,3 +1,4 @@
+import { categoryOfBus, type StemCategory } from '@shared/stemCategory'
 import { TYPE_CSS_VAR, type BusId, type SoundType, type Stem } from '@shared/types'
 
 /**
@@ -36,18 +37,18 @@ export function stemColorVar(stem: Stem | undefined): string {
  * override as stemColorVar above (a recorded take stays its own distinct
  * category regardless of bus/type). Falls back to stemColorVar (the raw
  * Endlesss-derived SoundType color) when `bus` is undefined, rather than
- * always resolving to the aux bus color -- per direct feedback
+ * always resolving to one neutral bus color -- per direct feedback
  * (2026-09-01): most people are looking at freshly-imported, never-tidied
  * content most of the time, and that content already carries real
  * category information (drum/note/bass/mic flags) from Endlesss itself,
  * which a flat neutral color was throwing away for no benefit. Once a
- * stem genuinely goes through Tidy Up -- including landing in aux on
+ * stem genuinely goes through Tidy Up -- including landing in back on
  * purpose -- it switches over to the bus palette, which is the whole
  * visual payoff of having tidied it. Use this instead of stemColorVar at
  * every call site that decides a CLIP'S OWN rendered color
  * (CollapsedRifffRow.tsx, StemWaveformRow.tsx, RifffBlockRow.tsx) -- NOT
- * at selectors.ts's busForRifff, which needs a bus that's always resolved
- * (defaulting unassigned stems to aux) for its own row-grouping tie-break.
+ * at selectors.ts's categoryForRifff, which needs a bus that's always resolved
+ * (defaulting unassigned stems to back) for its own row-grouping tie-break.
  */
 export function stemDisplayColorVar(stem: Stem | undefined, bus: BusId | undefined): string {
   if (stem?.recordedInApp) return 'var(--ra-recording-live)'
@@ -69,30 +70,20 @@ export function stemDisplayColorVar(stem: Stem | undefined, bus: BusId | undefin
  * so an unavoidable guess at least stays inside this app's own palette
  * instead of introducing a new hue from nowhere.
  *
- * aux was ORIGINALLY a neutral cool grey (#8a97a3, "the app's own
- * border/ink family") -- per direct feedback this read as visually
- * indistinguishable from a fully-muted clip's own grey (StemWaveformRow's
- * always-visible `--ra-text-3` layer, revealed once the full-color layer
- * on top is suppressed by mute), making it genuinely hard to tell "is
- * this just an untidied/aux stem, or is it muted?" at a glance. Replaced
- * (2026-09-01) with a warm taupe/sand instead -- still reads as "neutral,
- * no strong category" (unlike the other four bus colors, which are all
- * clearly saturated hues), but its warm cast keeps it visually distinct
- * from every grey already in use (both --ra-text-3's muted-state grey and
- * the app's own cool near-black chrome).
+ * Colour goes by category (stemCategory.ts): aux reads as back, so its old taupe swatch
+ * (2026-09-01) is retired.
  *
  * Literal hex, not a tokens.css var -- unlike typeColorVar's stem-type
  * palette, this is a narrow, single-purpose mapping with no other
  * consumer to keep in sync.
  */
-const BUS_COLOR_HEX: Record<BusId, string> = {
+const CATEGORY_COLOR_HEX: Record<StemCategory, string> = {
   drums: '#e8929b',
   bass: '#4a56ad',
-  lead: '#c7a4d2',
-  backing: '#7fc98a',
-  aux: '#a3937a'
+  front: '#c7a4d2',
+  back: '#7fc98a'
 }
 
 export function busColorHex(bus: BusId): string {
-  return BUS_COLOR_HEX[bus]
+  return CATEGORY_COLOR_HEX[categoryOfBus(bus)]
 }

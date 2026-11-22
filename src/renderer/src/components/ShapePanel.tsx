@@ -60,7 +60,8 @@ import type { Rifff, ShapeClipProcessV1, ShapeSourceStem, Stem } from '@shared/t
 import {
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
-  isTraitSlotKind,
+  DISCOVER_TRAIT_SLOT_KINDS,
+  rankKindsOf,
   slotKindsLabel,
   type DiscoverSlotKind
 } from '@shared/discoverSlotKind'
@@ -3686,7 +3687,7 @@ export function ShapePanel({
           await window.rifffApi.getDiscoverCandidates(kinds, false, undefined, source),
           {
             targetBpm,
-            targetTraits: kinds.filter(isTraitSlotKind)
+            targetTraits: rankKindsOf(kinds)
           }
         )
         while (pool.length > 0) {
@@ -4515,7 +4516,7 @@ export function ShapePanel({
             </span>
             {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => (
               <Fragment key={kind}>
-                {kind === 'bassHeavy' && (
+                {kind === DISCOVER_TRAIT_SLOT_KINDS[0] && (
                   <span style={{ width: 1, height: 18, background: 'var(--ra-border)' }} />
                 )}
                 <button

@@ -121,7 +121,7 @@ describe('stepRadioFold hurry', () => {
       row('perc'),
       row('clap', { barLength: 4 }),
       row('shaker', { barLength: 4 }),
-      row('lead', { kinds: ['lead'], barLength: 4 })
+      row('lead', { kinds: ['front'], barLength: 4 })
     ]
     const out: string[] = []
     for (const seed of ['autech', 'k3x9pq', 'elling'])

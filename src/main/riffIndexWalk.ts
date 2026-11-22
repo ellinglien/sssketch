@@ -71,6 +71,8 @@ interface RiffRow {
   OwnerJamCID: string
   BPMrnd: number
   CreationTime: number | null
+  Root: number | null
+  Scale: number | null
   StemCID_1: string | null
   StemCID_2: string | null
   StemCID_3: string | null
@@ -81,7 +83,7 @@ interface RiffRow {
   StemCID_8: string | null
 }
 
-const RIFF_COLUMNS = `rowid AS RowId, RiffCID, OwnerJamCID, BPMrnd, CreationTime,
+const RIFF_COLUMNS = `rowid AS RowId, RiffCID, OwnerJamCID, BPMrnd, CreationTime, Root, Scale,
   StemCID_1, StemCID_2, StemCID_3, StemCID_4, StemCID_5, StemCID_6, StemCID_7, StemCID_8`
 
 function yieldToEventLoop(): Promise<void> {
@@ -130,7 +132,9 @@ function applyRiff(
       riffCID: riff.RiffCID,
       ownerJamCID: riff.OwnerJamCID,
       bpmRnd: riff.BPMrnd,
-      creationTime: riff.CreationTime
+      creationTime: riff.CreationTime,
+      root: riff.Root,
+      scale: riff.Scale
     }
     state.index.set(stemCID, entry)
     acc.changed.set(stemCID, entry)

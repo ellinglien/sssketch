@@ -132,10 +132,10 @@ describe('ARRANGE_ROLE_TO_BUS', () => {
     expect(ARRANGE_ROLE_TO_BUS.aux).toBe('aux')
   })
 
-  it('maps the 3 bus-less arrangeRole values to aux', () => {
-    expect(ARRANGE_ROLE_TO_BUS.textureFx).toBe('aux')
-    expect(ARRANGE_ROLE_TO_BUS.fill).toBe('aux')
-    expect(ARRANGE_ROLE_TO_BUS.vocal).toBe('aux')
+  it('maps the 3 bus-less arrangeRole values to a bus of their own category', () => {
+    expect(ARRANGE_ROLE_TO_BUS.textureFx).toBe('backing')
+    expect(ARRANGE_ROLE_TO_BUS.fill).toBe('drums')
+    expect(ARRANGE_ROLE_TO_BUS.vocal).toBe('lead')
   })
 })
 
@@ -168,5 +168,13 @@ describe('engineRoleFor', () => {
     // never silently read a stale sub-role left over from a prior role
     // switch as if it still applied to some other role.
     expect(engineRoleFor(roleInfo({ arrangeRole: 'bass', drumSubRole: 'kick' }))).toBe('bass')
+  })
+
+  it('compares categories, keeping drum sub-roles apart', () => {
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'aux' }))).toBe('back')
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'textureFx' }))).toBe('back')
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'vocal' }))).toBe('front')
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'fill' }))).toBe('drums')
+    expect(engineRoleFor(roleInfo({ arrangeRole: 'drums', drumSubRole: 'kick' }))).toBe('kick')
   })
 })

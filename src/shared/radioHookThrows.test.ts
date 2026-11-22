@@ -36,7 +36,7 @@ describe('the exit throw', () => {
       nextBeat: Math.ceil(now * 2 + 1e-9) / 2,
       held: false,
       leadingArmed: false,
-      rows: [{ slot: 'l', kinds: ['lead'], audible: true }]
+      rows: [{ slot: 'l', kinds: ['front'], audible: true }]
     })
     // a clock overdue for a throw
     const random = seededRandom('t')

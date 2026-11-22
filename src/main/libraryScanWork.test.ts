@@ -95,11 +95,10 @@ function ownDb(): Database.Database {
       StemCID TEXT PRIMARY KEY, EmbeddingJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
     );
     CREATE TABLE Stems (StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, Instrument INTEGER);
-    CREATE TABLE StemYamnetZeroShotAttempted (StemCID TEXT PRIMARY KEY, AttemptedAt INTEGER NOT NULL);
     CREATE TABLE StemCategories (StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, UpdatedAt INTEGER);
     CREATE TABLE StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
-      ComputedAt INTEGER NOT NULL
+      ComputedAt INTEGER NOT NULL, FrontScore REAL
     );
   `)
   return db
@@ -180,7 +179,8 @@ function fixture(): { own: Database.Database; jams: Jams; src1: Database.Databas
   // a 0-byte file with a stale feature row: analysed before, never stat-ed
   analyse(own, 'b5zerostale', { features: V1 })
   putFile('jamA', 'b5zerostale', 0)
-  // zero-shot pending: every row current, own Stems row, never attempted
+  // once analysed with an embedding (every row current, own Stems row):
+  // no work since 2026-11-14, the model places every embedded stem
   analyse(own, 'c1zeroshot', {})
   own.prepare(`INSERT INTO Stems VALUES ('c1zeroshot', 'jamA', NULL)`).run()
   putFile('jamA', 'c1zeroshot')
@@ -238,7 +238,7 @@ function asMap(work: { key: string; path: string }[]): Map<string, string> {
 }
 
 describe('listLibraryScanWork (background scan audit 3)', () => {
-  it('with no YAMNet model, a missing embedding or zero-shot is not work (audit B3)', async () => {
+  it('with no YAMNet model, a missing embedding is not work (audit B3)', async () => {
     const { own, jams } = fixture()
     // analysed but for the embedding, on disk: with no model, nothing to do
     analyse(own, 'f1noembed', { embedding: false })
@@ -247,7 +247,7 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
 
     const withModel = asMap((await listLibraryScanWork(jams, own)).work)
     expect(withModel.has('f1noembed')).toBe(true)
-    expect(withModel.has('c1zeroshot')).toBe(true)
+    expect(withModel.has('c1zeroshot')).toBe(false)
 
     const result = await listLibraryScanWork(jams, own, { yamnetAvailable: false })
     const work = asMap(result.work)
@@ -273,7 +273,6 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
         'b1peaks',
         'b2never',
         'b5zerostale',
-        'c1zeroshot',
         'c2twojams',
         'd2laterdb',
         'd3src2only'

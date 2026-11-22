@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { DEFAULT_RADIO_SETTINGS } from '@shared/radioSchedule'
+import { EMPTY_HELD_STEMS } from '@shared/heldStems'
 
 const FOLD_SEED = /^[abcdefghjkmnpqrstuvwxyz23456789]{6}$/
 
@@ -28,7 +29,8 @@ describe('discoverSettingsStore', () => {
       consentedToLibraryScan: false,
       traitMatchBar: 0.75,
       radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) },
-      radioView: 'simple'
+      radioView: 'simple',
+      heldStems: EMPTY_HELD_STEMS
     })
   })
 
@@ -96,13 +98,15 @@ describe('discoverSettingsStore', () => {
       consentedToLibraryScan: true,
       traitMatchBar: 0.75,
       radio: DEFAULT_RADIO_SETTINGS,
-      radioView: 'simple'
+      radioView: 'simple',
+      heldStems: EMPTY_HELD_STEMS
     })
     expect(loadDiscoverSettings()).toEqual({
       consentedToLibraryScan: true,
       traitMatchBar: 0.75,
       radio: DEFAULT_RADIO_SETTINGS,
-      radioView: 'simple'
+      radioView: 'simple',
+      heldStems: EMPTY_HELD_STEMS
     })
   })
 
@@ -112,7 +116,8 @@ describe('discoverSettingsStore', () => {
       consentedToLibraryScan: true,
       traitMatchBar: 0.75,
       radio: DEFAULT_RADIO_SETTINGS,
-      radioView: 'simple'
+      radioView: 'simple',
+      heldStems: EMPTY_HELD_STEMS
     })
     writeFileSync(join(dir, 'discoverSettings.json'), 'not valid json{{{', 'utf-8')
     expect(() => loadDiscoverSettings()).not.toThrow()
@@ -120,7 +125,8 @@ describe('discoverSettingsStore', () => {
       consentedToLibraryScan: false,
       traitMatchBar: 0.75,
       radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) },
-      radioView: 'simple'
+      radioView: 'simple',
+      heldStems: EMPTY_HELD_STEMS
     })
   })
 
@@ -130,14 +136,16 @@ describe('discoverSettingsStore', () => {
       consentedToLibraryScan: true,
       traitMatchBar: 0.9,
       radio: DEFAULT_RADIO_SETTINGS,
-      radioView: 'simple'
+      radioView: 'simple',
+      heldStems: EMPTY_HELD_STEMS
     })
     expect(loadDiscoverSettings().traitMatchBar).toBe(0.9)
     saveDiscoverSettings({
       consentedToLibraryScan: true,
       traitMatchBar: 0.33,
       radio: DEFAULT_RADIO_SETTINGS,
-      radioView: 'simple'
+      radioView: 'simple',
+      heldStems: EMPTY_HELD_STEMS
     })
     expect(loadDiscoverSettings().traitMatchBar).toBe(0.75)
   })
@@ -170,7 +178,8 @@ describe('discoverSettingsStore', () => {
         drama: 85,
         source: 30
       },
-      radioView: 'advanced'
+      radioView: 'advanced',
+      heldStems: EMPTY_HELD_STEMS
     })
     expect(loadDiscoverSettings().radioView).toBe('advanced')
     expect(loadDiscoverSettings().radio).toEqual({
@@ -324,7 +333,40 @@ describe('discoverSettingsStore', () => {
         foldSeed: expect.stringMatching(FOLD_SEED),
         source: 95
       },
-      radioView: 'simple'
+      radioView: 'simple',
+      heldStems: EMPTY_HELD_STEMS
     })
+  })
+})
+
+describe('discoverSettingsStore: held stems', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'discover-settings-held-'))
+    const { app } = await import('electron')
+    vi.mocked(app.getPath).mockReturnValue(dir)
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    vi.resetModules()
+  })
+
+  it('nine empty slots for a file without them or with nonsense', async () => {
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    writeFileSync(join(dir, 'discoverSettings.json'), JSON.stringify({ heldStems: 'x' }), 'utf-8')
+    expect(loadDiscoverSettings().heldStems).toEqual(EMPTY_HELD_STEMS)
+  })
+
+  it('a saved stem comes back in its slot', async () => {
+    const { loadDiscoverSettings, saveDiscoverSettings } = await import('./discoverSettingsStore')
+    const stem = { stemCID: 's1', jamCID: 'j', riffCID: 'r', riffBpm: 120, presetName: 'kit' }
+    const held = EMPTY_HELD_STEMS.map((s, i) => (i === 3 ? stem : s))
+    saveDiscoverSettings({ ...loadDiscoverSettings(), heldStems: held as never })
+    const loaded = loadDiscoverSettings().heldStems
+    expect(loaded).toHaveLength(9)
+    expect(loaded[3]).toMatchObject(stem)
+    expect(loaded.filter((s) => s !== null)).toHaveLength(1)
   })
 })

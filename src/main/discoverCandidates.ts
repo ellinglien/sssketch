@@ -1,6 +1,8 @@
 // src/main/discoverCandidates.ts
+import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 import type Database from 'better-sqlite3'
-import { type DrumSubRole } from '@shared/stemRole'
+import { ARRANGE_ROLE_OPTIONS, type ArrangeRole, type DrumSubRole } from '@shared/stemRole'
+import { categoryOfRole, rolesInCategory } from '@shared/stemCategory'
 import {
   instrumentMaskToSoundType,
   soundSourceMatchesFilter,
@@ -9,6 +11,7 @@ import {
 import {
   DISCOVER_MASK_SLOT_KINDS,
   discoverSlotKindToArrangeRole,
+  isDialKind,
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
@@ -23,14 +26,26 @@ import {
   type TraitFieldValues,
   type TraitValues
 } from '@shared/discoverTraits'
-import { traitPercentilesFromValues } from '@shared/traitQuantiles'
+import { traitPercentilesFromValues, valueAtPercentile } from '@shared/traitQuantiles'
+import {
+  ARRIVAL_TARGET_FALLBACK_LUFS,
+  ARRIVAL_TARGET_PERCENTILE,
+  arrivalGain
+} from '@shared/stemLevel'
 import {
   INTENSITY_INPUT_FIELDS,
   stemIntensityScore,
+  stemPresence,
   type IntensityValues
 } from '@shared/radioIntensity'
-import { getTraitQuantileTables, getTraitValueTable } from './traitQuantileCache'
+import {
+  getTraitQuantileTables,
+  getTraitValueTable,
+  type TraitValueTable
+} from './traitQuantileCache'
 import { countWork } from './workCounters'
+import { getFrontScores } from './frontScoreCache'
+import { dialFor, withDial } from '@shared/stemCategoryDial'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
   invalidateRiffIndexCache,
@@ -280,6 +295,9 @@ export interface RiffIndexEntry {
   ownerJamCID: string
   bpmRnd: number
   creationTime: number | null
+  /** The riff's key as stored (Riffs.Root, Riffs.Scale); null when it has none. */
+  root: number | null
+  scale: number | null
 }
 
 // `walk` holds what an extension needs (open riffs, rowid watermark --
@@ -1050,7 +1068,7 @@ async function buildInstrumentRows(
  * clause -- the role filter only ever happens in JS, after the fetch) used
  * to be re-run from scratch for EVERY ArrangeRole not yet cached, even
  * though every role reads the exact same rows -- only the JS-side bitmask
- * check differs. Rolling 'drums' then 'bass' then 'lead' in the same
+ * check differs. Rolling 'drums' then 'bass' then 'front' in the same
  * session each independently paid a real ~6.5s cold scan against the
  * external archive for identical data. Caching the raw rows here (fast
  * per-role JS filtering happens fresh every call in
@@ -1155,33 +1173,36 @@ function yieldToEventLoop(): Promise<void> {
  * pool by the Endlesss mask or the overnight classifier -- mapped to its
  * own raw instrument mask (Stems.Instrument, null when unset) so the
  * caller can apply the endlesss/non-endlesss sound-source filter. Also
- * records the mask of every stem confirmed (StemCategories) for `kind`'s
- * own role that the walk passes, for the same reason -- the caller adds
+ * records the mask of every stem confirmed (StemCategories) for a role in
+ * `kind`'s category that the walk passes, for the same reason -- the caller adds
  * those stems to the pool itself.
  *
  * A stem confirmed for ANY ArrangeRole is never admitted here -- a real
- * human confirmation always wins (confirmed for a different role excludes
- * it, confirmed for this role is the caller's own source). Otherwise:
+ * human confirmation always wins (confirmed for another category excludes
+ * it, confirmed for this one is the caller's own source). Otherwise:
  *
  * - Endlesss instrument mask (instrumentMaskToSoundType) resolving to
- *   drums/bass/notes: ground truth Endlesss itself recorded at jam time
+ *   drums/bass: ground truth Endlesss itself recorded at jam time
  *   ("traced directly from OUROVEON's own source, not guessed"), present on
  *   every synced stem the moment it syncs -- direct request 2026-09-15:
  *   "can't we train it with some basic data before handing it to someone?"
  *   The mask decides alone; an auto guess never moves such a stem to
- *   another kind.
- * - A stem the mask CAN'T place (Instrument null, no recognised bit, or
- *   audio-in): admitted if the overnight classify scan's own precomputed
- *   guess (StemAutoCategory, on ownDb) is `kind`'s role. That classifier
+ *   another kind. The notes tag says "melodic", not back or front
+ *   (2026-11-14, four categories): it goes to the guess layer below, and
+ *   with no guess row it admits the stem to both back and front as 'tag'.
+ * - A stem the mask CAN'T place (Instrument null, no recognised bit, notes,
+ *   or audio-in): admitted if the overnight classify scan's own precomputed
+ *   guess (StemAutoCategory, on ownDb) is in `kind`'s category, where a
+ *   back or front guess admits the stem to both back and front. That classifier
  *   was dropped for mask kinds on 2026-09-18 (the Discover trait-based
  *   matching redesign stopped trusting it for anything the mask answers
  *   directly), and is back as of 2026-09-22 -- direct request: audio-in/mic
- *   stems never appeared under drums/bass/lead, since the mask has no
+ *   stems never appeared under the mask kinds, since the mask has no
  *   answer for them at all. Scoped to exactly those stems, so the mask
  *   stays authoritative wherever it has something to say.
  *
  * Background efficiency B2: the admission rule above is applied ONCE per
- * db, for all three mask kinds in one pass over its cached instrument rows
+ * db, for all four mask kinds in one pass over its cached instrument rows
  * (getMaskKindIndex, below), and reused by every roll until those rows are
  * rebuilt or the classification tables change -- a roll then only filters
  * the kind's own admitted list by the caller's jams (still keeping the
@@ -1275,7 +1296,7 @@ interface MaskKindList {
  *   cached array (a rebuilt or extended instrument-row cache is a new
  *   array) and the confirmed signature hasn't moved;
  * - the GUESS layer (`guess.byKind`): residue rows whose overnight guess is
- *   the kind's role, rebuilt from the residue alone when only
+ *   in the kind's category (back and front share one), rebuilt from the residue alone when only
  *   StemAutoCategory moved, at most once per GUESS_LAYER_MIN_MS. Guesses
  *   only ever add `guess` admissions for stems nothing else places, so a
  *   guess up to 10 s late in a pool is acceptable (decision 13);
@@ -1297,7 +1318,7 @@ interface GuessLayer {
 }
 
 /** The guess layer is rebuilt at most this often while StemAutoCategory
- * keeps moving (the classifier and zero-shot write about once a second
+ * keeps moving (the classifier writes about once a second
  * while they have work). */
 export const GUESS_LAYER_MIN_MS = 10_000
 
@@ -1409,10 +1430,11 @@ async function getMaskKindIndex(
   return promise
 }
 
-function kindByRole(): Map<string, DiscoverMaskKind> {
-  return new Map<string, DiscoverMaskKind>(
-    DISCOVER_MASK_SLOT_KINDS.map((k) => [discoverSlotKindToArrangeRole(k), k as DiscoverMaskKind])
-  )
+/** A stored role's category, or undefined for a value that isn't a role. */
+function categoryOfStoredRole(role: string | undefined): DiscoverMaskKind | undefined {
+  return role !== undefined && (ARRANGE_ROLE_OPTIONS as string[]).includes(role)
+    ? categoryOfRole(role as ArrangeRole)
+    : undefined
 }
 
 function emptyKindLists(): Map<DiscoverMaskKind, MaskKindList> {
@@ -1421,12 +1443,13 @@ function emptyKindLists(): Map<DiscoverMaskKind, MaskKindList> {
   )
 }
 
-/** The base layer: one pass over `rows` for all three mask kinds.
+/** The base layer: one pass over `rows` for all four mask kinds.
  * StemCategories is read ONLY from ownDb (an external archive never has it
  * -- see getMaskDiscoverCandidates's own CRITICAL note). A stem confirmed
- * for any role is admitted only to that role's kind ('confirmed');
- * otherwise a mask that places it decides alone ('tag'); otherwise it is
- * residue, for the guess layer. `.all()`, never `.iterate()` across the
+ * for any role is admitted only to that role's category ('confirmed');
+ * otherwise a drums/bass mask decides alone ('tag'); otherwise (the notes
+ * tag included: it says "melodic", not back or front) it is residue, for
+ * the guess layer. `.all()`, never `.iterate()` across the
  * awaits below. */
 async function buildMaskKindIndex(
   rows: InstrumentRow[],
@@ -1441,7 +1464,6 @@ async function buildMaskKindIndex(
         .all() as { StemCID: string; ArrangeRole: string }[]
     ).map((r) => [r.StemCID, r.ArrangeRole])
   )
-  const roles = kindByRole()
   const byKind = emptyKindLists()
   const residue: InstrumentRow[] = []
   const admit = (
@@ -1461,14 +1483,12 @@ async function buildMaskKindIndex(
   for (const row of rows) {
     const confirmedRole = confirmedRoleByStemCID.get(row.StemCID)
     if (confirmedRole !== undefined) {
-      // Confirmed for a mask kind's role: that kind's own source.
-      // Confirmed for any other role: excluded from every mask kind.
-      admit(roles.get(confirmedRole), row, 'confirmed')
+      // Confirmed: its category's kind only, excluded from the other three.
+      admit(categoryOfStoredRole(confirmedRole), row, 'confirmed')
     } else {
       const soundType = row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
       if (soundType === 'drums') admit('drums', row, 'tag')
       else if (soundType === 'bass') admit('bass', row, 'tag')
-      else if (soundType === 'notes') admit('lead', row, 'tag')
       else residue.push(row)
     }
     sinceYield += 1
@@ -1487,9 +1507,14 @@ async function buildMaskKindIndex(
   }
 }
 
-/** The guess layer: the residue rows whose overnight guess
- * (StemAutoCategory) is a mask kind's role -- a fresh read of that table
- * and one pass over the residue only. */
+/** The guess layer: the residue rows with an overnight guess
+ * (StemAutoCategory) -- a fresh read of that table and one pass over the
+ * residue only. A drums or bass guess admits that kind; a back or front
+ * guess admits BOTH back and front (the dial ranks it). A notes-tagged row
+ * with no guess row admits both back and front as 'tag': melodic, side
+ * undecided, and without it a library with no guesses (no scan consent)
+ * would have no back or front at all. It lives here, not in the base,
+ * because a guess row arriving later replaces it. */
 async function buildGuessLayer(
   residue: InstrumentRow[],
   ownDb: Database.Database,
@@ -1498,22 +1523,38 @@ async function buildGuessLayer(
   countWork('sql:discover.kind-index-build')
   const autoRoleByStemCID = new Map(
     (
-      ownDb.prepare(`SELECT StemCID, ArrangeRole FROM StemAutoCategory`).all() as {
+      ownDb
+        .prepare(
+          `SELECT a.StemCID, a.ArrangeRole FROM StemAutoCategory a WHERE ${PLACED_AUTO_CATEGORY_SQL}`
+        )
+        .all() as {
         StemCID: string
         ArrangeRole: string
       }[]
     ).map((r) => [r.StemCID, r.ArrangeRole])
   )
-  const roles = kindByRole()
   const byKind = emptyKindLists()
   let sinceYield = 0
   const slice = newSlice()
   for (const row of residue) {
-    const kind = roles.get(autoRoleByStemCID.get(row.StemCID) ?? '')
-    if (kind) {
+    const autoRole = autoRoleByStemCID.get(row.StemCID)
+    const guessed = categoryOfStoredRole(autoRole)
+    // A notes stem with no guess row yet: melodic, side undecided, so both by its tag.
+    const notesOnly =
+      autoRole === undefined &&
+      row.Instrument !== null &&
+      instrumentMaskToSoundType(row.Instrument) === 'notes'
+    const kinds: DiscoverMaskKind[] =
+      guessed === 'back' || guessed === 'front' || notesOnly
+        ? ['back', 'front']
+        : guessed
+          ? [guessed]
+          : []
+    const source: DiscoverKindSource = notesOnly ? 'tag' : 'guess'
+    for (const kind of kinds) {
       const list = byKind.get(kind)!
       list.rows.push(row)
-      list.sources.push('guess')
+      list.sources.push(source)
     }
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
@@ -1526,7 +1567,7 @@ async function buildGuessLayer(
 
 /** Combination slots (docs/superpowers/specs/2026-09-21-discover-combo-
  * slot-kinds-design.md) -- ONE rule for every kind set: mask kinds
- * (drums/bass/lead) OR together, each drawing from human confirmation, the
+ * (the four categories) OR together, each drawing from human confirmation, the
  * Endlesss instrument mask, and -- for stems the mask can't place -- the
  * overnight classifier (getMaskKindStemMasks); a trait-only set draws from
  * every stem with cached features (tagged or not). The endlesss/
@@ -1535,7 +1576,7 @@ async function buildGuessLayer(
  * endlesss = sounds made with Endlesss instruments/effects (an unmasked
  * stem counts here), non-endlesss = audio-in/mic. Direct request,
  * 2026-09-22: mask kinds used to return nothing while "endlesss" was off,
- * so audio-in/mic stems could never appear under drums/bass/lead. Trait
+ * so audio-in/mic stems could never appear under the mask kinds. Trait
  * kinds never filter -- they only attach traitValues for rankCandidates to
  * rank by, in the renderer. The per-stem twin of this rule is
  * stemMatchesSlotKinds (@shared/discoverTraits). */
@@ -1589,7 +1630,8 @@ export async function getDiscoverCandidates({
     alsoTraits,
     scope: { ownStemsOf }
   })
-  return alsoIntensity ? attachDiscoverIntensity(ownDb, pool) : pool
+  const levelled = await attachLevelAndPresence(ownDb, pool)
+  return alsoIntensity ? attachDiscoverIntensity(ownDb, levelled) : levelled
 }
 
 async function getDiscoverCandidatesPool({
@@ -1672,9 +1714,30 @@ async function getDiscoverCandidatesPool({
       pool.push({ ...candidate, slotKinds: normalized })
     }
   }
-  return valueKinds.length > 0
-    ? attachTraitPercentiles(ownDb, attachTraitValues(ownDb, pool, valueKinds))
-    : pool
+  const withTraits =
+    valueKinds.length > 0
+      ? await attachTraitPercentiles(ownDb, attachTraitValues(ownDb, pool, valueKinds))
+      : pool
+  // After attachTraitPercentiles, which replaces traitPercentiles wholesale.
+  return attachDiscoverDial(ownDb, withTraits, normalized)
+}
+
+/** The front/back dial (@shared/stemCategoryDial) on every candidate, for kind sets that rank by
+ * it (rankKindsOf): a label at its end, a guess at its FrontScore's library percentile. Same
+ * order, same length; a set with no dial kind returns the pool as it is. */
+export function attachDiscoverDial(
+  ownDb: Database.Database,
+  pool: DiscoverCandidate[],
+  kinds: readonly DiscoverSlotKind[]
+): DiscoverCandidate[] {
+  if (pool.length === 0 || !kinds.some(isDialKind)) return pool
+  const { byStemCID, table } = getFrontScores(ownDb)
+  return pool.map((c) =>
+    withDial(
+      c,
+      dialFor({ kindSources: c.kindSources, frontScore: byStemCID.get(c.stemCID), table })
+    )
+  )
 }
 
 /** Trait values for `kinds` (attachTraitValues) and their library percentiles
@@ -1723,35 +1786,89 @@ export async function attachDiscoverIntensity(
   return out
 }
 
+/** The gain each candidate's row should arrive at and the candidate's presence (spec
+ * 2026-11-21-picking-key-level-groove-design 2 and 3), for EVERY roll and for the adjacency walk
+ * (discoverAdjacency.ts). The gain: arrivalGain of the stem's loudness against the library's
+ * quieter quarter (ARRIVAL_TARGET_PERCENTILE of the loudnessLufs quantile table; no table yet:
+ * ARRIVAL_TARGET_FALLBACK_LUFS), set only when below 1. The presence: stemPresence over the same
+ * values and tables, set only when known.
+ *
+ * It reads the in-memory value table ONLY. While that table isn't current (before the startup
+ * prewarm, or after it lost track of the feature rows) the pool is returned as it is and rows
+ * arrive at 1 with no presence, as before: attachDiscoverIntensity's SQL fallback would put a chunked read and a
+ * JSON parse of every candidate's feature row, on a library that is often on a USB drive, into
+ * every roll. Same order, same length; yields like attachTraitPercentiles. */
+export async function attachLevelAndPresence<C extends DiscoverCandidate>(
+  ownDb: Database.Database,
+  pool: C[]
+): Promise<C[]> {
+  if (pool.length === 0) return pool
+  const table = getTraitValueTable(ownDb)
+  if (!table) return pool
+  const tables = await getTraitQuantileTables(ownDb)
+  const target =
+    valueAtPercentile(tables.loudnessLufs, ARRIVAL_TARGET_PERCENTILE) ??
+    ARRIVAL_TARGET_FALLBACK_LUFS
+  const valuesOf = valueTableIntensitySource(table)
+  const out: C[] = []
+  let sinceYield = 0
+  const slice = newSlice()
+  for (const c of pool) {
+    const values = valuesOf(c.stemCID)
+    const gain = arrivalGain(values?.loudnessLufs, target)
+    const presence = values === null ? null : stemPresence(values, tables)
+    out.push(
+      gain < 1 || presence !== null
+        ? { ...c, ...(gain < 1 && { arrivalGain: gain }), ...(presence !== null && { presence }) }
+        : c
+    )
+    sinceYield += 1
+    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+      sinceYield = 0
+      await yieldIfSliceSpent(slice)
+    }
+  }
+  return out
+}
+
+/** A feature row's intensity inputs (the finite ones). */
+function pickIntensityValues(f: Record<string, unknown>): IntensityValues {
+  const v: IntensityValues = {}
+  for (const field of INTENSITY_INPUT_FIELDS) {
+    const x = f[field]
+    if (typeof x === 'number' && Number.isFinite(x)) v[field] = x
+  }
+  return v
+}
+
+/** Each stem's intensity inputs from the in-memory value table. Null: no row. */
+function valueTableIntensitySource(
+  table: TraitValueTable
+): (stemCID: string) => IntensityValues | null {
+  return (stemCID) => {
+    const row = table.rowOf(stemCID)
+    return row === undefined
+      ? null
+      : pickIntensityValues(table.features(row) as unknown as Record<string, unknown>)
+  }
+}
+
 /** Each stem's intensity inputs: from the value table when it is current, else read from ownDb's
  * StemFeatureCache (chunked, as attachTraitValues' fallback). Null: no (parseable) row. */
 function intensityValueSource(
   ownDb: Database.Database,
   stemCIDs: readonly string[]
 ): (stemCID: string) => IntensityValues | null {
-  const pick = (f: Record<string, unknown>): IntensityValues => {
-    const v: IntensityValues = {}
-    for (const field of INTENSITY_INPUT_FIELDS) {
-      const x = f[field]
-      if (typeof x === 'number' && Number.isFinite(x)) v[field] = x
-    }
-    return v
-  }
   const table = getTraitValueTable(ownDb)
-  if (table) {
-    return (stemCID) => {
-      const row = table.rowOf(stemCID)
-      return row === undefined
-        ? null
-        : pick(table.features(row) as unknown as Record<string, unknown>)
-    }
-  }
+  if (table) return valueTableIntensitySource(table)
   const rows = featureRowsByStemCID(ownDb, stemCIDs)
   return (stemCID) => {
     const f = rows.get(stemCID)
     // A row that parses to something other than an object reads as no row (as the value table's
     // build leaves it out).
-    return f && typeof f === 'object' ? pick(f as unknown as Record<string, unknown>) : null
+    return f && typeof f === 'object'
+      ? pickIntensityValues(f as unknown as Record<string, unknown>)
+      : null
   }
 }
 
@@ -1864,7 +1981,7 @@ function attachTraitValues(
 }
 
 /** Every stem, library-wide, that's a candidate for the given MASK
- * DiscoverSlotKind (drums/bass/lead) -- the data source
+ * DiscoverSlotKind (drums/bass/back/front) -- the data source
  * getDiscoverCandidates (below) samples from for a set's mask kinds. Called
  * once per mask kind in the set and unioned there -- see
  * getDiscoverCandidates's own doc comment for the full combination-slot
@@ -1884,7 +2001,8 @@ function attachTraitValues(
  * "SqliteError: no such table" crash in getConfirmedEmbeddings). Never
  * repeat that mistake here.
  *
- * SCAN DIRECTION: starts from StemCategories WHERE ArrangeRole = ? on ownDb
+ * SCAN DIRECTION: starts from StemCategories WHERE ArrangeRole IN (the
+ * category's roles) on ownDb
  * FIRST -- that table holds only human-confirmed rows (a few hundred, real
  * production scale) -- and only then looks up those specific StemCIDs'
  * owning riffs/stem rows per jam. This is the inverse of the naive "walk
@@ -1907,9 +2025,9 @@ function attachTraitValues(
  * NARROWED (2026-09-18), then RE-WIDENED (2026-09-22): the background
  * classify scan's own precomputed guesses (StemAutoCategory) were dropped
  * for mask kinds in the Discover trait-based matching redesign, and are
- * back -- but ONLY for stems the Endlesss mask can't place (no mask, or
- * audio-in), per direct request (audio-in/mic stems never appeared under
- * drums/bass/lead). See getMaskKindStemMasks's own doc comment.
+ * back -- but ONLY for stems the Endlesss mask can't place (no mask, notes,
+ * or audio-in), per direct request (audio-in/mic stems never appeared under
+ * the mask kinds). See getMaskKindStemMasks's own doc comment.
  *
  * SOUND SOURCE (2026-09-22): every pooled stem is filtered by its own
  * instrument mask (soundSourceMatchesFilter) before sampling -- a
@@ -1934,23 +2052,30 @@ async function getMaskDiscoverCandidates({
   artistStemCIDs?: ReadonlySet<string>
   scope?: IndexScope
 }): Promise<DiscoverCandidate[]> {
-  // Human-confirmed StemCategories rows for this exact ArrangeRole still
-  // win outright -- a real confirmation is trusted even over an ambiguous
-  // or missing mask bit. Reuses the SAME ArrangeRole column StemCategories
-  // has always had (untouched by this redesign) -- discoverSlotKindToArrangeRole
-  // gives the identity mapping for the 3 mask kinds.
+  // Human-confirmed StemCategories rows for any role in this kind's
+  // category (rolesInCategory) still win outright -- a real confirmation is
+  // trusted even over an ambiguous or missing mask bit. A tag or guess
+  // admission is given the category's representative role
+  // (discoverSlotKindToArrangeRole).
   //
   // No inner try/catch here (removed 2026-09-15, finding 1): StemCategories
   // on ownDb is guaranteed present by a real migration that runs on every
-  // app start, same established convention as embeddingMatch.ts's own
-  // getConfirmedEmbeddings. A real SQL error here (e.g. a typo) should
+  // app start, same established convention as the other
+  // own-db reads. A real SQL error here (e.g. a typo) should
   // throw, not silently produce an empty Discover pool with no diagnostic
   // trail.
   const arrangeRole = discoverSlotKindToArrangeRole(kind)
+  const categoryRoles = rolesInCategory(kind as DiscoverMaskKind)
   countWork('sql:discover.confirmed-role')
   const confirmedRows = ownDb
-    .prepare(`SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories WHERE ArrangeRole = ?`)
-    .all(arrangeRole) as { StemCID: string; ArrangeRole: string; DrumSubRole: string | null }[]
+    .prepare(
+      `SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories WHERE ArrangeRole IN (${categoryRoles.map(() => '?').join(',')})`
+    )
+    .all(...categoryRoles) as {
+    StemCID: string
+    ArrangeRole: string
+    DrumSubRole: string | null
+  }[]
 
   const categoryByStemCID = new Map(confirmedRows.map((row) => [row.StemCID, row]))
   // Every stem in categoryByStemCID at this point is human-confirmed.
@@ -2094,6 +2219,8 @@ async function getMaskDiscoverCandidates({
           slotKinds: [kind],
           drumSubRole: (category.DrumSubRole as DrumSubRole | null) ?? null,
           riffBpm: riffInfo.bpmRnd,
+          riffRoot: riffInfo.root,
+          riffScale: riffInfo.scale,
           traitValues: {},
           traitPercentiles: {},
           kindSources: { [kind as DiscoverMaskKind]: sourceByStemCID.get(stemCID) ?? 'confirmed' },
@@ -2445,6 +2572,8 @@ async function getTraitPoolCandidates({
       slotKinds: [...traitKinds],
       drumSubRole: null,
       riffBpm: riffInfo.bpmRnd,
+      riffRoot: riffInfo.root,
+      riffScale: riffInfo.scale,
       traitValues: entry.traitValues,
       traitFieldValues: entry.traitFieldValues,
       traitPercentiles: {},
@@ -2640,6 +2769,8 @@ export async function getRandomLibraryCandidate({
     kindSources: {},
     drumSubRole: null,
     riffBpm: riff.bpmRnd,
+    riffRoot: riff.root,
+    riffScale: riff.scale,
     riffCreationTime: riff.creationTime
   }
 }
@@ -2715,7 +2846,15 @@ async function getRandomOwnStemCandidate(
     )
     if (!stemRow) continue
 
-    let riffRow: { RiffCID: string; BPMrnd: number; CreationTime: number | null } | undefined
+    let riffRow:
+      | {
+          RiffCID: string
+          BPMrnd: number
+          CreationTime: number | null
+          Root: number | null
+          Scale: number | null
+        }
+      | undefined
     try {
       // The side table is part of the answer to "which riff contains this
       // stem", not an afterthought -- a kept group's twelfth stem is in no
@@ -2727,7 +2866,7 @@ async function getRandomOwnStemCandidate(
       const slotParams = Array<string>(extraClause ? 9 : 8).fill(stemRow.StemCID)
       riffRow = db
         .prepare(
-          `SELECT RiffCID, BPMrnd, CreationTime FROM Riffs WHERE OwnerJamCID = ? AND (
+          `SELECT RiffCID, BPMrnd, CreationTime, Root, Scale FROM Riffs WHERE OwnerJamCID = ? AND (
              StemCID_1 = ? OR StemCID_2 = ? OR StemCID_3 = ? OR StemCID_4 = ? OR
              StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?${extraClause}
            ) LIMIT 1`
@@ -2752,6 +2891,8 @@ async function getRandomOwnStemCandidate(
       kindSources: {},
       drumSubRole: null,
       riffBpm: riffRow.BPMrnd,
+      riffRoot: riffRow.Root,
+      riffScale: riffRow.Scale,
       riffCreationTime: riffRow.CreationTime
     }
   }

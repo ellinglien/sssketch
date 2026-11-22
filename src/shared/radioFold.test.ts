@@ -66,7 +66,7 @@ describe('the realignment window', () => {
 describe('the anchor and what may fold', () => {
   it('the anchor is the longest audible drums or bass row', () => {
     const rows = [
-      row('a', { kinds: ['lead'], barLength: 8 }),
+      row('a', { kinds: ['front'], barLength: 8 }),
       row('b', { kinds: ['drums'], barLength: 2 }),
       row('c', { kinds: ['bass'], barLength: 4 })
     ]
@@ -76,7 +76,7 @@ describe('the anchor and what may fold', () => {
   it('with no drums or bass row, the longest audible row', () => {
     expect(
       radioFoldAnchor([
-        row('a', { kinds: ['lead'], barLength: 4 }),
+        row('a', { kinds: ['front'], barLength: 4 }),
         row('b', { barLength: 8, audible: false }),
         row('c', { barLength: 2 })
       ])
@@ -86,7 +86,8 @@ describe('the anchor and what may fold', () => {
 
   it('never folds the anchor, a melodic, hooked, long, silent or empty row', () => {
     expect(radioFoldCanFold(row('a'), 'a')).toBe(false)
-    expect(radioFoldCanFold(row('a', { kinds: ['lead'] }), null)).toBe(false)
+    expect(radioFoldCanFold(row('a', { kinds: ['front'] }), null)).toBe(false)
+    expect(radioFoldCanFold(row('a', { kinds: ['rhythmic', 'front'] }), null)).toBe(false)
     expect(radioFoldCanFold(row('a', { kinds: ['rhythmic', 'bass'] }), null)).toBe(false)
     expect(radioFoldCanFold(row('a', { hooked: true }), null)).toBe(false)
     expect(radioFoldCanFold(row('a', { barLength: 8 }), null)).toBe(false)

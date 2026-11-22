@@ -1039,12 +1039,12 @@ export const DEFAULT_RADIO_CHANNELS = 4
 const RADIO_STARTER_ORDER: DiscoverSlotKind[] = [
   'drums',
   'bass',
-  'lead',
-  'warm',
+  'front',
+  'back',
   'drums',
   'bright',
   'rhythmic',
-  'lead'
+  'front'
 ]
 
 export function radioStarterKinds(channels: number): DiscoverSlotKind[] {

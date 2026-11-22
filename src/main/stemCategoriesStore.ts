@@ -5,8 +5,8 @@ import type { BusId, ProjectRef } from '@shared/types'
 import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import { sketchProjectPath } from './projectLibrary'
 import { countWork } from './workCounters'
+import { PLACED_AUTO_CATEGORY_SQL } from './stemAutoCategoryStore'
 import { bumpStemClassificationVersion } from './stemClassificationVersion'
-import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 
 /** Resolves a renderer-supplied ProjectRef into the real absolute path
  * StemCategories.SourceProject should carry -- a library-kind sketch is
@@ -109,8 +109,7 @@ function ensureBusStampColumn(db: Database.Database): void {
  * refused that project's bus for good (the backfill then stamped the project
  * complete). A row from then (BusUpdatedAt NULL) is still guarded by its
  * UpdatedAt if it holds a bus, which may be that new; a row with no bus takes
- * any. Training is not decided here: see recordStemCategoryBus
- * (categoryCentroidTraining.ts). */
+ * any. */
 export function upsertStemCategoryBus(
   db: Database.Database,
   entries: StemBusCategoryEntry[],
@@ -212,48 +211,6 @@ export function upsertStemCategoryRole(
   txn(entries)
   // Discover's precomputed per-kind stem lists read ArrangeRole.
   bumpStemClassificationVersion(db, 'confirmed')
-  // A confirmation changes the classifier's training and eligibility --
-  // its pending lists rebuild on the next batch (background efficiency B4).
-  noteAutoClassifyTrainingChanged()
-}
-
-export interface StemCategoryRow {
-  stemCID: string
-  arrangeRole: ArrangeRole | null
-  drumSubRole: DrumSubRole | null
-  busId: BusId | null
-  source: string
-  sourceProject: string | null
-  updatedAt: number
-}
-
-export function getStemCategory(db: Database.Database, stemCID: string): StemCategoryRow | null {
-  const row = db
-    .prepare(
-      `SELECT StemCID, ArrangeRole, DrumSubRole, BusId, Source, SourceProject, UpdatedAt
-       FROM StemCategories WHERE StemCID = ?`
-    )
-    .get(stemCID) as
-    | {
-        StemCID: string
-        ArrangeRole: string | null
-        DrumSubRole: string | null
-        BusId: string | null
-        Source: string
-        SourceProject: string | null
-        UpdatedAt: number
-      }
-    | undefined
-  if (!row) return null
-  return {
-    stemCID: row.StemCID,
-    arrangeRole: row.ArrangeRole as ArrangeRole | null,
-    drumSubRole: row.DrumSubRole as DrumSubRole | null,
-    busId: row.BusId as BusId | null,
-    source: row.Source,
-    sourceProject: row.SourceProject,
-    updatedAt: row.UpdatedAt
-  }
 }
 
 /** One path's confirmed role, as the renderer needs it. */
@@ -288,6 +245,63 @@ export function getStemCategoryRolesForPaths(
   extraCandidateDbs: Database.Database[] = []
 ): Record<string, StemRoleLookup> {
   const out: Record<string, StemRoleLookup> = {}
+  forEachPathRow(
+    db,
+    paths,
+    extraCandidateDbs,
+    'sql:stem-category-roles',
+    (placeholders) =>
+      `SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories
+       WHERE ArrangeRole IS NOT NULL AND StemCID IN (${placeholders})`,
+    (path, row: { ArrangeRole: string; DrumSubRole: string | null }) => {
+      out[path] = {
+        arrangeRole: row.ArrangeRole as ArrangeRole,
+        drumSubRole: row.DrumSubRole as DrumSubRole | null
+      }
+    }
+  )
+  return out
+}
+
+export interface StemGuessLookup {
+  arrangeRole: ArrangeRole
+  frontScore: number | null
+}
+
+/** The overnight classifier's stored guess (StemAutoCategory) for each path, keyed by path like
+ * getStemCategoryRolesForPaths: Tidy Up's and auto-arrange's suggestions read it. Only placed rows
+ * (PLACED_AUTO_CATEGORY_SQL), so an older app's leftover guess sharing the db is never suggested. */
+export function getStemCategoryGuessesForPaths(
+  db: Database.Database,
+  paths: string[],
+  extraCandidateDbs: Database.Database[] = []
+): Record<string, StemGuessLookup> {
+  const out: Record<string, StemGuessLookup> = {}
+  forEachPathRow(
+    db,
+    paths,
+    extraCandidateDbs,
+    'sql:stem-category-guesses',
+    (placeholders) =>
+      `SELECT a.StemCID, a.ArrangeRole, a.FrontScore FROM StemAutoCategory a
+       WHERE a.StemCID IN (${placeholders}) AND ${PLACED_AUTO_CATEGORY_SQL}`,
+    (path, row: { ArrangeRole: string; FrontScore: number | null }) => {
+      out[path] = { arrangeRole: row.ArrangeRole as ArrangeRole, frontScore: row.FrontScore }
+    }
+  )
+  return out
+}
+
+/** Resolves paths to StemCIDs, then runs `sql` (an IN-list over `placeholders`) per chunk and
+ * hands each row to `onRow` once per path that asked for its stem. */
+function forEachPathRow<Row>(
+  db: Database.Database,
+  paths: string[],
+  extraCandidateDbs: Database.Database[],
+  workKind: string,
+  sql: (placeholders: string) => string,
+  onRow: (path: string, row: Row) => void
+): void {
   const pathsByStemCID = new Map<string, string[]>()
   for (const path of paths) {
     const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
@@ -299,22 +313,12 @@ export function getStemCategoryRolesForPaths(
   const stemCIDs = [...pathsByStemCID.keys()]
   for (let start = 0; start < stemCIDs.length; start += ROLE_LOOKUP_CHUNK_SIZE) {
     const chunk = stemCIDs.slice(start, start + ROLE_LOOKUP_CHUNK_SIZE)
-    countWork('sql:stem-category-roles')
-    const placeholders = chunk.map(() => '?').join(',')
-    const rows = db
-      .prepare(
-        `SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories
-         WHERE ArrangeRole IS NOT NULL AND StemCID IN (${placeholders})`
-      )
-      .all(...chunk) as { StemCID: string; ArrangeRole: string; DrumSubRole: string | null }[]
+    countWork(workKind)
+    const rows = db.prepare(sql(chunk.map(() => '?').join(','))).all(...chunk) as (Row & {
+      StemCID: string
+    })[]
     for (const row of rows) {
-      for (const path of pathsByStemCID.get(row.StemCID) ?? []) {
-        out[path] = {
-          arrangeRole: row.ArrangeRole as ArrangeRole,
-          drumSubRole: row.DrumSubRole as DrumSubRole | null
-        }
-      }
+      for (const path of pathsByStemCID.get(row.StemCID) ?? []) onRow(path, row)
     }
   }
-  return out
 }

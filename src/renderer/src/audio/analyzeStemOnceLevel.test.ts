@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { stemLevelFeatures } from '@shared/stemLevel'
 import { STEM_FEATURE_VERSION } from '@shared/stemFeatures'
 
-const NONE = { peaks: false, features: false, embedding: false, zeroShot: false }
+const NONE = { peaks: false, features: false, embedding: false }
 
 const n = 22050
 const left = new Float32Array(n)
@@ -66,7 +66,6 @@ describe('analyzeStemOnce: the level pass', () => {
       peaks: 'skipped',
       features: 'skipped',
       embedding: 'skipped',
-      zeroShot: 'skipped',
       level: 'done'
     })
     expect(api.readAudioFile).toHaveBeenCalledTimes(1)
@@ -153,8 +152,7 @@ describe('analyzeStemOnce: the level pass', () => {
     expect(await analyzeStemOnce('/lib/cid-n', { ...NONE, peaks: true })).toEqual({
       peaks: 'done',
       features: 'skipped',
-      embedding: 'skipped',
-      zeroShot: 'skipped'
+      embedding: 'skipped'
     })
   })
 })

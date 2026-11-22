@@ -386,7 +386,7 @@ namespace sssketch
         // Nothing is going to wrap while the transport isn't running, so
         // waiting would mean waiting forever. A missing change is worse
         // than a late one.
-        if (!transport.isPlaying())
+        if (!transport.isPlayingOrStarting())
         {
             if (engine.promoteStagedProjectNow())
                 finishStagedApply("transport-stopped", transport.currentPositionBars());
@@ -785,7 +785,7 @@ namespace sssketch
             const bool tempoChanges = std::abs(project.bpm - liveBpm) > 1.0e-9;
             const bool barAlreadyPassed = requestedBar >= 0.0 && !aimedAtBar && barsToWrap >= 0.0;
             const char* immediateReason =
-                !transport.isPlaying() ? "not-playing"
+                !transport.isPlayingOrStarting() ? "not-playing"
                 : barsToWrap < 0.0     ? "no-loop"
                 : tempoChanges         ? "tempo-change"
                 : barAlreadyPassed     ? "bar-passed"
