@@ -333,6 +333,33 @@ session-only: no crash recovery for them. Cmd+Z goes to EEEDIT's history through
   Discover's and radio's Solo halts and resumes from the position reported before the halt, so it
   steps back up to the 15 ms halt plus one position update (about 33 ms): known, left as is.
 
+### Held stems (Discover and radio, keys 1 to 9)
+
+Nine slots, each holding one Discover candidate, to drop a known loop in quickly. Spec:
+`docs/superpowers/specs/2026-11-22-held-stems-design.md`.
+
+- **State:** `DiscoverSettings.heldStems` (`src/main/discoverSettingsStore.ts`), saved with the
+  app, not the project; read through `normalizeHeldStems` (a bad or old file gives nine empty
+  slots). App's `holdStem(index, candidate | null)` assigns or clears, merged onto the latest
+  settings. The pure rules are in `src/shared/heldStems.ts`.
+- **Slots 1 to 5 are drums, 6 to 9 are front** (`heldSlotKinds`): the slot decides the new row's
+  kinds and the played candidate's `slotKinds`, whatever row the stem was assigned from.
+- **Keys** (`handleHeldKey` in `DiscoverPanel.tsx`, by `e.code`, not in a text field, no
+  repeats): shift + number assigns the candidate of the row under the pointer (found by
+  `[data-slot-row]:hover`, an attribute on `DiscoverSlotRow`'s root); a plain number plays;
+  Cmd + number plays at once. `0` is no slot. The tiles are `components/HeldStemsStrip.tsx`,
+  under the rows (click plays, Cmd-click at once, `x` clears).
+- **Play** (`playHeldStem`): a row that holds the stem, or has it waiting to land
+  (`rowHoldingStem`), is removed through `removeSlot`. Otherwise an empty row is added and the
+  stem joins it.
+- **Landing:** while radio runs, at the next **loop top** through `queueManualChange`, as a
+  duplicate does; with Cmd or radio off, at once (`commitSlotPick`). The spec asks for the next
+  bar line: not built, because a stage has one landing point, only radio's own held cut can name
+  a mid-loop bar (`led.atBars`), and manual changes are committed only by the wrap branch.
+- **The row is `radioAdded: true`**, gain 1 with no balance: it lands at the stem's levelled
+  gain, radio may turn its stem over like any unlocked row, and the density arc may thin it
+  (the arc removes only `radioAdded` rows).
+
 ### Metronome
 
 On/off and volume (`metronomeVolume`, drag the metronome button up/down) are app state, not saved

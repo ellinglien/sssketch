@@ -5,6 +5,8 @@ import { Dial } from './Dial'
 import { RadioMixActions, RadioStrip, type RadioMixBundle } from './RadioStrip'
 import type { RadioStripContext } from '@shared/radioStripModel'
 import { radioViewTopIds, type RadioView } from '@shared/radioView'
+import { heldSlotForCode, heldSlotKinds, rowHoldingStem, type HeldStems } from '@shared/heldStems'
+import { HeldStemsStrip } from './HeldStemsStrip'
 import { RadioTopLine, RedoIcon, UndoIcon } from './RadioTopLine'
 import { DiceIcon } from './DiceIcon'
 import { RadioStartPrompt } from './RadioStartPrompt'
@@ -955,6 +957,8 @@ export function DiscoverPanel({
   onRadioSettingsChange,
   radioView,
   onRadioViewChange,
+  heldStems,
+  onHoldStem,
   setDiscoverConsented,
   seedBpm,
   seedPhase,
@@ -1022,6 +1026,10 @@ export function DiscoverPanel({
    * nothing radio runs reads it. */
   radioView: RadioView
   onRadioViewChange: (view: RadioView) => Promise<void>
+  /** Held stems (spec 2026-11-22-held-stems-design): the nine slots on keys 1 to 9 (App's
+   * DiscoverSettings.heldStems), and the persisting setter (null clears a slot). */
+  heldStems: HeldStems
+  onHoldStem: (index: number, candidate: DiscoverCandidate | null) => Promise<void>
   /** Persists + updates the shared consent value above (App.tsx's
    * setDiscoverConsented) -- the "yes, analyze" button below calls this
    * directly with `true` rather than maintaining its own independently
@@ -3705,6 +3713,7 @@ export function DiscoverPanel({
   // turnRadio, as THIS render has it, for the listeners registered once (`t`, the phone): set
   // every render, for the reason remoteCommandRef is.
   const turnRadioRef = useRef<(move?: TurnaroundMove) => void>(() => {})
+  const heldKeyRef = useRef<(e: KeyboardEvent) => void>(() => {})
   // What the turn button shows: null at rest; otherwise a turn waits for the top (pressed, or
   // armed and playing into it), and `move` is the chip it holds -- a chip's move, or the move
   // rolled for the planner's choice (null until then).
@@ -9231,7 +9240,14 @@ export function DiscoverPanel({
   useEffect(() => {
     turnRadioRef.current = turnRadio
     intensityPressRef.current = intensityPress
+    heldKeyRef.current = handleHeldKey
   })
+  // Held stems' keys (handleHeldKey), with radio on or off: in a ref for the reason above.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => heldKeyRef.current(e)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
   useEffect(() => {
     if (!radioOn) return
     function handleKeyDown(e: KeyboardEvent): void {
@@ -9652,6 +9668,76 @@ export function DiscoverPanel({
     setSlots((prev) => [...prev, { ...slot, id: copyId, radioAdded: undefined }])
     // A duplicate is a turn: that artist now holds another row (combine artists, decision 5).
     noteArtistLanding(candidate)
+  }
+
+  /** Held stems (spec 2026-11-22-held-stems-design): play slot `index` (its key, or its tile).
+   * A row that holds the stem, playing or still waiting to land, leaves, as its remove control
+   * removes it. Otherwise the stem joins as its own new row of the SLOT's category, whatever row
+   * it was assigned from: at the loop top while radio runs (queueManualChange, as a duplicate
+   * does), at once with Cmd or with radio off. The row starts at gain 1 with no balance, so it
+   * lands at the stem's levelled gain (landedLevel), and is `radioAdded`: an ordinary radio row
+   * from then on, one the arc may thin as well as one radio may turn over. */
+  function playHeldStem(index: number, immediate = false): void {
+    const held = heldStems[index] ?? null
+    if (held === null) return
+    const holding = rowHoldingStem(
+      slots.map((s) => ({
+        id: s.id,
+        stemCID: s.candidate?.stemCID ?? null,
+        waitingStemCID: radioOnRef.current
+          ? (manualChangesRef.current.get(s.id)?.pick.candidate?.stemCID ?? null)
+          : null
+      })),
+      held.stemCID
+    )
+    if (holding !== null) return removeSlot(holding)
+    const kinds = heldSlotKinds(index)
+    const pick: SlotPick = {
+      candidate: { ...held, slotKinds: kinds },
+      barUsed: null,
+      barRequested: traitMatchBar,
+      unranked: true
+    }
+    pushUndoSnapshot()
+    const id = freshSlotId()
+    setSlots((prev) => [
+      ...prev,
+      { id, kinds, locked: false, candidate: null, hasRerolled: false, gain: 1, radioAdded: true }
+    ])
+    if (immediate || !radioOnRef.current) commitSlotPick(id, pick)
+    // Synchronous, straight after this action's own pushUndoSnapshot.
+    else queueManualChange(id, pick, true, undoSequence.latest())
+  }
+
+  /** Held stems' keys. Shift + 1..9 over a row with a stem assigns it to that slot (the row
+   * under the pointer: its root carries data-slot-row); a plain 1..9 plays the slot; Cmd + 1..9
+   * plays it at once. `0` is no slot (and Cmd-0 is App's). */
+  function handleHeldKey(e: KeyboardEvent): void {
+    const index = heldSlotForCode(e.code)
+    if (index === null || e.repeat || e.ctrlKey || e.altKey || (e.shiftKey && e.metaKey)) return
+    const target = e.target as HTMLElement | null
+    if (
+      target &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable)
+    ) {
+      return
+    }
+    if (e.shiftKey) {
+      const rowId = rowsRef.current
+        ?.querySelector<HTMLElement>('[data-slot-row]:hover')
+        ?.getAttribute('data-slot-row')
+      const candidate = slots.find((s) => s.id === rowId)?.candidate ?? null
+      if (candidate === null) return
+      e.preventDefault()
+      void onHoldStem(index, candidate)
+      return
+    }
+    if ((heldStems[index] ?? null) === null) return
+    e.preventDefault()
+    playHeldStem(index, e.metaKey)
   }
 
   // Direct reports, 2026-09-17, found in code review: a slot whose reroll
@@ -14638,6 +14724,20 @@ export function DiscoverPanel({
             </div>
           </div>
         )}
+      </div>
+
+      {/* Held stems: the slot tiles, under the rows in Discover and in both radio views (as wide
+          as the rows are while radio runs). */}
+      <div
+        style={
+          radioOn ? { maxWidth: RADIO_VIEW_MAX_WIDTH, margin: '0 auto', width: '100%' } : undefined
+        }
+      >
+        <HeldStemsStrip
+          held={heldStems}
+          onPlay={playHeldStem}
+          onClear={(index) => void onHoldStem(index, null)}
+        />
       </div>
 
       {/* THE STRIP (radio view plan Task 8, spec 1.3): every radio setting, under the rows, while

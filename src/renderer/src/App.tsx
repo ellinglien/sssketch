@@ -171,6 +171,8 @@ import type { DiscoverSettings } from '../../main/discoverSettingsStore'
 import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
 import { DEFAULT_RADIO_SETTINGS, radioSourceOf, type RadioSettings } from '@shared/radioSchedule'
 import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
+import { EMPTY_HELD_STEMS, setHeldStem } from '@shared/heldStems'
+import type { DiscoverCandidate } from '@shared/discoverCandidate'
 import { mergeLatestSettings, nestedPatchFromLatest } from '@shared/latestSettings'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 import { useFeatureEnabled } from './state/appFeatures'
@@ -2350,7 +2352,8 @@ function Frame(): React.JSX.Element {
     consentedToLibraryScan: false,
     traitMatchBar: DEFAULT_TRAIT_BAR,
     radio: DEFAULT_RADIO_SETTINGS,
-    radioView: DEFAULT_RADIO_VIEW
+    radioView: DEFAULT_RADIO_VIEW,
+    heldStems: EMPTY_HELD_STEMS
   })
   const discoverConsented = discoverSettings.consentedToLibraryScan
   const traitMatchBar = discoverSettings.traitMatchBar
@@ -2412,6 +2415,14 @@ function Frame(): React.JSX.Element {
    * own field, so `radio` keeps its identity and nothing radio does re-runs on a switch. */
   async function setRadioView(view: RadioView): Promise<void> {
     await updateDiscoverSettings({ radioView: view })
+  }
+
+  /** Held stems: assign a stem to one of the nine slots, or clear it with null. Onto the latest
+   * slots, so two quick assigns both stick. */
+  async function holdStem(index: number, candidate: DiscoverCandidate | null): Promise<void> {
+    await updateDiscoverSettings({
+      heldStems: setHeldStem(discoverSettingsRef.current.heldStems, index, candidate)
+    })
   }
 
   async function startTour(): Promise<void> {
@@ -4047,6 +4058,8 @@ function Frame(): React.JSX.Element {
             onRadioSettingsChange={setRadioSettings}
             radioView={radioView}
             onRadioViewChange={setRadioView}
+            heldStems={discoverSettings.heldStems}
+            onHoldStem={holdStem}
             setDiscoverConsented={setDiscoverConsented}
             discoverSlots={discoverSlots}
             setDiscoverSlots={setDiscoverSlots}

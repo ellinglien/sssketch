@@ -1789,6 +1789,7 @@ export function DiscoverSlotRow({
     return (
       <>
         <div
+          data-slot-row={slot.id}
           role="group"
           aria-label={
             plates?.info != null && plates.info.label !== ''
@@ -1864,6 +1865,8 @@ export function DiscoverSlotRow({
   return (
     <>
       <div
+        // the row under the pointer, for held stems' shift + number (DiscoverPanel handleHeldKey)
+        data-slot-row={slot.id}
         style={{
           display: 'grid',
           // 15 tracks, explicit gridColumn on every child below (including
