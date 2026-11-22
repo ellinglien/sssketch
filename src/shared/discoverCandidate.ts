@@ -93,4 +93,8 @@ export interface DiscoverCandidate {
   /** How much a stem demands, 0 sparse and quiet to 1 busy and loud (@shared/radioIntensity
    * stemPresence); attached to every roll; absent or null: unknown. */
   presence?: number | null
+  /** How much of its loop the stem sounds, [0, 1]: its activeFraction (@shared/stemLevel), for
+   * the no-long-silence rule (@shared/radioCover). Attached to every roll with the level; absent
+   * or null: unknown. */
+  cover?: number | null
 }

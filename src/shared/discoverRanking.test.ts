@@ -609,3 +609,41 @@ describe('balance term', () => {
     expect(r[0].score).toBeCloseTo(1, 5)
   })
 })
+
+describe('cover: no long silence', () => {
+  const pool = (covers: (number | null | undefined)[]): DiscoverCandidate[] =>
+    covers.map((cover, i) => candidate({ stemCID: `c${i}`, ...(cover !== undefined && { cover }) }))
+  const ids = (r: { candidate: DiscoverCandidate }[]): string[] =>
+    r.map((x) => x.candidate.stemCID).sort()
+  // eight that fill the time alone, two that are mostly silent
+  const mixed = pool([0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.2, 0.1])
+
+  it('alone in the mix, the mostly silent candidates are left out', () => {
+    const r = rankCandidates(mixed, { targetBpm: 128, cover: { others: [] } })
+    expect(ids(r)).toEqual(['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'])
+  })
+  it('beside rows that fill the time, every candidate stays and scores as without it', () => {
+    expect(rankCandidates(mixed, { targetBpm: 128, cover: { others: [0.6, 0.6] } })).toEqual(
+      rankCandidates(mixed, { targetBpm: 128 })
+    )
+  })
+  it('too few would be left: the whole pool, leaning to the fuller ones', () => {
+    const few = pool([0.9, 0.2, 0.1, 0.3])
+    const r = rankCandidates(few, { targetBpm: 128, cover: { others: [] } })
+    expect(r.map((x) => x.candidate.stemCID)).toEqual(['c0', 'c3', 'c1', 'c2'])
+    const none = rankCandidates(pool([0.1, 0.3]), { targetBpm: 128, cover: { others: [0.1] } })
+    expect(none.map((x) => x.candidate.stemCID)).toEqual(['c1', 'c0'])
+  })
+  it('an unmeasured candidate passes; a pool with no measured cover is ranked as without it', () => {
+    const r = rankCandidates(pool([null, 0.2, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]), {
+      targetBpm: 128,
+      cover: { others: [] }
+    })
+    expect(ids(r)).not.toContain('c1')
+    expect(ids(r)).toContain('c0')
+    const blind = pool([null, undefined, null])
+    expect(rankCandidates(blind, { targetBpm: 128, cover: { others: [] } })).toEqual(
+      rankCandidates(blind, { targetBpm: 128 })
+    )
+  })
+})

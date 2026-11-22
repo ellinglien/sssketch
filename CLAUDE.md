@@ -440,6 +440,24 @@ Radio's density arc peaks at 3 or 4 rows (`DENSITY_PEAK`, `DENSITY_MAX` 4; the i
 ordinary peak follows), and a leg always aims at least one row away from where it starts. The web
 index carries the same values as `kr`, `ks`, `g` and `p`, all optional.
 
+**No long silence** (`src/shared/radioCover.ts`). A candidate's `cover` is its stem's
+`activeFraction` (the share of its 100 ms hops that sound), attached with the level by
+`attachLevelAndPresence`. `mixCover` estimates how much of the time a set of rows sounds
+(`1 - product(1 - cover)`, as if their gaps were independent), and a mix must cover
+`MIN_MIX_COVER` (0.75). An unmeasured stem counts as `UNKNOWN_COVER` (0.75 too: the rule acts only
+on what was measured). Three decisions keep to it, each in one place and each absent-safe:
+- a pick: `rankCandidates`' `cover` input (`rankCoverFor` over `rowsForFit`'s rows, drums
+  included) leaves out candidates that would leave the mix under it; with fewer than
+  `COVER_POOL_MIN` (8) left, the whole pool stays and leans to fuller stems (`COVER_WEIGHT`);
+- the density arc's removal and the intensity arc's strip-back: `pickArcRemoval` skips a row whose
+  going would leave the heard rows under it (`ArcRow.cover`; 0 for a row out of the mix);
+- a breakdown's rests: `radioBreakdownRests` keeps the fullest resting rows sounding until the
+  rows left (and the carry row, `carryCover`) cover enough.
+
+It is an estimate from stored numbers; nothing listens to the output. Hooks' rests and a mute by
+hand are not checked. The web radio doesn't pass covers yet (its index has no such field), so
+there the three behave as before.
+
 ### Previews, Cmd+Z and the mixer rail (renderer conventions)
 
 - **Web Audio previews** connect to `previewOutput(ctx)` (`audio/previewOutput.ts`), never to

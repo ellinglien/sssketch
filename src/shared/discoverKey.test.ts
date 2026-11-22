@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { rankBalanceFor, rankKeyFor, rowKeyLabel, rowsForFit } from './discoverKey'
+import { rankBalanceFor, rankCoverFor, rankKeyFor, rowKeyLabel, rowsForFit } from './discoverKey'
 import type { DiscoverSlotKind } from './discoverSlotKind'
 
 const row = (
@@ -140,5 +140,18 @@ describe('rowsForFit', () => {
       { root: 7, scale: 0 },
       { root: 4, scale: 0 }
     ])
+  })
+})
+
+describe('rankCoverFor', () => {
+  it('is the cover of every other row holding a stem, drums included, unknown as null', () => {
+    const rows = [
+      { id: 'a', kinds: ['drums' as const], candidate: { cover: 0.9 } },
+      { id: 'b', kinds: ['bass' as const], candidate: { cover: null } },
+      { id: 'c', kinds: ['front' as const], candidate: {} },
+      { id: 'd', kinds: ['back' as const], candidate: null },
+      { id: 'e', kinds: ['back' as const], candidate: { cover: 0.2 } }
+    ]
+    expect(rankCoverFor(rows, 'e')).toEqual({ others: [0.9, null, null] })
   })
 })

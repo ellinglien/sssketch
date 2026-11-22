@@ -1,7 +1,7 @@
 // src/shared/discoverKey.ts -- which keys a Discover/radio pick is ranked against, and a row's
 // key as its tooltip shows it (spec 2026-11-21-picking-key-level-groove-design, 1). Also which
 // rows' presences it is balanced against (the same spec, 3).
-import type { RankBalance, RankKey } from './discoverRanking'
+import type { RankBalance, RankCover, RankKey } from './discoverRanking'
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import { hasKey } from './keyFit'
 import { resolveKeyName } from './riffLibraryTypes'
@@ -15,6 +15,7 @@ interface KeyRow {
     riffRoot?: number | null
     riffScale?: number | null
     presence?: number | null
+    cover?: number | null
   } | null
 }
 
@@ -52,6 +53,20 @@ export function rankBalanceFor(
     if (typeof presence === 'number' && Number.isFinite(presence)) others.push(presence)
   }
   return { exempt: !countDrums && isDrums(kinds), others }
+}
+
+/** The cover rule's input for filling `slotId` (@shared/radioCover): the cover of every other row
+ * that holds a stem, drums too (a drum loop fills time). The caller passes only the rows that
+ * sound with the pick. */
+export function rankCoverFor(
+  rows: readonly Pick<KeyRow, 'id' | 'candidate'>[],
+  slotId: string
+): RankCover {
+  const others: (number | null)[] = []
+  for (const r of rows) {
+    if (r.id !== slotId && r.candidate !== null) others.push(r.candidate.cover ?? null)
+  }
+  return { others }
 }
 
 /** What is about to change in the mix, for rowsForFit. */

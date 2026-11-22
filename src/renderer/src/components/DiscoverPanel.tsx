@@ -71,7 +71,13 @@ import {
   type DensityLeg
 } from '@shared/radioDensity'
 import { DEFAULT_DISCOVER_CHAOS, rankCandidates, pickReroll } from '@shared/discoverRanking'
-import { rankBalanceFor, rankKeyFor, rowsForFit, type FitChanges } from '@shared/discoverKey'
+import {
+  rankBalanceFor,
+  rankCoverFor,
+  rankKeyFor,
+  rowsForFit,
+  type FitChanges
+} from '@shared/discoverKey'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { heartFetchLabel } from '@shared/radioHearts'
 import { heartsButtonShown } from '@shared/features'
@@ -10402,6 +10408,8 @@ export function DiscoverPanel({
         key: rankKeyFor(fitRows, id, kinds),
         // The balance lean, against the same rows: a strong part sounding pulls a sparse pick up.
         balance: rankBalanceFor(fitRows, id, kinds),
+        // No long silence (@shared/radioCover): not a stem that leaves those rows mostly silent.
+        cover: rankCoverFor(fitRows, id),
         ...(clashAmount > 0
           ? {
               clash: {
@@ -11773,9 +11781,12 @@ export function DiscoverPanel({
     const longest = lengths.size > 0 ? Math.max(...lengths.values()) : 0
     const atLongest = [...lengths.values()].filter((b) => b === longest).length
     const led = radioLedChangeRef.current
+    const inMix = previewingSlotIdsRef.current
     return pickArcRemoval(
       slotsRef.current.map((s) => ({
         id: s.id,
+        // no long silence (@shared/radioCover): a row out of the mix fills nothing
+        cover: inMix.has(s.id) && s.candidate !== null ? (s.candidate.cover ?? null) : 0,
         kinds: s.kinds,
         radioAdded: s.radioAdded === true,
         locked: s.locked,
@@ -11966,6 +11977,7 @@ export function DiscoverPanel({
         id: s.id,
         kinds: s.kinds,
         score: s.candidate?.intensity ?? null,
+        cover: s.candidate?.cover ?? null,
         staleness: radioTurnRef.current - (radioChangedAtRef.current.get(s.id) ?? 0),
         sounding,
         restable:
@@ -12131,6 +12143,7 @@ export function DiscoverPanel({
         slotsRef.current.some((s) => s.id === held.slotId),
       canStrip,
       carryReady: carry !== null && carry.pick !== null && carry.stem !== null,
+      carryCover: carry?.pick?.candidate?.cover,
       renewReady: (id) => (intensityRenewRef.current.get(id)?.stem ?? null) !== null,
       lightReady: (id) => intensityRenewalOf(id, intensityLightRef.current) !== null,
       // the cycle's strip-back takes the busiest row it may: the lighten leaves it out
