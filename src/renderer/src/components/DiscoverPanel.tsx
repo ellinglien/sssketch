@@ -1661,6 +1661,9 @@ export function DiscoverPanel({
   // Audio call.
   const previewSyncGenerationRef = useRef(0)
   const previewHaltBarrierRef = useRef(new PreviewHaltBarrier())
+  /** Until when (performance.now()) a step back of the playhead is a Solo's halt-and-resume, not
+   * a loop wrap (the radio clock effect). */
+  const radioHaltStepUntilRef = useRef(0)
   // The ownership token from the claim the LAST ordinary push made. A
   // staged swap does not claim -- a claim bumps the generation and would
   // invalidate an ordinary push that is mid-await -- so it asks this
@@ -2915,6 +2918,8 @@ export function DiscoverPanel({
       const smoothResumeAt =
         smoothSwap && previewLoadedRef.current && playingRef.current ? positionRef.current : null
       if (smoothResumeAt !== null) {
+        // the halt, the build and the load; refreshed to a short tail at the resume below
+        radioHaltStepUntilRef.current = performance.now() + 2000
         await previewHaltBarrierRef.current.reachSilence(() => window.rifffApi.engineStop())
         if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
         if (!stillOwnEngine(engineToken)) return
@@ -2986,6 +2991,7 @@ export function DiscoverPanel({
       }
 
       if (previewHaltBarrierRef.current.consumeResume() && playingRef.current) {
+        radioHaltStepUntilRef.current = performance.now() + 300
         void window.rifffApi.enginePlay(smoothResumeAt ?? positionRef.current, true)
       }
 
@@ -7523,6 +7529,11 @@ export function DiscoverPanel({
     if (!radioOn) return
     const clockWas = radioClockRef.current
     if (!clockWas) return
+    // A Solo's halt-and-resume steps the playhead back (0 while halted, then a point just before
+    // the halt). advanceRadioClock reads any step back as a loop wrap, which landed radio's
+    // waiting change on every solo and unsolo. Those ticks are skipped, the clock untouched, so
+    // it carries on from where it was once the playhead is past it again.
+    if (performance.now() < radioHaltStepUntilRef.current && pos < clockWas.lastPos) return
     const loopBars =
       resolvedBarLengthsRef.current.size > 0
         ? Math.max(...resolvedBarLengthsRef.current.values())
