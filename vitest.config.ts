@@ -54,6 +54,9 @@ export default defineConfig({
           'src/main/riffStemsExtra.test.ts',
           'src/main/riffFavouritesMigration.test.ts',
           'src/main/categoryCentroidTraining.test.ts',
+          // four categories (2026-11-14): the 1.7.0 release build died on exactly these two
+          'src/main/frontScoreCache.test.ts',
+          'src/main/instrumentMaskCategoryBackfill.test.ts',
           'src/main/discoverCandidates.test.ts',
           'src/main/discoverIndexCache.test.ts',
           'src/main/discoveredLibrary.test.ts',
