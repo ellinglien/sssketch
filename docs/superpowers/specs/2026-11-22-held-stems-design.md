@@ -14,11 +14,11 @@ discover and radio when they show up. like 'oh that would be a great one to use 
 - **Nine slots**, keys `1`..`9` (Elling, later the same day: "we can just get away with 1 to 9
   then, no 0": Cmd-0 is the app's own shortcut). Each holds one stem (a Discover candidate). Saved with the
   app (Discover's settings), not the project, so they are there every session.
-- **Slots 1 to 5 are drums, 6 to 9 are front** (Elling: "they will be mostly dedicated to drums
-  ... 1-5 are drums and 6 to 0 are fronts"). The slot decides the row's category, whatever row
-  the stem was assigned from: a stem played from 3 joins as a drums row (out of the key and
-  balance terms, feeding the pump), one from 7 as a front row. Any stem can be assigned to any
-  slot. The strip shows the two groups.
+- **Fluid slots** (Elling, after first asking for 1-5 drums and 6-9 front: "let's actually have
+  it be fluid, anything can go anywhere, and the sys treats it like it would that kind of
+  stem"). A slot remembers the kinds of the row its stem was saved from, and plays it back as a
+  row of those kinds: a stem saved from a bass row comes back as a bass row, and radio treats it
+  as one (key, balance, pump, what replaces it).
 - **A strip of nine tiles** in Discover and radio: the number, and the stem's name when filled.
 - **Assign:** hover a row that has a stem and press shift + the number. A filled slot is replaced.
   A tile's own small control clears it.
