@@ -13,6 +13,11 @@ discover and radio when they show up. like 'oh that would be a great one to use 
 
 - **Ten slots**, keys `1`..`9`, `0`. Each holds one stem (a Discover candidate). Saved with the
   app (Discover's settings), not the project, so they are there every session.
+- **Slots 1 to 5 are drums, 6 to 0 are front** (Elling: "they will be mostly dedicated to drums
+  ... 1-5 are drums and 6 to 0 are fronts"). The slot decides the row's category, whatever row
+  the stem was assigned from: a stem played from 3 joins as a drums row (out of the key and
+  balance terms, feeding the pump), one from 7 as a front row. Any stem can be assigned to any
+  slot. The strip shows the two groups.
 - **A strip of ten tiles** in Discover and radio: the number, and the stem's name when filled.
 - **Assign:** hover a row that has a stem and press shift + the number. A filled slot is replaced.
   A tile's own small control clears it.
