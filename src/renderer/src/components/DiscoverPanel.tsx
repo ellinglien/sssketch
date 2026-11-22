@@ -54,6 +54,7 @@ import {
   drawManualTransitions,
   mergeStageChanges,
   radioGestureBeats,
+  radioManualBarLanding,
   stagedIncoming,
   type ManualArrival
 } from '@shared/radioManualChanges'
@@ -774,8 +775,9 @@ function newArmId(): string {
  * nothing -- never whatever is armed for the lap that is playing.
  *
  * `atBars` is WHICH boundary the engine should land this on: the bar of
- * the current lap, or undefined for the loop top. Only radio's bare cuts
- * ever name a bar -- see radioChangeLandsAtBar.
+ * the current lap, or undefined for the loop top. Radio's bare cuts name a
+ * bar (radioChangeLandsAtBar), and so does a stage of the user's own changes
+ * (radioManualBarLanding).
  *
  * `label`/`atPos`/`loopBars` are only for the radioTrace line. They are
  * passed in rather than read at send time because by then the build has
@@ -3866,7 +3868,8 @@ export function DiscoverPanel({
   // MANUAL CHANGES WAITING FOR THE LOOP TOP (2026-09-29). While radio runs,
   // a reroll, a nearby pick, an added or duplicated row does not commit on
   // the spot: it waits here, fully warmed, and lands with radio's own
-  // change in one staged swap at the next wrap, with a transition. See
+  // change in one staged swap at the next wrap, with a transition -- or,
+  // the user's own (`barLine`, 2026-11-22), as a cut on the next bar line. See
   // docs/superpowers/specs/2026-09-29-radio-manual-changes-land-on-the-top-
   // design.md. A REF because the 30Hz clock effect reads it; the Set
   // below is its renderable half, the same split radioLedChangeRef /
@@ -3903,6 +3906,10 @@ export function DiscoverPanel({
          * never a manual change, never undone, and it gives way to any manual change for its
          * row (the arc lets the row go: releaseRadioIntensityRest). */
         arc?: 'rest' | 'return'
+        /** The user's own change (a click, a key, the phone): it lands on the next bar line when
+         * it can (radioManualBarLanding), as a cut. Radio's own landings (a hook's, either arc's,
+         * an artist change's turnover) never carry it and keep the loop top. */
+        barLine?: true
       }
     >
   >(new Map())
@@ -3976,6 +3983,10 @@ export function DiscoverPanel({
      * object itself), or null when it carries none. See
      * radioStageAppliedManualRef. */
     manual: ReadonlyMap<string, object> | null
+    /** The bar line this stage lands the user's changes on (radioManualBarLanding): they ride
+     * alone, as cuts, and the clock effect lands them when the playhead crosses it. Absent: the
+     * loop top, or radio's own bar (radioLedChangeRef's atBars). */
+    manualAtBars?: number
     /** False between the decision and the socket write. The window is
      * short but it is real -- the staged project still has to be built,
      * which means buildEngineProject's stretch resolution -- and two
@@ -4035,6 +4046,10 @@ export function DiscoverPanel({
    * is inert the moment none of its entries is still waiting. Read through
    * appliedManualStillWaiting. */
   const radioStageAppliedManualRef = useRef<ReadonlyMap<string, object> | null>(null)
+  /** The bar line those entries were staged for (the stage's manualAtBars), or null for the loop
+   * top: the engine has swapped them in mid-lap, so the next tick lands them without waiting to
+   * see the playhead cross the bar (a stage that arrived late is applied at once, past it). */
+  const radioStageAppliedManualBarRef = useRef<number | null>(null)
   function appliedManualStillWaiting(): boolean {
     const applied = radioStageAppliedManualRef.current
     if (applied === null) return false
@@ -6865,7 +6880,12 @@ export function DiscoverPanel({
         pending.stem !== null &&
         clock !== null &&
         radioEligibleSlotIds().includes(pending.slotId) &&
-        (dueAtWrap || landsAtBar !== null)
+        (dueAtWrap || landsAtBar !== null) &&
+        // A stage is about to land the user's changes on a bar line of this lap: a change due at
+        // the wrap is decided once it has (a tick after, still before the wrap), rather than
+        // withdrawing it and taking those changes to the top. A change due at a bar of this lap
+        // is decided now, as before: the user's stage is withdrawn and lands a line after it.
+        !(dueAtWrap && radioStageRef.current?.manualAtBars !== undefined)
       ) {
         // The same draw, the same "never a second gesture while one is
         // armed" rule and the same beats table as the due branch below.
@@ -7089,6 +7109,36 @@ export function DiscoverPanel({
     // wrap if there is no time left for that.
     const manualReadyCount = [...manual.values()].filter((m) => m.stem !== null).length
     const withManual = manualReadyCount > 0 && !(readyLed !== null && readyLed.atBars !== undefined)
+    // THE USER'S OWN CHANGES LAND ON THE NEXT BAR LINE (2026-11-22, revising spec behaviour 8:
+    // "skip doesn't skip as soon as i'd like"). The ready ones that leave the loop's length alone
+    // go out ALONE, as cuts, aimed at the first bar line a stage can still reach
+    // (radioManualBarLanding); no line left in the lap, and they ride the wrap's stage as before.
+    //
+    // ONE STAGE, ONE LANDING POINT, so who goes first:
+    //   - radio's change held for the wrap, a hook's or an arc's landing, a change that would
+    //     alter the loop's length: after the user's. They are staged for the wrap once the bar
+    //     has landed, never moved to it, never dropped.
+    //   - radio's bare cut already aimed at a bar of this lap (atBars): first, alone, as always;
+    //     the user's changes take the next line after it.
+    // Never while a gesture is still playing at that bar (the stage replaces the live project
+    // there): a hole or a riser armed this lap keeps everything for the top.
+    const barRows = [...manual].filter(([, m]) => m.barLine === true && m.stem !== null)
+    const barLanding =
+      barRows.length > 0 && led?.atBars === undefined
+        ? radioManualBarLanding(
+            barRows.map(([slotId, m]) => ({ slotId, incomingBars: m.stem?.barLength ?? null })),
+            resolvedBarLengthsRef.current,
+            pos,
+            loopBars,
+            {
+              leadBars: RADIO_BAR_STAGE_LEAD_BARS,
+              spentAt: (bar) => gesturesSpentAt(bar, loopBars)
+            }
+          )
+        : null
+    const barIds = barLanding !== null ? new Set(barLanding.slotIds) : null
+    // What rides this stage of radio's: nothing, when it is the user's bar line.
+    const stageLed = barIds === null ? readyLed : null
     if (
       radioStageRef.current !== null ||
       (readyLed === null && !withManual) ||
@@ -7101,7 +7151,21 @@ export function DiscoverPanel({
     ) {
       return
     }
-    if (withManual) {
+    if (barIds !== null) {
+      // The tick whose phrase turnaround is still to be rolled: its push would withdraw this.
+      if (turnaroundGateNow() === 'wait') return
+      // A cut, whatever was drawn for the top: an arrival curve is anchored at bar 0 and a
+      // leading gesture needs the lap before a wrap (radioCadenceTransition's reason). So no
+      // draw here, and nothing armed.
+      const next = new Map(manual)
+      for (const id of barIds) {
+        const entry = next.get(id)
+        if (entry !== undefined && entry.arrival?.kind !== 'cut') {
+          next.set(id, { ...entry, arrival: { kind: 'cut', beats: 4 } })
+        }
+      }
+      setManualChanges(next)
+    } else if (withManual) {
       // A transition for every manual change that does not have one yet --
       // drawn ONCE, the first time it is staged, and stored back into the
       // queue so a re-stage (after a withdrawal) cannot re-draw it.
@@ -7208,7 +7272,7 @@ export function DiscoverPanel({
     const leaving: string[] = []
     if (stagedManual !== null) {
       for (const [slotId, m] of stagedManual) {
-        if (m.stem !== null) {
+        if (m.stem !== null && (barIds === null || barIds.has(slotId))) {
           if (m.rest === true) leaving.push(slotId)
           else {
             readyManual.set(slotId, { stem: m.stem, joining: m.joining, arrival: m.arrival })
@@ -7222,12 +7286,12 @@ export function DiscoverPanel({
     // with it, and a manual change on one's row wins that row (mergeStageChanges). The stage's
     // slotIds below are the merged changes, so they include them.
     const merged = mergeStageChanges(
-      readyLed !== null
+      stageLed !== null
         ? {
-            slotId: readyLed.slotId,
-            stem: readyLed.stem,
-            arrival: readyLed.arrival ?? null,
-            companions: radioStagedCompanions(readyLed).map((k) => ({
+            slotId: stageLed.slotId,
+            stem: stageLed.stem,
+            arrival: stageLed.arrival ?? null,
+            companions: radioStagedCompanions(stageLed).map((k) => ({
               slotId: k.slotId,
               stem: k.stem
             }))
@@ -7241,30 +7305,31 @@ export function DiscoverPanel({
     if (merged.changes.length === 0 && leaving.length === 0) return
     // mergeStageChanges drops radio's change when a manual one is on the
     // same row -- the user pointed at it, radio only drew it.
-    const ledInStage = readyLed !== null && !readyManual.has(readyLed.slotId)
+    const ledInStage = stageLed !== null && !readyManual.has(stageLed.slotId)
     const token = (radioStageTokenRef.current += 1)
     radioStageRef.current = {
       token,
       slotIds: merged.changes.map((c) => c.slotId),
-      ledSlotId: ledInStage ? readyLed.slotId : null,
+      ledSlotId: ledInStage ? stageLed.slotId : null,
       manual: stagedEntries.size > 0 ? stagedEntries : null,
+      ...(barLanding !== null && { manualAtBars: barLanding.atBars }),
       sent: false,
       mapping: null
     }
     const ledLabel =
-      readyLed === null
+      stageLed === null
         ? null
-        : readyLed.arrival
-          ? readyLed.arrival.kind
+        : stageLed.arrival
+          ? stageLed.arrival.kind
           : radioGestureRef.current.length > 0
             ? 'led'
             : 'cut'
     const radioIncoming = new Map<string, DiscoverCandidate | null>()
-    if (readyLed !== null) {
-      for (const k of radioStagedCompanions(readyLed)) {
+    if (stageLed !== null) {
+      for (const k of radioStagedCompanions(stageLed)) {
         radioIncoming.set(k.slotId, k.pick.candidate)
       }
-      radioIncoming.set(readyLed.slotId, readyLed.pick.candidate)
+      radioIncoming.set(stageLed.slotId, stageLed.pick.candidate)
     }
     const incoming = stagedIncoming(merged.changes, radioIncoming, manualIncoming)
     void syncPreviewToEngine(previewingSlotIdsRef.current, {
@@ -7280,17 +7345,22 @@ export function DiscoverPanel({
         lapsLeft: 1,
         armId: newArmId()
       })),
-      // Always the loop top once a manual change is aboard -- and a stage
-      // at a bar never carries one (withManual above).
-      atBars: stagedEntries.size > 0 ? undefined : readyLed?.atBars,
+      // The user's bar line; else always the loop top once a manual change is
+      // aboard -- and a stage at radio's bar never carries one (withManual above).
+      atBars:
+        barLanding !== null
+          ? barLanding.atBars
+          : stagedEntries.size > 0
+            ? undefined
+            : stageLed?.atBars,
       // Fold's bar band (phase 2): radio's rows whose change carries their fold, as the held
       // change says (refreshed just above, before this stage); never a row a manual change won.
       carried:
-        readyLed === null || !ledInStage
+        stageLed === null || !ledInStage
           ? []
           : [
-              ...(readyLed.foldCarry === true ? [readyLed.slotId] : []),
-              ...radioStagedCompanions(readyLed)
+              ...(stageLed.foldCarry === true ? [stageLed.slotId] : []),
+              ...radioStagedCompanions(stageLed)
                 .filter((k) => k.foldCarry === true && !readyManual.has(k.slotId))
                 .map((k) => k.slotId)
             ],
@@ -7368,7 +7438,7 @@ export function DiscoverPanel({
     // picking) lands first, and its landing re-arms -- armRadioPick then
     // starts the turnover. A pick still in flight for the OLD selection is
     // dropped by skipRadio itself.
-    if (!radioSkipWaiting()) void skipRadio()
+    if (!radioSkipWaiting()) void skipRadio(true)
   }
   /** A fresh pick landed on a row: it counts as a turn for its member (spec §3). Only in a
    * combination; a one-artist selection keeps no score. */
@@ -7565,11 +7635,27 @@ export function DiscoverPanel({
     const heldBar = radioLedChangeRef.current?.atBars
     const crossedHeldBar =
       heldBar !== undefined && !step.wrapped && pos >= heldBar && clock.lastPos < heldBar
+    // THE PLAYHEAD CROSSING THE BAR LINE THE USER'S CHANGES WERE STAGED FOR (the stage's
+    // manualAtBars), the same crossing for a stage of their own -- or the engine saying it has
+    // already swapped that stage in (its ack won the race, or the stage reached it past its bar
+    // and was applied at once). Radio's held change is not part of it and stays held. A crossing
+    // missed altogether leaves the stage to the wrap branch, the catch-all, as above.
+    const stagedManualBar = radioStageRef.current?.manualAtBars
+    const appliedManualBar = appliedManualStillWaiting()
+      ? radioStageAppliedManualBarRef.current
+      : null
+    const manualBar =
+      stagedManualBar !== undefined && pos >= stagedManualBar && clock.lastPos < stagedManualBar
+        ? stagedManualBar
+        : appliedManualBar
+    const crossedManualBar = manualBar !== null && !step.wrapped && !crossedHeldBar
     const boundaryBars = step.wrapped
       ? 0
       : crossedHeldBar
         ? heldBar
-        : Math.floor(pos / traceGrid) * traceGrid
+        : crossedManualBar
+          ? manualBar
+          : Math.floor(pos / traceGrid) * traceGrid
     // The density arc gets every tick, before any branch below can return.
     densityTick(
       step.wrapped,
@@ -7628,11 +7714,14 @@ export function DiscoverPanel({
     // takes that curve off for real -- its push folded into the landing's one
     // by holdSyncUntilResolved below.
     //
-    // MANUAL CHANGES land here too (2026-09-29), at the WRAP only and never
-    // at a held bar -- every waiting one whose stem is ready, together with
+    // MANUAL CHANGES land here too (2026-09-29), at the WRAP and never at
+    // radio's held bar -- every waiting one whose stem is ready, together with
     // radio's own held change if there is one, in the same microtask. The
     // branch runs for them even when radio holds nothing. With the queue
-    // empty it is exactly the led-only branch it always was.
+    // empty it is exactly the led-only branch it always was. The user's own
+    // also land at the bar line they were staged for (2026-11-22,
+    // crossedManualBar): the same commits, on their own, radio's held change
+    // left waiting.
     //
     // WHICH manual changes land: the ones the engine just swapped in, when
     // it swapped a stage in at all (still staged here, or acked already) --
@@ -7656,18 +7745,29 @@ export function DiscoverPanel({
         : appliedManualStillWaiting()
           ? radioStageAppliedManualRef.current
           : null
+    // At the user's bar line: exactly the entries that stage carried, by identity.
+    const takenAtBar = crossedManualBar
+      ? (radioStageRef.current?.manual ?? radioStageAppliedManualRef.current)
+      : null
     const manualToLand = step.wrapped
       ? [...manualChangesRef.current].filter(
           ([slotId, m]) =>
             m.stem !== null &&
             (!stageTakenAtWrap || (takenManual !== null && takenManual.has(slotId)))
         )
-      : []
+      : takenAtBar !== null
+        ? [...manualChangesRef.current].filter(
+            ([slotId, m]) => m.stem !== null && takenAtBar.get(slotId) === m
+          )
+        : []
     if (
-      (step.wrapped || crossedHeldBar) &&
-      (radioLedChangeRef.current !== null || manualToLand.length > 0)
+      crossedManualBar
+        ? manualToLand.length > 0
+        : (step.wrapped || crossedHeldBar) &&
+          (radioLedChangeRef.current !== null || manualToLand.length > 0)
     ) {
-      const led = radioLedChangeRef.current
+      // Radio's held change does not land at the user's bar line: it keeps its own boundary.
+      const led = crossedManualBar ? null : radioLedChangeRef.current
       // The queue is captured and cleared FIRST, before anything below can
       // write to it. Whatever is not landing -- still resolving, or ready
       // too late for the stage the engine took -- goes back into the queue
@@ -7716,8 +7816,9 @@ export function DiscoverPanel({
       // route: still staged here (the tick won), or acked (the ack won).
       const engineSwapped =
         stagedHere !== null || (led !== null && radioStageAppliedLedRef.current === led)
-      radioStageAppliedLedRef.current = null
+      if (!crossedManualBar) radioStageAppliedLedRef.current = null
       radioStageAppliedManualRef.current = null
+      radioStageAppliedManualBarRef.current = null
       // A manual change on radio's own row wins, the same rule the stage
       // was built with (mergeStageChanges): radio's change for that row
       // is dropped, and the manual commit puts the truth on the wire.
@@ -7742,7 +7843,9 @@ export function DiscoverPanel({
         }
         setRadioLedChange(null)
       }
-      clearRadioGesture()
+      // Not at the user's bar line: only spent arrival curves are armed there (the stage's own
+      // rule), resting till the wrap takes them off, and a gesture armed since must stay.
+      if (!crossedManualBar) clearRadioGesture()
       void Promise.resolve().then(() => {
         if (!radioOnRef.current) return
         // The strip's flicker, here in the microtask (a setState) rather than the effect body,
@@ -7935,7 +8038,7 @@ export function DiscoverPanel({
           // A manual change is a straight cut: on a row the fold holds, the machine follows by
           // radio's own rule (radioFoldLandNow), as the web's swap-nows do. Before the wrap's
           // owed fold step, as radio's own landing.
-          radioFoldLandNow(slotId, change.pick, change.stem, false, false, loopBars)
+          radioFoldLandNow(slotId, change.pick, change.stem, false, crossedManualBar, loopBars)
           // A hook coming back to a row it rested on: the same stem the row still has, so no
           // resolve will report it -- it joins the mix with a push of its own, holding nothing up.
           // (the intensity arc's drop brings its rested rows back the same way)
@@ -9172,6 +9275,7 @@ export function DiscoverPanel({
           radioStageAppliedLedRef.current =
             applied.ledSlotId !== null ? radioLedChangeRef.current : null
           radioStageAppliedManualRef.current = applied.manual
+          radioStageAppliedManualBarRef.current = applied.manualAtBars ?? null
         }
         if (radioStageLandedRef.current?.token === a.token) radioStageLandedRef.current = null
         const mapping = mine.mapping
@@ -9679,8 +9783,9 @@ export function DiscoverPanel({
   /** Held stems (spec 2026-11-22-held-stems-design): play slot `index` (its key, or its tile).
    * A row that holds the stem, playing or still waiting to land, leaves, as its remove control
    * removes it. Otherwise the stem joins as its own new row, with the kinds of the row it was
-   * saved from (heldStemKinds): at the loop top while radio runs (queueManualChange, as a duplicate
-   * does), at once with Cmd or with radio off. The row starts at gain 1 with no balance, so it
+   * saved from (heldStemKinds): at the next bar line while radio runs (queueManualChange, as a
+   * duplicate does; the loop top for a stem longer than the loop), at once with Cmd or with radio
+   * off. The row starts at gain 1 with no balance, so it
    * lands at the stem's levelled gain (landedLevel), and is `radioAdded`: an ordinary radio row
    * from then on, one the arc may thin as well as one radio may turn over. */
   function playHeldStem(index: number, immediate = false): void {
@@ -11055,9 +11160,10 @@ export function DiscoverPanel({
     }
   }
 
-  /** Queue a manual change for the next loop top. Returns false when the
+  /** Queue a manual change for the next bar line (the user's own, when it leaves the loop's
+   * length alone: `barLine`, radioManualBarLanding) or the next loop top. Returns false when the
    * row already has one waiting -- a second click on a waiting row is
-   * ignored (Elling, 2026-09-29). `joining` is a row that is not in the
+   * ignored (2026-09-29). `joining` is a row that is not in the
    * mix yet (added or duplicated while radio ran).
    *
    * Every way of bringing in a stem routes here while radio runs, unless
@@ -11088,6 +11194,8 @@ export function DiscoverPanel({
       rest?: true
       /** The intensity arc's own landing (intensityDecided). */
       arc?: 'rest' | 'return'
+      /** Radio's own turnover (an artist change's skips): the loop top, one row at each. */
+      top?: true
     } = {}
   ): boolean {
     const waiting = manualChangesRef.current.get(slotId)
@@ -11126,7 +11234,14 @@ export function DiscoverPanel({
       radioSkip,
       ...(opts.hook !== undefined && { hook: opts.hook }),
       ...(opts.rest === true && { rest: true as const }),
-      ...(opts.arc !== undefined && { arc: opts.arc })
+      ...(opts.arc !== undefined && { arc: opts.arc }),
+      // The user's own change: no hook's or arc's landing, and none radio queued with its arrival
+      // already chosen (the density arc's add, the intensity arc's join, a row coming back).
+      ...(arrival === null &&
+        opts.hook === undefined &&
+        opts.arc === undefined &&
+        opts.rest !== true &&
+        opts.top !== true && { barLine: true as const })
     })
     setManualChanges(next)
     // NO withdrawal of the stage that is out for this entry itself, on
@@ -11180,13 +11295,15 @@ export function DiscoverPanel({
    * unless the wrap is too close for a rebuild to get there, in which case the stage that is out
    * lands as it is and this one waits for the following wrap (the landing only commits what the
    * engine took). And never a stage radio aimed at a mid-lap bar: that one can never carry a
-   * manual change. */
+   * manual change. Nor a stage landing the user's changes on a bar line: it lands within a bar or
+   * so, and this one takes the next line. */
   function manualChangeReady(slotId: string): void {
     const staged = radioStageRef.current
     if (
       staged !== null &&
       // This manual entry is not in the stage (radio's own row may be).
       (staged.manual === null || !staged.manual.has(slotId)) &&
+      staged.manualAtBars === undefined &&
       radioLedChangeRef.current?.atBars === undefined &&
       radioBarsToWrapNow() >= MANUAL_RESTAGE_MIN_BARS
     ) {
@@ -11362,7 +11479,7 @@ export function DiscoverPanel({
         artistTurnoverRef.current
       ) !== null
     ) {
-      void skipRadio()
+      void skipRadio(true)
       return
     }
     // Never a row with a manual change waiting: that change wins its row
@@ -13080,15 +13197,17 @@ export function DiscoverPanel({
    * row the way it chooses its own (pickRadioSlotId over the eligible rows:
    * turnover, staleness, flags), leaving out rows already waiting, and
    * gives it a same-kind roll that steers off its own stem. It lands by the
-   * manual-change rule -- the loop top while radio runs -- and counts as
-   * radio's change for that row: the landing restarts radio's interval.
+   * manual-change rule -- the next bar line while radio runs, or the loop top
+   * for an artist change's turnover (`turnover`: radio's own, one row per top)
+   * -- and counts as radio's change for that row: the landing restarts radio's
+   * interval.
    *
    * Radio's own change, decided on any row, is taken back first (as the
    * web's next does) and its armed pick dropped, and radio arms nothing
    * until the skip has landed -- so it does not change a second row at the
    * same loop top or just after. Undoable like the row's own skip. Another
    * press picks another row. */
-  async function skipRadio(): Promise<void> {
+  async function skipRadio(turnover = false): Promise<void> {
     if (!radioOnRef.current) return
     const eligible = radioEligibleSlotIds().filter(
       (id) =>
@@ -13145,7 +13264,15 @@ export function DiscoverPanel({
       pick !== null &&
       radioOnRef.current &&
       slotsRef.current.some((s) => s.id === slotId) &&
-      queueManualChange(slotId, pick, !previewingSlotIdsRef.current.has(slotId), undoSeq, true)
+      queueManualChange(
+        slotId,
+        pick,
+        !previewingSlotIdsRef.current.has(slotId),
+        undoSeq,
+        true,
+        null,
+        turnover ? { top: true } : {}
+      )
     // Nothing queued (no pick, radio stopped, the row went or was claimed
     // meanwhile): radio carries on as if the press never happened.
     if (

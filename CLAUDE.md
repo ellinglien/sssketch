@@ -354,10 +354,24 @@ Nine slots, each holding one Discover candidate, to drop a known loop in quickly
 - **Play** (`playHeldStem`): a row that holds the stem, or has it waiting to land
   (`rowHoldingStem`), is removed through `removeSlot`. Otherwise an empty row is added and the
   stem joins it.
-- **Landing:** while radio runs, at the next **loop top** through `queueManualChange`, as a
-  duplicate does; with Cmd or radio off, at once (`commitSlotPick`). The spec asks for the next
-  bar line: not built, because a stage has one landing point, only radio's own held cut can name
-  a mid-loop bar (`led.atBars`), and manual changes are committed only by the wrap branch.
+- **Landing:** while radio runs, at the next **bar line** through `queueManualChange`, as every
+  change the user makes there does (skip, random, nearby, add, duplicate, the phone); with Cmd or
+  radio off, at once (`commitSlotPick`). The rule is `radioManualBarLanding`
+  (`src/shared/radioManualChanges.ts`), wired in `stepRadioStage` (3) and the clock effect's
+  `crossedManualBar`:
+  - The user's ready changes (`barLine` on the queue entry) go out alone on their own stage, as
+    cuts, aimed at the first bar line at least a beat ahead; the entries that stage carried are
+    committed when the playhead crosses it, or when the engine's `applied` says it already
+    swapped.
+  - **The loop top instead** when no bar line is left in the lap, when a hole, a riser or a
+    drop-out is armed (a stage at a bar replaces the live project, curves and all), and for a
+    change that would lengthen or shorten the loop (a held stem longer than the loop): the
+    engine adopts a staged project's loop length mid-lap.
+  - A hook's and the intensity arc's landings, the density arc's adds and an artist change's
+    turnover are radio's own moves and always take the loop top.
+  - One stage at a time: radio's change held for the wrap is staged after the user's bar has
+    landed; radio's cut already aimed at a bar goes first and the user's takes the next line.
+    Neither is moved to the other's boundary or dropped.
 - **The row is `radioAdded: true`**, gain 1 with no balance: it lands at the stem's levelled
   gain, radio may turn its stem over like any unlocked row, and the density arc may thin it
   (the arc removes only `radioAdded` rows).

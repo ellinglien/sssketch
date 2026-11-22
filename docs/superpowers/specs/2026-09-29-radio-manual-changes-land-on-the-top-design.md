@@ -86,6 +86,11 @@ Out of scope:
      pick for that row is dropped and re-armed after the landing.
 8. **Always the loop top.** Even a bare cut waits for the wrap, never a mid-lap bar. One predictable
    moment is easier to read than radio's 2/4-bar cut grid. The cost is up to one lap of waiting.
+   **Revised 2026-11-22** ("skip doesn't skip as soon as i'd like"): the user's own changes now
+   land on the next bar line, as cuts, on a stage of their own (`radioManualBarLanding`). The
+   loop top is kept when no bar line is left in the lap, while a hole, a riser or a drop-out is
+   armed, for a change that would alter the loop's length, and for radio's own landings (hooks,
+   the arcs, an artist change's turnover). Cmd is still at once.
 
 ## How it is built
 

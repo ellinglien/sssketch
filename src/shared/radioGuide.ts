@@ -802,7 +802,7 @@ export const RADIO_GUIDE: RadioGuide = {
             },
             {
               key: 'skip',
-              text: 'a new sound on this row at the next loop top. cmd-click: now',
+              text: 'a new sound on this row at the next bar line. cmd-click: now',
               desktop: [{ row: 'skip' }]
             },
             {
@@ -855,7 +855,7 @@ export const RADIO_GUIDE: RadioGuide = {
             { key: 'pace', text: 'how often things change', desktop: [{ strip: 'pace' }] },
             {
               key: 'skip',
-              text: 'radio changes a row of its choosing, at the next loop top',
+              text: 'radio changes a row of its choosing, at the next bar line',
               desktop: [{ strip: 'skip' }]
             },
             {
