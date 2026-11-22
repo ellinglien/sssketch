@@ -206,6 +206,8 @@ describe('rowGainFor', () => {
   const plain = { stemCID: 'stem-c' }
   it("a fresh row takes its first stem's arrival gain", () =>
     expect(rowGainFor({ gain: 1, candidate: null }, quiet)).toBe(0.5))
+  it('a stem rolled for a drums row is not trimmed', () =>
+    expect(rowGainFor({ gain: 1, candidate: null }, { ...quiet, slotKinds: ['drums'] })).toBe(1))
   it('an untouched row follows the new stem', () =>
     expect(rowGainFor({ gain: 0.5, candidate: quiet }, loud)).toBe(0.25))
   it('a balance set by hand is carried to the new stem', () =>
